@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WeedHack — dashboard</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><span class="w">Weed</span><span class="h">Hack</span></div>
+    <nav class="nav">
+      <a data-tab="overview" class="active">overview</a>
+      <a data-tab="hosts">hosts</a>
+      <a data-tab="builder">builder</a>
+      <a data-tab="remote">remote</a>
+      <a data-tab="account">account</a>
+      <a data-tab="settings">settings</a>
+    </nav>
+    <div class="bottom">
+      <button class="ghost" id="logout">sign out</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <section class="section active" id="overview">
+      <h2>overview</h2>
+      <div class="sub">welcome back, <span id="who">—</span></div>
+
+      <div class="tiles" style="margin-bottom:20px">
+        <div class="tile">
+          <div class="k">online clients</div>
+          <div class="v" id="ov-online" style="color:var(--green-2)">0</div>
+        </div>
+        <div class="tile">
+          <div class="k">offline clients</div>
+          <div class="v" id="ov-offline" style="color:var(--orange-2)">0</div>
+        </div>
+        <div class="tile">
+          <div class="k">total clients</div>
+          <div class="v" id="ov-total">0</div>
+        </div>
+      </div>
+
+      <div class="tiles">
+        <div class="tile"><div class="k">account key</div><div class="v mono" id="key">—</div></div>
+        <div class="tile"><div class="k">member since</div><div class="v" id="since">—</div></div>
+        <div class="tile"><div class="k">discord webhook</div><div class="v" id="wh">—</div></div>
+      </div>
+    </section>
+
+    <section class="section" id="hosts">
+      <h2>hosts</h2>
+      <div class="sub">every client that has ever checked in.</div>
+      <div class="tiles" id="h-grid"></div>
+    </section>
+
+    <section class="section" id="builder">
+      <h2>builder</h2>
+      <div class="sub">empty for now — next step.</div>
+    </section>
+
+    <section class="section" id="remote">
+      <h2>remote</h2>
+      <div class="sub">online clients only. click a row to open a console.</div>
+
+      <div id="r-remote-list" style="display:flex;flex-direction:column;gap:10px;margin-top:20px"></div>
+
+      <div id="r-actions" class="tile" style="display:none;margin-top:20px">
+        <div class="k">selected target</div>
+        <div class="v" id="r-sel">—</div>
+        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+          <button class="ghost" data-act="powershell" style="margin-top:0">powershell</button>
+          <button class="ghost" data-act="cmd" style="margin-top:0">cmd</button>
+          <button class="ghost" data-act="webcam" style="margin-top:0" disabled>webcam</button>
+          <button class="ghost" data-act="screen" style="margin-top:0" disabled>screen</button>
+        </div>
+        <div class="note">webcam + screen buttons are wired but not backed by the client yet.</div>
+      </div>
+
+      <div class="err" id="r-err"></div>
+    </section>
+
+    <section class="section" id="account">
+      <h2>account</h2>
+      <div class="sub">identity and key.</div>
+      <div class="tiles">
+        <div class="tile"><div class="k">username</div><div class="v" id="u2">—</div></div>
+        <div class="tile"><div class="k">email</div><div class="v" id="e2">—</div></div>
+      </div>
+
+      <div class="tile" style="margin-top:16px">
+        <div class="k">account key</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:6px">
+          <div class="v mono" id="key2" data-real="" data-shown="0">—</div>
+          <button class="ghost" id="key-toggle" style="width:auto;margin:0;padding:8px 16px">reveal</button>
+        </div>
+        <div class="note">hidden by default. this is the key the rust client authenticates with.</div>
+      </div>
+    </section>
+
+    <section class="section" id="settings">
+      <h2>settings</h2>
+      <div class="sub">change your discord webhook — test it live.</div>
+      <label for="whurl">webhook url</label>
+      <input id="whurl" placeholder="https://discord.com/api/webhooks/...">
+      <button class="green" id="whtest" style="max-width:220px">test + save</button>
+      <div class="err" id="wherr"></div>
+    </section>
+  </main>
+</div>
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WeedHack — sign up</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="center">
+  <div class="card">
+    <div class="brand"><span class="w">Weed</span><span class="h">Hack</span></div>
+    <h1>create account</h1>
+    <div class="sub">your discord webhook is required — the key lands there too.</div>
+
+    <label for="username">username</label>
+    <input id="username" autocomplete="username">
+
+    <label for="email">email</label>
+    <input id="email" type="email" autocomplete="email">
+
+    <label for="password">password</label>
+    <input id="password" type="password" autocomplete="new-password">
+
+    <label for="webhook">your discord webhook</label>
+    <input id="webhook" placeholder="https://discord.com/api/webhooks/...">
+    <div class="note">we ping it once to verify, then send the key. nothing else.</div>
+
+    <button id="go">create account</button>
+    <div class="err" id="err"></div>
+    <div class="footer-link">already in? <a href="/signin.html">sign in</a></div>
+  </div>
+</div>
+<script src="/js/signup.js"></script>
+</body>
+</html>
