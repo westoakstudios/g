@@ -358,51 +358,56 @@ httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
 });
 
 // port 443 — sniff first byte. 0x16 -> TLS. else -> raw JSON line.
-const tlsHttpServer = http.createServer(app);
+// port 443 — sniff first byte. 0x16 -> TLS handshake (let https.Server do TLS itself).
+// anything else -> raw JSON line protocol.
 
-const router = net.createServer((sock) => {
-  sock.once('data', (first) => {
-    sock.pause();
-    sock.unshift(first);
+import('node:https').then(({ default: https }) => {
+  const tlsHttpServer = https.createServer({
+    cert: fs.readFileSync(CFG.tlsCert),
+    key:  fs.readFileSync(CFG.tlsKey),
+  }, app);
 
-    if (first[0] === 0x16) {
-      // TLS handshake — wrap and hand to the http server
-      let tlsSock;
-      try {
-        tlsSock = new tls.TLSSocket(sock, {
-          isServer: true,
-          secureContext: tlsContext,
+  tlsHttpServer.on('tlsClientError', (e) => console.log(`[tls] client err: ${e.message}`));
+
+  const router = net.createServer((sock) => {
+    sock.once('data', (first) => {
+      // put the peeked chunk back — both branches re-read it
+      sock.pause();
+      sock.unshift(first);
+
+      if (first[0] === 0x16) {
+        // TLS handshake — https.Server takes the raw socket and does TLS itself
+        tlsHttpServer.emit('connection', sock);
+        sock.resume();
+      } else {
+        // raw JSON line protocol
+        sock.setEncoding('utf8');
+        sock.setTimeout(120_000, () => sock.destroy());
+        let buf = '';
+        sock.on('data', (chunk) => {
+          buf += chunk;
+          let i;
+          while ((i = buf.indexOf('\n')) !== -1) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (line) handleTcpLine(line, sock, sock.remoteAddress);
+          }
+          if (buf.length > 128 * 1024 * 1024) sock.destroy();
         });
-      } catch (e) {
-        console.log(`[tls] wrap failed: ${e.message}`);
-        sock.destroy();
-        return;
+        sock.on('error', () => {});
+        sock.resume();
       }
-      tlsSock.on('error', (e) => console.log(`[tls] err: ${e.code || e.message}`));
-      tlsHttpServer.emit('connection', tlsSock);
-      sock.resume();
-    } else {
-      // raw JSON line protocol
-      sock.setEncoding('utf8');
-      sock.setTimeout(120_000, () => sock.destroy());
-      let buf = '';
-      sock.on('data', (chunk) => {
-        buf += chunk;
-        let i;
-        while ((i = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, i).trim();
-          buf = buf.slice(i + 1);
-          if (line) handleTcpLine(line, sock, sock.remoteAddress);
-        }
-        if (buf.length > 128 * 1024 * 1024) sock.destroy();
-      });
-      sock.on('error', () => {});
-      sock.resume();
-    }
+    });
+    sock.on('error', () => {});
   });
-  sock.on('error', () => {});
-});
 
+  router.listen(CFG.tcpPort, CFG.bindHost, () => {
+    console.log(`[router] sniffing on ${CFG.bindHost}:${CFG.tcpPort}`);
+  });
+  router.on('error', (e) => console.error(`[router] err: ${e.message}`));
+
+  process._router = router;
+});
 router.listen(CFG.tcpPort, CFG.bindHost, () => {
   console.log(`[router] sniffing on ${CFG.bindHost}:${CFG.tcpPort}`);
 });
