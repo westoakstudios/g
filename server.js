@@ -39,7 +39,7 @@ if (!fs.existsSync(path.join(PUBLIC_DIR, 'css', 'style.css'))) {
 // ---------- app ----------
 const app = express();
 app.disable('x-powered-by');
-app.set('trust proxy', true);
+app.set('trust proxy', false);
 
 // ---------- middleware ----------
 app.use(helmet({
