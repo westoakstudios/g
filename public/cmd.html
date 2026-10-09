@@ -6,57 +6,84 @@
 <title>WeedHack — console</title>
 <link rel="stylesheet" href="/css/style.css">
 <style>
-  body { background: #050203; }
-  .term-wrap { height: 100vh; display: flex; flex-direction: column; padding: 0; }
-  .term-bar {
+  body { background: #04100a; overflow: hidden; }
+  .wrap { height: 100vh; display: flex; flex-direction: column; }
+  .bar {
     display: flex; align-items: center; gap: 12px;
-    padding: 10px 16px;
-    background: linear-gradient(180deg, #1a0a18, #120710);
+    padding: 10px 14px;
+    background: linear-gradient(180deg, var(--panel), var(--bg-2));
     border-bottom: 1px solid var(--line);
     font-size: 12px; color: var(--muted);
-    letter-spacing: .12em; text-transform: uppercase;
   }
-  .term-bar .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green-2); box-shadow: 0 0 8px var(--green-2); }
-  .term-bar .shell { color: var(--orange-2); }
-  .term-bar .target { color: var(--text); text-transform: none; letter-spacing: 0; }
+  .bar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-2); box-shadow: 0 0 6px var(--green-2); }
+  .bar .shell  { color: var(--green-2); font-family: var(--mono); }
+  .bar .target { color: var(--text); }
+  .bar .spacer { flex: 1; }
+  .bar button.mini { padding: 5px 10px; font-size: 11px; }
+
+  .picker {
+    flex: 1; display: grid; place-items: center;
+  }
+  .picker-inner {
+    max-width: 420px; width: 100%;
+    background: linear-gradient(180deg, var(--panel), var(--bg-2));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 28px; text-align: center;
+  }
+  .picker h2 { font-size: 16px; font-weight: 400; margin-bottom: 6px; }
+  .picker .sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .picker .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .picker .opts button { margin-top: 0; padding: 22px 12px; font-size: 14px; }
+
   .term {
-    flex: 1; overflow-y: auto;
-    padding: 16px 18px;
-    font-family: ui-monospace, 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
-    font-size: 13px; line-height: 1.5;
-    color: #d8c8d4;
-    background: #050203;
+    flex: 1; overflow-y: auto; padding: 14px 16px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+    color: #c8e8d0; background: #04100a;
   }
   .term .line { white-space: pre-wrap; word-break: break-word; }
-  .term .prompt { color: var(--green-2); }
-  .term .in { color: var(--orange-2); }
-  .term .err { color: #e0555c; }
+  .term .in  { color: var(--green-2); }
+  .term .err { color: var(--orange-2); }
   .term .meta { color: var(--muted); font-size: 11px; }
-  .term-input {
+
+  .input {
     display: flex; align-items: center; gap: 8px;
-    border-top: 1px solid var(--line);
-    background: #0a0410;
-    padding: 10px 16px;
+    border-top: 1px solid var(--line); background: #071a0e;
+    padding: 10px 14px;
   }
-  .term-input .ps1 { color: var(--green-2); font-family: ui-monospace, monospace; font-size: 13px; }
-  .term-input input {
+  .input .ps1 { color: var(--green-2); font-family: var(--mono); font-size: 13px; }
+  .input input {
     flex: 1; background: transparent; border: none; color: #fff;
-    font-family: ui-monospace, monospace; font-size: 13px;
-    padding: 0; margin: 0; outline: none;
+    font-family: var(--mono); font-size: 13px; padding: 0; margin: 0;
+    outline: none; border-radius: 0;
   }
-  .term-input input:focus { box-shadow: none; }
+  .input input:focus { box-shadow: none; }
 </style>
 </head>
 <body>
-<div class="term-wrap">
-  <div class="term-bar">
+<div class="wrap">
+  <div class="bar">
     <span class="dot"></span>
     <span>WeedHack console</span>
-    <span class="shell" id="bar-shell">cmd</span>
-    <span class="target" id="bar-target">—</span>
+    <span class="shell" id="bar-shell"></span>
+    <span class="target" id="bar-target"></span>
+    <span class="spacer"></span>
+    <button class="ghost mini" id="swap" style="display:none">swap shell</button>
   </div>
-  <div class="term" id="term"></div>
-  <div class="term-input">
+
+  <div class="picker" id="picker">
+    <div class="picker-inner">
+      <h2>choose a shell</h2>
+      <div class="sub" id="pick-target"></div>
+      <div class="opts">
+        <button class="ghost" data-shell="cmd">cmd</button>
+        <button class="ghost" data-shell="powershell">powershell</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="term" id="term" style="display:none"></div>
+
+  <div class="input" id="input" style="display:none">
     <span class="ps1" id="ps1">C:\&gt;</span>
     <input id="cmdline" autocomplete="off" spellcheck="false" placeholder="type a command and press enter">
   </div>

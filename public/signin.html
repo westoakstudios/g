@@ -11,10 +11,21 @@
   <div class="card">
     <div class="brand"><span class="w">Weed</span><span class="h">Hack</span></div>
     <h1>sign in</h1>
-    <div class="sub">username or email.</div>
+    <div class="sub">username or login token, plus your password.</div>
 
-    <label for="username">username / email</label>
-    <input id="username" autocomplete="username">
+    <div class="tabs">
+      <button class="active" data-mode="user">username</button>
+      <button data-mode="token">login token</button>
+    </div>
+
+    <div id="m-user">
+      <label for="username">username / email</label>
+      <input id="username" autocomplete="username">
+    </div>
+    <div id="m-token" style="display:none">
+      <label for="token">login token</label>
+      <input id="token" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off">
+    </div>
 
     <label for="password">password</label>
     <input id="password" type="password" autocomplete="current-password">

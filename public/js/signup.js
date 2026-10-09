@@ -9,7 +9,6 @@ $('go').addEventListener('click', async () => {
     password: $('password').value,
     discordWebhook: $('webhook').value.trim(),
   };
-
   $('go').disabled = true;
   $('go').textContent = 'verifying webhook...';
 
@@ -26,8 +25,9 @@ $('go').addEventListener('click', async () => {
       $('go').textContent = 'create account';
       return;
     }
-    sessionStorage.setItem('newKey', data.accountKey);
-    sessionStorage.setItem('newUser', data.username);
+    sessionStorage.setItem('newKey',   data.accountKey);
+    sessionStorage.setItem('newLogin', data.loginToken);
+    sessionStorage.setItem('newUser',  data.username);
     location.href = '/key.html';
   } catch {
     $('err').textContent = 'network error';
