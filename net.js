@@ -1,15 +1,39 @@
 // language: JavaScript, file: net.js
-// tcp + udp listeners. each connection is logged to console; hooks left for later.
+// raw tcp + udp listeners. per-ip connection caps, idle timeouts, clean shutdown.
+
 import net from 'node:net';
 import dgram from 'node:dgram';
 
-export function startTcp({ host, port, onLine, onConn }) {
+const MAX_TCP_PER_IP   = 20;
+const TCP_IDLE_TIMEOUT = 60_000;
+const MAX_UDP_MSG      = 2048;
+
+export function startTcp({ host, port, onConn, onLine, onClose }) {
+  const perIp = new Map();
+  const sockets = new Set();
+
   const server = net.createServer((sock) => {
-    const id = `${sock.remoteAddress}:${sock.remotePort}`;
-    console.log(`[tcp] connect ${id}`);
+    const ip = sock.remoteAddress || 'unknown';
+    const id = `${ip}:${sock.remotePort}`;
+
+    const count = perIp.get(ip) || 0;
+    if (count >= MAX_TCP_PER_IP) {
+      console.log(`[tcp] reject ${id} — per-ip cap reached`);
+      sock.destroy();
+      return;
+    }
+    perIp.set(ip, count + 1);
+    sockets.add(sock);
+
+    console.log(`[tcp] open ${id}`);
+    sock.setEncoding('utf8');
+    sock.setTimeout(TCP_IDLE_TIMEOUT, () => {
+      console.log(`[tcp] idle-timeout ${id}`);
+      sock.destroy();
+    });
+
     if (onConn) onConn(sock, id);
 
-    sock.setEncoding('utf8');
     let buf = '';
     sock.on('data', (chunk) => {
       buf += chunk;
@@ -21,22 +45,36 @@ export function startTcp({ host, port, onLine, onConn }) {
       }
       if (buf.length > 8192) buf = '';
     });
+
     sock.on('error', (e) => console.log(`[tcp] err ${id}: ${e.code || e.message}`));
-    sock.on('close', () => console.log(`[tcp] close ${id}`));
+
+    sock.on('close', () => {
+      const c = (perIp.get(ip) || 1) - 1;
+      if (c <= 0) perIp.delete(ip); else perIp.set(ip, c);
+      sockets.delete(sock);
+      console.log(`[tcp] close ${id}`);
+      if (onClose) onClose(id);
+    });
   });
 
   server.on('error', (e) => console.error(`[tcp] server err: ${e.message}`));
   server.listen(port, host, () => console.log(`[tcp] listening ${host}:${port}`));
+
+  server.shutdown = () => {
+    for (const s of sockets) s.destroy();
+    server.close();
+  };
   return server;
 }
 
 export function startUdp({ host, port, onMsg }) {
-  const sock = dgram.createSocket('udp4');
+  const sock = dgram.createSocket({ type: 'udp4', recvBufferSize: 1 << 20 });
 
   sock.on('message', (msg, rinfo) => {
+    if (msg.length > MAX_UDP_MSG) return;
     const id = `${rinfo.address}:${rinfo.port}`;
     const text = msg.toString('utf8').trim();
-    console.log(`[udp] ${id} -> ${text.slice(0, 200)}`);
+    console.log(`[udp] ${id} -> ${text.slice(0, 120)}`);
     if (onMsg) onMsg(text, rinfo, sock);
   });
 

