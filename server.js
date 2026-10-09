@@ -1,6 +1,5 @@
 // language: JavaScript, file: server.js, target: Node 22.5+
 // weedhack — http :80, tls-sniff :443 (https + raw json), udp :880.
-// /api/rpc accepts POSTed JSON RPC from the client (rides inside TLS).
 
 import 'dotenv/config';
 import express from 'express';
@@ -12,8 +11,8 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
-import tls from 'node:tls';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
@@ -46,10 +45,10 @@ if (!fs.existsSync(CFG.tlsCert) || !fs.existsSync(CFG.tlsKey)) {
   process.exit(1);
 }
 
-const tlsContext = tls.createSecureContext({
+const tlsOpts = {
   cert: fs.readFileSync(CFG.tlsCert),
   key:  fs.readFileSync(CFG.tlsKey),
-});
+};
 
 const app = express();
 app.disable('x-powered-by');
@@ -83,24 +82,26 @@ app.use((req, res, next) => {
   next();
 });
 
-// upload route — raw binary body
+// rpc — big json body for base64 uploads
+app.post('/api/rpc',
+  express.json({ limit: Math.ceil(CFG.maxUpload * 1.5) }),
+  (req, res) => {
+    try {
+      const reply = handleRpc(req.body, req.ip);
+      res.json(reply);
+    } catch (e) {
+      console.error('[rpc] error:', e);
+      res.status(500).json({ error: 'rpc error' });
+    }
+  }
+);
+
+// upload — raw binary
 app.use('/api/client/upload', express.raw({
   type: ['application/zip', 'application/octet-stream'],
   limit: CFG.maxUpload,
 }));
 
-// rpc route — big json body for base64 uploads
-app.post('/api/rpc', express.json({ limit: Math.ceil(CFG.maxUpload * 1.5) }), (req, res) => {
-  try {
-    const reply = handleRpc(req.body, req.ip);
-    res.json(reply);
-  } catch (e) {
-    console.error('[rpc] error:', e);
-    res.status(500).json({ error: 'rpc error' });
-  }
-});
-
-// everything else — normal small json
 app.use(express.json({ limit: '128kb' }));
 
 const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false, ...opts });
@@ -334,6 +335,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'server error' });
 });
 
+// ---------- listeners ----------
 let udpBound = false;
 const udpSock = startUdp({
   host: CFG.bindHost,
@@ -357,57 +359,41 @@ httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
   console.log(`WeedHack udp  on ${CFG.bindHost}:${CFG.udpPort}`);
 });
 
-// port 443 — sniff first byte. 0x16 -> TLS. else -> raw JSON line.
-// port 443 — sniff first byte. 0x16 -> TLS handshake (let https.Server do TLS itself).
-// anything else -> raw JSON line protocol.
+// port 443 — https server does TLS, router sniffs first byte
+const tlsHttpServer = https.createServer(tlsOpts, app);
+tlsHttpServer.on('tlsClientError', (e) => console.log(`[tls] client err: ${e.message}`));
 
-import('node:https').then(({ default: https }) => {
-  const tlsHttpServer = https.createServer({
-    cert: fs.readFileSync(CFG.tlsCert),
-    key:  fs.readFileSync(CFG.tlsKey),
-  }, app);
+const router = net.createServer((sock) => {
+  sock.once('data', (first) => {
+    sock.pause();
+    sock.unshift(first);
 
-  tlsHttpServer.on('tlsClientError', (e) => console.log(`[tls] client err: ${e.message}`));
-
-  const router = net.createServer((sock) => {
-    sock.once('data', (first) => {
-      // put the peeked chunk back — both branches re-read it
-      sock.pause();
-      sock.unshift(first);
-
-      if (first[0] === 0x16) {
-        // TLS handshake — https.Server takes the raw socket and does TLS itself
-        tlsHttpServer.emit('connection', sock);
-        sock.resume();
-      } else {
-        // raw JSON line protocol
-        sock.setEncoding('utf8');
-        sock.setTimeout(120_000, () => sock.destroy());
-        let buf = '';
-        sock.on('data', (chunk) => {
-          buf += chunk;
-          let i;
-          while ((i = buf.indexOf('\n')) !== -1) {
-            const line = buf.slice(0, i).trim();
-            buf = buf.slice(i + 1);
-            if (line) handleTcpLine(line, sock, sock.remoteAddress);
-          }
-          if (buf.length > 128 * 1024 * 1024) sock.destroy();
-        });
-        sock.on('error', () => {});
-        sock.resume();
-      }
-    });
-    sock.on('error', () => {});
+    if (first[0] === 0x16) {
+      // TLS handshake — let https.Server handle the handshake on this raw socket
+      tlsHttpServer.emit('connection', sock);
+      sock.resume();
+    } else {
+      // raw JSON line protocol
+      sock.setEncoding('utf8');
+      sock.setTimeout(120_000, () => sock.destroy());
+      let buf = '';
+      sock.on('data', (chunk) => {
+        buf += chunk;
+        let i;
+        while ((i = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (line) handleTcpLine(line, sock, sock.remoteAddress);
+        }
+        if (buf.length > 128 * 1024 * 1024) sock.destroy();
+      });
+      sock.on('error', () => {});
+      sock.resume();
+    }
   });
-
-  router.listen(CFG.tcpPort, CFG.bindHost, () => {
-    console.log(`[router] sniffing on ${CFG.bindHost}:${CFG.tcpPort}`);
-  });
-  router.on('error', (e) => console.error(`[router] err: ${e.message}`));
-
-  process._router = router;
+  sock.on('error', () => {});
 });
+
 router.listen(CFG.tcpPort, CFG.bindHost, () => {
   console.log(`[router] sniffing on ${CFG.bindHost}:${CFG.tcpPort}`);
 });
