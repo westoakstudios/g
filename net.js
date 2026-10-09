@@ -1,11 +1,12 @@
 // language: JavaScript, file: net.js
-// raw tcp + udp listeners. per-ip connection caps, idle timeouts, clean shutdown.
+// raw tcp + udp listeners. big line cap for base64 uploads.
 
 import net from 'node:net';
 import dgram from 'node:dgram';
 
 const MAX_TCP_PER_IP   = 20;
-const TCP_IDLE_TIMEOUT = 60_000;
+const TCP_IDLE_TIMEOUT = 120_000;
+const MAX_LINE_BYTES   = 128 * 1024 * 1024;   // 128MB — base64 of a 64MB zip + json wrapper
 const MAX_UDP_MSG      = 2048;
 
 export function startTcp({ host, port, onConn, onLine, onClose }) {
@@ -27,10 +28,7 @@ export function startTcp({ host, port, onConn, onLine, onClose }) {
 
     console.log(`[tcp] open ${id}`);
     sock.setEncoding('utf8');
-    sock.setTimeout(TCP_IDLE_TIMEOUT, () => {
-      console.log(`[tcp] idle-timeout ${id}`);
-      sock.destroy();
-    });
+    sock.setTimeout(TCP_IDLE_TIMEOUT, () => sock.destroy());
 
     if (onConn) onConn(sock, id);
 
@@ -43,11 +41,14 @@ export function startTcp({ host, port, onConn, onLine, onClose }) {
         buf = buf.slice(i + 1);
         if (line && onLine) onLine(line, sock, id);
       }
-      if (buf.length > 8192) buf = '';
+      if (buf.length > MAX_LINE_BYTES) {
+        console.log(`[tcp] line too long from ${id}, dropping`);
+        sock.write('{"error":"line too long"}\n');
+        sock.destroy();
+      }
     });
 
     sock.on('error', (e) => console.log(`[tcp] err ${id}: ${e.code || e.message}`));
-
     sock.on('close', () => {
       const c = (perIp.get(ip) || 1) - 1;
       if (c <= 0) perIp.delete(ip); else perIp.set(ip, c);
