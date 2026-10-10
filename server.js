@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
 import { startUdp } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
-
+import { startUdp, sendInput, getFrame } from './net.js';
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -368,6 +368,63 @@ app.delete('/api/clients/:id', requireAuth, (req, res) => {
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
 });
+
+
+// ---------- rdp ----------
+app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+
+  const cfg = {
+    width:    Math.min(Math.max(Number(req.body.width  || 1280), 320), 3840),
+    height:   Math.min(Math.max(Number(req.body.height || 720),  240), 2160),
+    quality:  Math.min(Math.max(Number(req.body.quality || 50),   10),  90),
+    fps:      Math.min(Math.max(Number(req.body.fps     || 10),    1),  30),
+    keyboard: req.body.keyboard !== false,
+    mouse:    req.body.mouse    !== false,
+  };
+
+  db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'rdp', ?, 'pending', ?)
+  `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
+
+  res.json({ ok: true });
+});
+
+app.post('/api/clients/:id/rdp/stop', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'rdp', '{"stop":true}', 'pending', ?)
+  `).run(req.user.uid, cid, Date.now());
+  res.json({ ok: true });
+});
+
+app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  const jpeg = getFrame(cid);
+  if (!jpeg) return res.status(204).end();
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.send(jpeg);
+});
+
+app.post('/api/clients/:id/input', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  const ok = sendInput(cid, JSON.stringify(req.body || {}));
+  res.json({ ok });
+});
+
+
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });

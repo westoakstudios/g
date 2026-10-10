@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WeedHack — screen</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  body { background: #04100a; margin: 0; }
+
+  .wrap { height: 100vh; display: flex; flex-direction: column; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 14px; flex-shrink: 0;
+    background: linear-gradient(180deg, #0b2313, #071a0e);
+    border-bottom: 1px solid var(--line);
+    font-size: 12px; color: var(--muted);
+  }
+  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-2); box-shadow: 0 0 6px var(--green-2); }
+  .topbar .dot.off { background: var(--red); box-shadow: none; }
+  .topbar .target { color: var(--text); font-family: var(--mono); }
+  .topbar .spacer { flex: 1; }
+  .topbar .fps { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  .topbar select, .topbar button {
+    margin: 0; padding: 6px 12px; font-size: 11px; width: auto;
+    background: transparent; border: 1px solid var(--line-2); color: var(--text);
+    border-radius: 5px; cursor: pointer;
+  }
+  .topbar select:hover, .topbar button:hover { border-color: var(--green-2); }
+  .topbar button.active { background: var(--green); border-color: var(--green-2); color: #04170a; font-weight: 600; }
+
+  .stage {
+    flex: 1; overflow: auto; display: grid; place-items: center;
+    background: #010804;
+    padding: 12px;
+  }
+  .stage img {
+    max-width: 100%; max-height: 100%;
+    image-rendering: -webkit-optimize-contrast;
+    user-select: none; -webkit-user-drag: none;
+    outline: none;
+    cursor: crosshair;
+    background: #000;
+    border: 1px solid var(--line);
+  }
+  .stage .wait { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <span class="dot off" id="dot"></span>
+    <span class="target" id="target">—</span>
+    <span class="fps" id="fps"></span>
+    <span class="spacer"></span>
+    <select id="preset">
+      <option value="low">low · 960×540 · 8fps</option>
+      <option value="med" selected>medium · 1280×720 · 10fps</option>
+      <option value="high">high · 1600×900 · 15fps</option>
+    </select>
+    <button id="kb" class="active" title="keyboard capture">⌨ on</button>
+    <button id="mouse" class="active" title="mouse capture">🖱 on</button>
+    <button id="stop" style="border-color:var(--red);color:var(--red)">disconnect</button>
+  </div>
+  <div class="stage" id="stage">
+    <div class="wait">waiting for first frame…</div>
+  </div>
+</div>
+<script src="/js/rdp.js"></script>
+</body>
+</html>

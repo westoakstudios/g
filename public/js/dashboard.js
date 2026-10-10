@@ -237,6 +237,7 @@ async function loadRemote() {
   $('r-next').disabled = s.offset + REMOTE_PAGE_SIZE >= d.online;
 }
 
+
 function buildRemoteRow(c) {
   const el = document.createElement('div');
   el.className = 'row';
@@ -245,20 +246,69 @@ function buildRemoteRow(c) {
     <span class="host">${esc(c.hostname)}</span>
     <span class="ip">${esc(c.ip)}</span>
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
-    <span class="actions" style="display:flex;gap:6px;justify-content:flex-end">
-      <button class="ghost mini" disabled title="RDP not implemented">rdp</button>
-      <button class="ghost mini" data-cmd>cmd</button>
-      <button class="ghost mini" data-ps>powershell</button>
+    <span class="actions" style="position:relative">
+      <button class="ghost mini" data-gear title="actions" style="font-size:14px;padding:4px 10px">⚙</button>
     </span>`;
-  el.querySelector('[data-cmd]').addEventListener('click', (e) => {
+
+  el.querySelector('[data-gear]').addEventListener('click', (e) => {
     e.stopPropagation();
-    openConsole(c, 'cmd');
+    openGearMenu(e.currentTarget, c);
   });
-  el.querySelector('[data-ps]').addEventListener('click', (e) => {
-    e.stopPropagation();
-    openConsole(c, 'powershell');
-  });
+
   return el;
+}
+
+let gearMenuEl = null;
+function closeGearMenu() {
+  if (gearMenuEl) { gearMenuEl.remove(); gearMenuEl = null; }
+}
+document.addEventListener('click', closeGearMenu);
+
+function openGearMenu(anchor, c) {
+  closeGearMenu();
+  const rect = anchor.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.style.cssText = `
+    position: fixed;
+    top: ${rect.bottom + 4}px;
+    left: ${rect.right - 200}px;
+    background: linear-gradient(180deg, #0b2313, #071a0e);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    padding: 6px;
+    min-width: 200px;
+    z-index: 9999;
+    box-shadow: 0 12px 32px rgba(0,0,0,.7);
+  `;
+  menu.innerHTML = `
+    <div style="padding:6px 10px 4px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">${esc(c.hostname)}</div>
+    <div data-item="rdp"    style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">screen (rdp)</div>
+    <div data-item="cmd"    style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">remote shell — cmd</div>
+    <div data-item="ps"     style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">remote shell — powershell</div>
+  `;
+  menu.querySelectorAll('[data-item]').forEach((el) => {
+    el.addEventListener('mouseenter', () => el.style.background = '#0f2e1c');
+    el.addEventListener('mouseleave', () => el.style.background = 'transparent');
+    el.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      closeGearMenu();
+      const it = el.dataset.item;
+      if (it === 'rdp') openRdp(c);
+      else if (it === 'cmd') openConsole(c, 'cmd');
+      else if (it === 'ps') openConsole(c, 'powershell');
+    });
+  });
+  document.body.appendChild(menu);
+  gearMenuEl = menu;
+}
+
+function openRdp(c) {
+  const q = new URLSearchParams({
+    id: String(c.id),
+    host: c.hostname || '',
+    ip: c.ip || '',
+  });
+  window.open('/rdp.html?' + q.toString(), '_blank', 'width=1200,height=760');
 }
 
 function openConsole(c, shell) {

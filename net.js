@@ -1,89 +1,98 @@
 // language: JavaScript, file: net.js
-// raw tcp + udp listeners. big line cap for base64 uploads.
+// udp listener: rdp frame chunks from clients + input relay back to them.
 
-import net from 'node:net';
 import dgram from 'node:dgram';
 
-const MAX_TCP_PER_IP   = 20;
-const TCP_IDLE_TIMEOUT = 120_000;
-const MAX_LINE_BYTES   = 128 * 1024 * 1024;   // 128MB — base64 of a 64MB zip + json wrapper
-const MAX_UDP_MSG      = 2048;
+const MAX_UDP_MSG = 65500;
+let udpSock = null;
 
-export function startTcp({ host, port, onConn, onLine, onClose }) {
-  const perIp = new Map();
-  const sockets = new Set();
+// clientId -> { address, port }
+const clientAddr = new Map();
+// clientId -> { jpeg: Buffer, updatedAt }
+const frameStore = new Map();
+// clientId -> { seq, total, chunks: Map<idx, Buffer>, updatedAt }
+const frameBuffers = new Map();
 
-  const server = net.createServer((sock) => {
-    const ip = sock.remoteAddress || 'unknown';
-    const id = `${ip}:${sock.remotePort}`;
-
-    const count = perIp.get(ip) || 0;
-    if (count >= MAX_TCP_PER_IP) {
-      console.log(`[tcp] reject ${id} — per-ip cap reached`);
-      sock.destroy();
-      return;
-    }
-    perIp.set(ip, count + 1);
-    sockets.add(sock);
-
-    console.log(`[tcp] open ${id}`);
-    sock.setEncoding('utf8');
-    sock.setTimeout(TCP_IDLE_TIMEOUT, () => sock.destroy());
-
-    if (onConn) onConn(sock, id);
-
-    let buf = '';
-    sock.on('data', (chunk) => {
-      buf += chunk;
-      let i;
-      while ((i = buf.indexOf('\n')) !== -1) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (line && onLine) onLine(line, sock, id);
-      }
-      if (buf.length > MAX_LINE_BYTES) {
-        console.log(`[tcp] line too long from ${id}, dropping`);
-        sock.write('{"error":"line too long"}\n');
-        sock.destroy();
-      }
-    });
-
-    sock.on('error', (e) => console.log(`[tcp] err ${id}: ${e.code || e.message}`));
-    sock.on('close', () => {
-      const c = (perIp.get(ip) || 1) - 1;
-      if (c <= 0) perIp.delete(ip); else perIp.set(ip, c);
-      sockets.delete(sock);
-      console.log(`[tcp] close ${id}`);
-      if (onClose) onClose(id);
-    });
-  });
-
-  server.on('error', (e) => console.error(`[tcp] server err: ${e.message}`));
-  server.listen(port, host, () => console.log(`[tcp] listening ${host}:${port}`));
-
-  server.shutdown = () => {
-    for (const s of sockets) s.destroy();
-    server.close();
-  };
-  return server;
-}
+// stale sweeps
+setInterval(() => {
+  const now = Date.now();
+  for (const [cid, f] of frameStore) if (now - f.updatedAt > 30_000) frameStore.delete(cid);
+  for (const [cid, b] of frameBuffers) if (now - b.updatedAt > 10_000) frameBuffers.delete(cid);
+}, 15_000);
 
 export function startUdp({ host, port, onMsg }) {
-  const sock = dgram.createSocket({ type: 'udp4', recvBufferSize: 1 << 20 });
+  udpSock = dgram.createSocket({ type: 'udp4', recvBufferSize: 8 * 1024 * 1024, sendBufferSize: 8 * 1024 * 1024 });
 
-  sock.on('message', (msg, rinfo) => {
+  udpSock.on('message', (msg, rinfo) => {
     if (msg.length > MAX_UDP_MSG) return;
-    const id = `${rinfo.address}:${rinfo.port}`;
-    const text = msg.toString('utf8').trim();
-    console.log(`[udp] ${id} -> ${text.slice(0, 120)}`);
-    if (onMsg) onMsg(text, rinfo, sock);
+    const text = msg.toString('utf8');
+    const firstColon = text.indexOf(':');
+    if (firstColon === -1) return;
+    const tag = text.slice(0, firstColon);
+
+    if (tag === 'WHREG') {
+      const [, cidStr, key] = text.split(':');
+      const cid = Number(cidStr);
+      if (!cid || !key) return;
+      clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
+      return;
+    }
+
+    if (tag === 'WHFRM') {
+      // WHFRM:<clientId>:<seq>:<idx>:<total>:<base64>
+      const parts = text.split(':');
+      if (parts.length < 6) return;
+      const cid   = Number(parts[1]);
+      const seq   = Number(parts[2]);
+      const idx   = Number(parts[3]);
+      const total = Number(parts[4]);
+      const data  = parts.slice(5).join(':');
+      if (!cid || !total) return;
+
+      let buf = frameBuffers.get(cid);
+      if (!buf || buf.seq !== seq) {
+        buf = { seq, total, chunks: new Map(), updatedAt: Date.now() };
+        frameBuffers.set(cid, buf);
+      }
+      buf.chunks.set(idx, Buffer.from(data, 'base64'));
+      buf.updatedAt = Date.now();
+
+      if (buf.chunks.size === buf.total) {
+        const ordered = [];
+        for (let i = 0; i < buf.total; i++) ordered.push(buf.chunks.get(i) || Buffer.alloc(0));
+        frameStore.set(cid, { jpeg: Buffer.concat(ordered), updatedAt: Date.now() });
+        frameBuffers.delete(cid);
+      }
+      return;
+    }
+
+    if (onMsg) onMsg(text, rinfo, udpSock);
   });
 
-  sock.on('error', (e) => console.error(`[udp] err: ${e.message}`));
-  sock.on('listening', () => {
-    const a = sock.address();
+  udpSock.on('error', (e) => console.error(`[udp] err: ${e.message}`));
+  udpSock.on('listening', () => {
+    const a = udpSock.address();
     console.log(`[udp] listening ${a.address}:${a.port}`);
   });
-  sock.bind(port, host);
-  return sock;
+  udpSock.bind(port, host);
+  return udpSock;
+}
+
+export function sendInput(clientId, payload) {
+  if (!udpSock) return false;
+  const addr = clientAddr.get(clientId);
+  if (!addr) return false;
+  const packet = Buffer.from(`WHINP:${clientId}:${payload}`);
+  if (packet.length > MAX_UDP_MSG) return false;
+  udpSock.send(packet, addr.port, addr.address, () => {});
+  return true;
+}
+
+export function getFrame(clientId) {
+  const f = frameStore.get(clientId);
+  return f ? f.jpeg : null;
+}
+
+export function hasClient(clientId) {
+  return clientAddr.has(clientId);
 }
