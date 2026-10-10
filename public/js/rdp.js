@@ -8,19 +8,19 @@ const hostIp   = params.get('ip') || '';
 
 $('target').textContent = `${hostName} @ ${hostIp}`;
 
+// kb/mouse OFF by default so the local mouse doesn't drive the remote until toggled on
+let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: false, mouse: false };
 let monitors = [];
-let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: true, mouse: true };
 let running = false;
 let lastMouseSent = 0;
 let framesThisSec = 0;
 let lastFpsTick = Date.now();
-let pollTimer = null;
 
 const PRESETS = {
-  low:    { width: 960,  height: 540, quality: 35, fps: 8  },
-  med:    { width: 1280, height: 720, quality: 55, fps: 10 },
-  high:   { width: 1600, height: 900, quality: 75, fps: 15 },
-  native: { width: 3840, height: 2160, quality: 70, fps: 10 },
+  low:    { height: 480, quality: 40, fps: 8  },
+  med:    { height: 720, quality: 55, fps: 10 },
+  high:   { height: 900, quality: 75, fps: 12 },
+  native: null,  // snaps to monitor resolution
 };
 
 const img = document.createElement('img');
@@ -56,9 +56,38 @@ async function loadMonitors() {
       sel.appendChild(o);
     });
     sel.value = String(cfg.monitor);
-    // if preset is native, snap to this monitor's res
     applyPreset($('preset').value);
   } catch {}
+}
+
+// aspect-ratio aware: computes stream size from the monitor's aspect + preset height
+function applyPreset(name) {
+  const mon = monitors[cfg.monitor];
+  if (!mon) return;
+
+  if (name === 'native') {
+    cfg.width   = mon.width;
+    cfg.height  = mon.height;
+    cfg.quality = 75;
+    cfg.fps     = 10;
+    return;
+  }
+
+  const p = PRESETS[name];
+  if (!p) return;
+
+  // target height capped to monitor's height
+  const targetH = Math.min(p.height, mon.height);
+  const aspect  = mon.width / mon.height;
+  let targetW   = Math.round(targetH * aspect / 2) * 2;  // even number
+
+  // cap width too
+  if (targetW > mon.width) targetW = mon.width;
+
+  cfg.width   = targetW;
+  cfg.height  = targetH;
+  cfg.quality = p.quality;
+  cfg.fps     = p.fps;
 }
 
 async function start() {
@@ -77,7 +106,6 @@ async function start() {
 
 async function stop() {
   running = false;
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
 }
 
@@ -91,41 +119,24 @@ async function loop() {
       tmp.src = `/api/clients/${clientId}/screen?t=${t}`;
     });
     if (!running) break;
-    const interval = 1000 / Math.max(cfg.fps, 1);
-    await new Promise((r) => setTimeout(r, interval));
+    await new Promise((r) => setTimeout(r, 1000 / Math.max(cfg.fps, 1)));
   }
 }
 
-function applyPreset(name) {
-  const p = PRESETS[name];
-  if (!p) return;
-  if (name === 'native' && monitors[cfg.monitor]) {
-    cfg.width  = monitors[cfg.monitor].width;
-    cfg.height = monitors[cfg.monitor].height;
-    cfg.quality = p.quality;
-    cfg.fps     = p.fps;
-  } else {
-    Object.assign(cfg, p);
-  }
-}
-
+// preset change: apply config, restart
 $('preset').addEventListener('change', async (e) => {
   applyPreset(e.target.value);
-  if (running) {
-    await stop();
-    setTimeout(start, 200);
-  }
+  if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
 });
 
+// monitor change: switch source, restart
 $('monitor').addEventListener('change', async (e) => {
   cfg.monitor = Number(e.target.value) || 0;
   applyPreset($('preset').value);
-  if (running) {
-    await stop();
-    setTimeout(start, 200);
-  }
+  if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
 });
 
+// kb/mouse toggle — off by default, toggle to enable
 $('kb').addEventListener('click', () => {
   cfg.keyboard = !cfg.keyboard;
   $('kb').classList.toggle('active', cfg.keyboard);
