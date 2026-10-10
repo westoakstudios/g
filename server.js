@@ -95,7 +95,11 @@ app.use('/api/client/upload', express.raw({
 app.use(express.json({ limit: '256kb' }));
 
 const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false, ...opts });
-const limitGlobal   = limit({ windowMs: 60_000,      max: 240, message: { error: 'too many requests' } });
+const limitGlobal = limit({
+  windowMs: 60_000, max: 240,
+  message: { error: 'too many requests' },
+  skip: (req) => /^\/api\/clients\/\d+\/screen$/.test(req.path),
+});
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
