@@ -106,15 +106,17 @@ async function stop() {
 
 async function loop() {
   while (running) {
-    const t = Date.now();
+    const t0 = performance.now();
     await new Promise((resolve) => {
       const tmp = new Image();
-      tmp.onload = () => { img.src = tmp.src; resolve(); };
-      tmp.onerror = () => resolve();
-      tmp.src = `/api/clients/${clientId}/screen?t=${t}`;
+      tmp.onload = () => { img.src = tmp.src; resolve(true); };
+      tmp.onerror = () => resolve(false);
+      tmp.src = `/api/clients/${clientId}/screen?t=${Date.now()}`;
     });
     if (!running) break;
-    await new Promise((r) => setTimeout(r, 1000 / Math.max(cfg.fps, 1)));
+    const elapsed = performance.now() - t0;
+    const target = 1000 / Math.max(cfg.fps, 1);
+    if (elapsed < target) await new Promise(r => setTimeout(r, target - elapsed));
   }
 }
 
