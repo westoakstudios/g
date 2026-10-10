@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WeedHack — webcam</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  body { background: #04100a; margin: 0; }
+  .wrap { height: 100vh; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; flex-shrink: 0;
+    background: linear-gradient(180deg, #0b2313, #071a0e);
+    border-bottom: 1px solid var(--line);
+    font-size: 12px; color: var(--muted);
+  }
+  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+  .topbar .dot.on { background: var(--green-2); box-shadow: 0 0 6px var(--green-2); }
+  .topbar .target { color: var(--text); font-family: var(--mono); }
+  .topbar .spacer { flex: 1; }
+  .topbar .fps { font-family: var(--mono); font-size: 11px; min-width: 44px; text-align: right; }
+  .topbar select, .topbar button {
+    margin: 0; padding: 6px 12px; font-size: 11px; width: auto;
+    background: transparent; border: 1px solid var(--line-2); color: var(--text);
+    border-radius: 5px; cursor: pointer; font-family: inherit;
+  }
+  .topbar select:hover, .topbar button:hover { border-color: var(--green-2); }
+  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+  .stage { flex: 1; overflow: auto; display: grid; place-items: center; background: #010804; padding: 12px; }
+  .stage img { max-width: 100%; max-height: 100%; background: #000; border: 1px solid var(--line); user-select: none; -webkit-user-drag: none; }
+  .stage .wait { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <span class="dot" id="dot"></span>
+    <span class="target" id="target">—</span>
+    <span class="lbl">cam</span>
+    <select id="camera"><option value="0">0</option></select>
+    <span class="lbl">quality</span>
+    <select id="preset">
+      <option value="low">low</option>
+      <option value="med" selected>medium</option>
+      <option value="high">high</option>
+    </select>
+    <span class="spacer"></span>
+    <span class="fps" id="fps"></span>
+    <button id="stop" style="border-color:var(--red);color:var(--red)">disconnect</button>
+  </div>
+  <div class="stage" id="stage"><div class="wait">waiting for first frame…</div></div>
+</div>
+<script src="/js/webcam.js"></script>
+</body>
+</html>
