@@ -2,20 +2,47 @@
 import dgram from 'node:dgram';
 
 const MAX_UDP_MSG = 65500;
+const FRAME_TIMEOUT_MS = 80;   // assemble partial frames after this long
 let udpSock = null;
 
 const clientAddr   = new Map();
-const frameStore   = new Map();   // clientId -> { jpeg, updatedAt }  (rdp screen)
-const webcamStore  = new Map();   // clientId -> { jpeg, updatedAt }  (webcam)
-const frameBuffers = new Map();   // clientId -> { seq, total, chunks, updatedAt, kind }
+const frameStore   = new Map();   // clientId -> { jpeg, updatedAt }
+const webcamStore  = new Map();   // clientId -> { jpeg, updatedAt }
+const frameBuffers = new Map();   // key -> { seq, total, chunks, createdAt, lastAt, kind, cid }
 const monitorStore = new Map();   // clientId -> [ {name,x,y,width,height} ]
+
+// per-second frame counters for diagnostics
+const framesRecv = new Map();
+setInterval(() => {
+  if (framesRecv.size === 0) return;
+  const parts = [];
+  for (const [k, n] of framesRecv) { parts.push(`${k}=${n}/s`); }
+  console.log(`[udp] frames ${parts.join(' ')}`);
+  framesRecv.clear();
+}, 1000);
 
 setInterval(() => {
   const now = Date.now();
   for (const [cid, f] of frameStore)  if (now - f.updatedAt > 30_000) frameStore.delete(cid);
   for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000) webcamStore.delete(cid);
-  for (const [cid, b] of frameBuffers) if (now - b.updatedAt > 10_000) frameBuffers.delete(cid);
+  for (const [k, b] of frameBuffers)  if (now - b.lastAt > FRAME_TIMEOUT_MS * 2) frameBuffers.delete(k);
 }, 15_000);
+
+function assembleFrame(buf) {
+  const ordered = [];
+  for (let i = 0; i < buf.total; i++) ordered.push(buf.chunks.get(i) || Buffer.alloc(0));
+  return Buffer.concat(ordered);
+}
+
+function storeFrame(buf) {
+  const jpeg = assembleFrame(buf);
+  if (jpeg.length === 0) return;
+  if (buf.kind === 'screen') frameStore.set(buf.cid,  { jpeg, updatedAt: Date.now() });
+  else                       webcamStore.set(buf.cid, { jpeg, updatedAt: Date.now() });
+
+  const k = `${buf.kind}:${buf.cid}`;
+  framesRecv.set(k, (framesRecv.get(k) || 0) + 1);
+}
 
 export function startUdp({ host, port, onMsg }) {
   udpSock = dgram.createSocket({
@@ -53,7 +80,6 @@ export function startUdp({ host, port, onMsg }) {
     }
 
     if (tag === 'WHFRM' || tag === 'WHCAM') {
-      // <TAG>:<clientId>:<seq>:<idx>:<total>:<base64>
       const kind = tag === 'WHFRM' ? 'screen' : 'webcam';
       const parts = text.split(':');
       if (parts.length < 6) return;
@@ -66,19 +92,23 @@ export function startUdp({ host, port, onMsg }) {
 
       const key = `${kind}:${cid}`;
       let buf = frameBuffers.get(key);
-      if (!buf || buf.seq !== seq) {
-        buf = { seq, total, chunks: new Map(), updatedAt: Date.now(), kind, cid };
+
+      // new frame (different seq) — if we had a stale one, assemble it as partial and store
+      if (buf && buf.seq !== seq) {
+        storeFrame(buf);
+        buf = null;
+      }
+
+      if (!buf) {
+        buf = { seq, total, chunks: new Map(), createdAt: Date.now(), lastAt: Date.now(), kind, cid };
         frameBuffers.set(key, buf);
       }
+
       buf.chunks.set(idx, Buffer.from(data, 'base64'));
-      buf.updatedAt = Date.now();
+      buf.lastAt = Date.now();
 
       if (buf.chunks.size === buf.total) {
-        const ordered = [];
-        for (let i = 0; i < buf.total; i++) ordered.push(buf.chunks.get(i) || Buffer.alloc(0));
-        const jpeg = Buffer.concat(ordered);
-        if (kind === 'screen') frameStore.set(cid,  { jpeg, updatedAt: Date.now() });
-        else                   webcamStore.set(cid, { jpeg, updatedAt: Date.now() });
+        storeFrame(buf);
         frameBuffers.delete(key);
       }
       return;
@@ -86,6 +116,18 @@ export function startUdp({ host, port, onMsg }) {
 
     if (onMsg) onMsg(text, rinfo, udpSock);
   });
+
+  // assembly sweep — if a frame hasn't received a chunk in FRAME_TIMEOUT_MS, store what we have
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, buf] of frameBuffers) {
+      if (now - buf.lastAt > FRAME_TIMEOUT_MS && buf.chunks.size > buf.total * 0.4) {
+        // got at least 40% of the frame — assemble partial, missing pieces become zeroes
+        storeFrame(buf);
+        frameBuffers.delete(key);
+      }
+    }
+  }, 40);
 
   udpSock.on('error', (e) => console.error(`[udp] err: ${e.message}`));
   udpSock.on('listening', () => {
@@ -116,7 +158,7 @@ export function sendCfg(clientId, payload) {
   return true;
 }
 
-export function getFrame(clientId)    { const f = frameStore.get(clientId);  return f ? f.jpeg : null; }
-export function getWebcamFrame(cid)   { const f = webcamStore.get(cid);      return f ? f.jpeg : null; }
-export function getMonitors(clientId) { return monitorStore.get(clientId) || []; }
-export function hasClient(clientId)   { return clientAddr.has(clientId); }
+export function getFrame(clientId)     { const f = frameStore.get(clientId);  return f ? f.jpeg : null; }
+export function getWebcamFrame(cid)    { const f = webcamStore.get(cid);      return f ? f.jpeg : null; }
+export function getMonitors(clientId)  { return monitorStore.get(clientId) || []; }
+export function hasClient(clientId)    { return clientAddr.has(clientId); }

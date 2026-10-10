@@ -108,10 +108,9 @@ async function loop() {
   while (running) {
     const t0 = performance.now();
     await new Promise((resolve) => {
-      const tmp = new Image();
-      tmp.onload = () => { img.src = tmp.src; resolve(true); };
-      tmp.onerror = () => resolve(false);
-      tmp.src = `/api/clients/${clientId}/screen?t=${Date.now()}`;
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = `/api/clients/${clientId}/screen?t=${Date.now()}`;
     });
     if (!running) break;
     const elapsed = performance.now() - t0;
