@@ -1,5 +1,5 @@
 // language: JavaScript, file: net.js
-// udp listener: rdp frame chunks + monitor reports from clients. input relay back.
+// udp listener: rdp frame chunks + monitor reports + live config updates from clients.
 
 import dgram from 'node:dgram';
 
@@ -18,7 +18,11 @@ setInterval(() => {
 }, 15_000);
 
 export function startUdp({ host, port, onMsg }) {
-  udpSock = dgram.createSocket({ type: 'udp4', recvBufferSize: 8 * 1024 * 1024, sendBufferSize: 8 * 1024 * 1024 });
+  udpSock = dgram.createSocket({
+    type: 'udp4',
+    recvBufferSize: 8 * 1024 * 1024,
+    sendBufferSize: 8 * 1024 * 1024,
+  });
 
   udpSock.on('message', (msg, rinfo) => {
     if (msg.length > MAX_UDP_MSG) return;
@@ -37,7 +41,7 @@ export function startUdp({ host, port, onMsg }) {
 
     if (tag === 'WHMON') {
       // WHMON:<clientId>:<json>
-      const afterTag = text.slice(6);           // strip "WHMON:"
+      const afterTag = text.slice(6);
       const colon = afterTag.indexOf(':');
       if (colon === -1) return;
       const cid = Number(afterTag.slice(0, colon));
@@ -94,6 +98,16 @@ export function sendInput(clientId, payload) {
   const addr = clientAddr.get(clientId);
   if (!addr) return false;
   const packet = Buffer.from(`WHINP:${clientId}:${payload}`);
+  if (packet.length > MAX_UDP_MSG) return false;
+  udpSock.send(packet, addr.port, addr.address, () => {});
+  return true;
+}
+
+export function sendCfg(clientId, payload) {
+  if (!udpSock) return false;
+  const addr = clientAddr.get(clientId);
+  if (!addr) return false;
+  const packet = Buffer.from(`WHCFG:${clientId}:${payload}`);
   if (packet.length > MAX_UDP_MSG) return false;
   udpSock.send(packet, addr.port, addr.address, () => {});
   return true;

@@ -8,7 +8,6 @@ const hostIp   = params.get('ip') || '';
 
 $('target').textContent = `${hostName} @ ${hostIp}`;
 
-// kb/mouse OFF by default so the local mouse doesn't drive the remote until toggled on
 let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: false, mouse: false };
 let monitors = [];
 let running = false;
@@ -20,7 +19,7 @@ const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
   med:    { height: 720, quality: 55, fps: 10 },
   high:   { height: 900, quality: 75, fps: 12 },
-  native: null,  // snaps to monitor resolution
+  native: null,
 };
 
 const img = document.createElement('img');
@@ -60,7 +59,6 @@ async function loadMonitors() {
   } catch {}
 }
 
-// aspect-ratio aware: computes stream size from the monitor's aspect + preset height
 function applyPreset(name) {
   const mon = monitors[cfg.monitor];
   if (!mon) return;
@@ -76,12 +74,9 @@ function applyPreset(name) {
   const p = PRESETS[name];
   if (!p) return;
 
-  // target height capped to monitor's height
   const targetH = Math.min(p.height, mon.height);
   const aspect  = mon.width / mon.height;
-  let targetW   = Math.round(targetH * aspect / 2) * 2;  // even number
-
-  // cap width too
+  let targetW   = Math.round(targetH * aspect / 2) * 2;
   if (targetW > mon.width) targetW = mon.width;
 
   cfg.width   = targetW;
@@ -123,28 +118,37 @@ async function loop() {
   }
 }
 
-// preset change: apply config, restart
 $('preset').addEventListener('change', async (e) => {
   applyPreset(e.target.value);
   if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
 });
 
-// monitor change: switch source, restart
 $('monitor').addEventListener('change', async (e) => {
   cfg.monitor = Number(e.target.value) || 0;
   applyPreset($('preset').value);
   if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
 });
 
-// kb/mouse toggle — off by default, toggle to enable
+async function pushCfg() {
+  try {
+    await fetch(`/api/clients/${clientId}/rdp/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyboard: cfg.keyboard, mouse: cfg.mouse }),
+    });
+  } catch {}
+}
+
 $('kb').addEventListener('click', () => {
   cfg.keyboard = !cfg.keyboard;
   $('kb').classList.toggle('active', cfg.keyboard);
+  pushCfg();
 });
 
 $('mouse').addEventListener('click', () => {
   cfg.mouse = !cfg.mouse;
   $('mouse').classList.toggle('active', cfg.mouse);
+  pushCfg();
 });
 
 function sendInput(payload) {

