@@ -1,19 +1,19 @@
 // language: JavaScript, file: net.js
-// udp listener: rdp frame chunks + monitor reports + live config updates from clients.
-
 import dgram from 'node:dgram';
 
 const MAX_UDP_MSG = 65500;
 let udpSock = null;
 
-const clientAddr = new Map();   // clientId -> { address, port }
-const frameStore = new Map();   // clientId -> { jpeg, updatedAt }
-const frameBuffers = new Map(); // clientId -> { seq, total, chunks, updatedAt }
-const monitorStore = new Map(); // clientId -> [ {name,x,y,width,height} ]
+const clientAddr   = new Map();
+const frameStore   = new Map();   // clientId -> { jpeg, updatedAt }  (rdp screen)
+const webcamStore  = new Map();   // clientId -> { jpeg, updatedAt }  (webcam)
+const frameBuffers = new Map();   // clientId -> { seq, total, chunks, updatedAt, kind }
+const monitorStore = new Map();   // clientId -> [ {name,x,y,width,height} ]
 
 setInterval(() => {
   const now = Date.now();
-  for (const [cid, f] of frameStore) if (now - f.updatedAt > 30_000) frameStore.delete(cid);
+  for (const [cid, f] of frameStore)  if (now - f.updatedAt > 30_000) frameStore.delete(cid);
+  for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000) webcamStore.delete(cid);
   for (const [cid, b] of frameBuffers) if (now - b.updatedAt > 10_000) frameBuffers.delete(cid);
 }, 15_000);
 
@@ -40,7 +40,6 @@ export function startUdp({ host, port, onMsg }) {
     }
 
     if (tag === 'WHMON') {
-      // WHMON:<clientId>:<json>
       const afterTag = text.slice(6);
       const colon = afterTag.indexOf(':');
       if (colon === -1) return;
@@ -53,8 +52,9 @@ export function startUdp({ host, port, onMsg }) {
       return;
     }
 
-    if (tag === 'WHFRM') {
-      // WHFRM:<clientId>:<seq>:<idx>:<total>:<base64>
+    if (tag === 'WHFRM' || tag === 'WHCAM') {
+      // <TAG>:<clientId>:<seq>:<idx>:<total>:<base64>
+      const kind = tag === 'WHFRM' ? 'screen' : 'webcam';
       const parts = text.split(':');
       if (parts.length < 6) return;
       const cid   = Number(parts[1]);
@@ -64,10 +64,11 @@ export function startUdp({ host, port, onMsg }) {
       const data  = parts.slice(5).join(':');
       if (!cid || !total) return;
 
-      let buf = frameBuffers.get(cid);
+      const key = `${kind}:${cid}`;
+      let buf = frameBuffers.get(key);
       if (!buf || buf.seq !== seq) {
-        buf = { seq, total, chunks: new Map(), updatedAt: Date.now() };
-        frameBuffers.set(cid, buf);
+        buf = { seq, total, chunks: new Map(), updatedAt: Date.now(), kind, cid };
+        frameBuffers.set(key, buf);
       }
       buf.chunks.set(idx, Buffer.from(data, 'base64'));
       buf.updatedAt = Date.now();
@@ -75,8 +76,10 @@ export function startUdp({ host, port, onMsg }) {
       if (buf.chunks.size === buf.total) {
         const ordered = [];
         for (let i = 0; i < buf.total; i++) ordered.push(buf.chunks.get(i) || Buffer.alloc(0));
-        frameStore.set(cid, { jpeg: Buffer.concat(ordered), updatedAt: Date.now() });
-        frameBuffers.delete(cid);
+        const jpeg = Buffer.concat(ordered);
+        if (kind === 'screen') frameStore.set(cid,  { jpeg, updatedAt: Date.now() });
+        else                   webcamStore.set(cid, { jpeg, updatedAt: Date.now() });
+        frameBuffers.delete(key);
       }
       return;
     }
@@ -113,15 +116,7 @@ export function sendCfg(clientId, payload) {
   return true;
 }
 
-export function getFrame(clientId) {
-  const f = frameStore.get(clientId);
-  return f ? f.jpeg : null;
-}
-
-export function getMonitors(clientId) {
-  return monitorStore.get(clientId) || [];
-}
-
-export function hasClient(clientId) {
-  return clientAddr.has(clientId);
-}
+export function getFrame(clientId)    { const f = frameStore.get(clientId);  return f ? f.jpeg : null; }
+export function getWebcamFrame(cid)   { const f = webcamStore.get(cid);      return f ? f.jpeg : null; }
+export function getMonitors(clientId) { return monitorStore.get(clientId) || []; }
+export function hasClient(clientId)   { return clientAddr.has(clientId); }

