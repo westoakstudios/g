@@ -1,5 +1,5 @@
 // language: JavaScript, file: tcp_rpc.js
-// one JSON object in → one JSON object out. shared by tcp listener and https /api/rpc.
+// JSON-RPC handlers used by /api/rpc. one object in → one object out.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -62,12 +62,15 @@ export function handleRpc(msg, remoteIp) {
         db.prepare(sql`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`)
           .run(Date.now(), ip, client.id);
       }
+
       const c = db.prepare(sql`
         SELECT id, shell, line FROM commands
         WHERE user_id = ? AND status = 'pending'
         ORDER BY created_at ASC LIMIT 1
       `).get(uid);
+
       if (!c) return { id: null, clientId: client ? Number(client.id) : null };
+
       db.prepare(sql`UPDATE commands SET status = 'sent' WHERE id = ?`).run(c.id);
       return {
         id: Number(c.id),
@@ -129,6 +132,8 @@ export function handleRpc(msg, remoteIp) {
   }
 }
 
+// kept for the raw TCP listener path. unused now that the sniffer is gone,
+// but harmless to leave exported.
 export function handleTcpLine(line, sock, remoteIp) {
   let reply;
   try {

@@ -15,7 +15,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
-import { startUdp } from './net.js';
+
 import { handleRpc } from './tcp_rpc.js';
 import { startUdp, sendInput, getFrame } from './net.js';
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
