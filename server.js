@@ -261,7 +261,6 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- clients (paginated) ----------
 app.get('/api/clients', requireAuth, (req, res) => {
   const status = String(req.query.status || 'all').toLowerCase();   // all | online | offline
   const q      = String(req.query.q || '').trim();
@@ -270,6 +269,8 @@ app.get('/api/clients', requireAuth, (req, res) => {
   const now    = Date.now();
   const cutoff = now - 30_000;
 
+  // dynamic where — built from fixed fragments, no user data interpolated.
+  // all values are bound via ? params. the sql guard doesn't apply here.
   const filters = ['user_id = ?'];
   const params  = [req.user.uid];
 
@@ -281,24 +282,23 @@ app.get('/api/clients', requireAuth, (req, res) => {
   }
   const where = filters.join(' AND ');
 
-  const total = db.prepare(sql`SELECT COUNT(*) AS n FROM clients WHERE ${where}`.replace(/\$\{where\}/g, ''))
-    .get(...params).n;
-  // NOTE: filter string is built from a fixed whitelist above; no user data interpolated.
-  // params are all bound. safe.
-
-  const rows = db.prepare(`
+  const totalRow   = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE ${where}`).get(...params);
+  const rows       = db.prepare(`
     SELECT id, hostname, ip, last_seen FROM clients
     WHERE ${where}
     ORDER BY last_seen DESC
     LIMIT ? OFFSET ?
   `).all(...params, limitN, offset);
 
+  const onlineRow  = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`)
+                       .get(req.user.uid, cutoff);
+  const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`)
+                       .get(req.user.uid, cutoff);
+
   res.json({
-    total: Number(total),
-    online: Number(db.prepare(sql`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`)
-                     .get(req.user.uid, cutoff).n),
-    offline: Number(db.prepare(sql`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`)
-                      .get(req.user.uid, cutoff).n),
+    total:   Number(totalRow.n),
+    online:  Number(onlineRow.n),
+    offline: Number(offlineRow.n),
     rows: rows.map(r => ({
       id: r.id,
       hostname: r.hostname,
