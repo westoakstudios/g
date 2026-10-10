@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
 
 import { handleRpc } from './tcp_rpc.js';
-import { startUdp, sendInput, getFrame } from './net.js';
+import { startUdp, sendInput, getFrame, getMonitors } from './net.js';
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -98,7 +98,12 @@ const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false,
 const limitGlobal = limit({
   windowMs: 60_000, max: 240,
   message: { error: 'too many requests' },
-  skip: (req) => /^\/api\/clients\/\d+\/screen$/.test(req.path),
+  skip: (req) =>
+    req.path.endsWith('/screen') ||
+    req.path.endsWith('/input') ||
+    req.path.endsWith('/monitors') ||
+    req.path.endsWith('/rdp/start') ||
+    req.path.endsWith('/rdp/stop'),
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
@@ -418,6 +423,13 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.send(jpeg);
+});
+
+app.get('/api/clients/:id/monitors', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  res.json(getMonitors(cid));
 });
 
 app.post('/api/clients/:id/input', requireAuth, (req, res) => {

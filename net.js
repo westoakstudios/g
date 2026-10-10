@@ -1,19 +1,16 @@
 // language: JavaScript, file: net.js
-// udp listener: rdp frame chunks from clients + input relay back to them.
+// udp listener: rdp frame chunks + monitor reports from clients. input relay back.
 
 import dgram from 'node:dgram';
 
 const MAX_UDP_MSG = 65500;
 let udpSock = null;
 
-// clientId -> { address, port }
-const clientAddr = new Map();
-// clientId -> { jpeg: Buffer, updatedAt }
-const frameStore = new Map();
-// clientId -> { seq, total, chunks: Map<idx, Buffer>, updatedAt }
-const frameBuffers = new Map();
+const clientAddr = new Map();   // clientId -> { address, port }
+const frameStore = new Map();   // clientId -> { jpeg, updatedAt }
+const frameBuffers = new Map(); // clientId -> { seq, total, chunks, updatedAt }
+const monitorStore = new Map(); // clientId -> [ {name,x,y,width,height} ]
 
-// stale sweeps
 setInterval(() => {
   const now = Date.now();
   for (const [cid, f] of frameStore) if (now - f.updatedAt > 30_000) frameStore.delete(cid);
@@ -35,6 +32,20 @@ export function startUdp({ host, port, onMsg }) {
       const cid = Number(cidStr);
       if (!cid || !key) return;
       clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
+      return;
+    }
+
+    if (tag === 'WHMON') {
+      // WHMON:<clientId>:<json>
+      const afterTag = text.slice(6);           // strip "WHMON:"
+      const colon = afterTag.indexOf(':');
+      if (colon === -1) return;
+      const cid = Number(afterTag.slice(0, colon));
+      if (!cid) return;
+      try {
+        const list = JSON.parse(afterTag.slice(colon + 1));
+        monitorStore.set(cid, Array.isArray(list) ? list : []);
+      } catch {}
       return;
     }
 
@@ -91,6 +102,10 @@ export function sendInput(clientId, payload) {
 export function getFrame(clientId) {
   const f = frameStore.get(clientId);
   return f ? f.jpeg : null;
+}
+
+export function getMonitors(clientId) {
+  return monitorStore.get(clientId) || [];
 }
 
 export function hasClient(clientId) {

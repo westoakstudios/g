@@ -8,16 +8,19 @@ const hostIp   = params.get('ip') || '';
 
 $('target').textContent = `${hostName} @ ${hostIp}`;
 
-let cfg = { width: 1280, height: 720, quality: 50, fps: 10, keyboard: true, mouse: true };
+let monitors = [];
+let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: true, mouse: true };
 let running = false;
 let lastMouseSent = 0;
 let framesThisSec = 0;
 let lastFpsTick = Date.now();
+let pollTimer = null;
 
 const PRESETS = {
-  low:  { width: 960,  height: 540, quality: 35, fps: 8  },
-  med:  { width: 1280, height: 720, quality: 55, fps: 10 },
-  high: { width: 1600, height: 900, quality: 75, fps: 15 },
+  low:    { width: 960,  height: 540, quality: 35, fps: 8  },
+  med:    { width: 1280, height: 720, quality: 55, fps: 10 },
+  high:   { width: 1600, height: 900, quality: 75, fps: 15 },
+  native: { width: 3840, height: 2160, quality: 70, fps: 10 },
 };
 
 const img = document.createElement('img');
@@ -25,7 +28,6 @@ img.draggable = false;
 
 img.addEventListener('load', () => {
   $('dot').classList.add('on');
-  $('dot').classList.remove('off');
   framesThisSec++;
   const now = Date.now();
   if (now - lastFpsTick >= 1000) {
@@ -34,15 +36,29 @@ img.addEventListener('load', () => {
     lastFpsTick = now;
   }
 });
-img.addEventListener('error', () => {
-  $('dot').classList.remove('on');
-  $('dot').classList.add('off');
-});
+img.addEventListener('error', () => $('dot').classList.remove('on'));
 
-function showImage() {
-  const stage = $('stage');
-  stage.innerHTML = '';
-  stage.appendChild(img);
+async function loadMonitors() {
+  try {
+    const r = await fetch(`/api/clients/${clientId}/monitors`);
+    if (!r.ok) return;
+    monitors = await r.json();
+    const sel = $('monitor');
+    sel.innerHTML = '';
+    if (monitors.length === 0) {
+      sel.innerHTML = '<option value="0">default</option>';
+      return;
+    }
+    monitors.forEach((m, i) => {
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = `#${i} ${m.width}×${m.height}`;
+      sel.appendChild(o);
+    });
+    sel.value = String(cfg.monitor);
+    // if preset is native, snap to this monitor's res
+    applyPreset($('preset').value);
+  } catch {}
 }
 
 async function start() {
@@ -53,62 +69,73 @@ async function start() {
   });
   if (!r.ok) { alert('rdp start failed'); return; }
   running = true;
-  showImage();
-  pump();
+  const stage = $('stage');
+  stage.innerHTML = '';
+  stage.appendChild(img);
+  loop();
 }
 
 async function stop() {
   running = false;
-  try {
-    await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' });
-  } catch {}
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
 }
 
-async function pump() {
+async function loop() {
   while (running) {
-    try {
-      const t = Date.now();
-      await new Promise((resolve) => {
-        const tmp = new Image();
-        tmp.onload = () => { img.src = tmp.src; resolve(); };
-        tmp.onerror = () => resolve();
-        tmp.src = `/api/clients/${clientId}/screen?t=${t}`;
-      });
-    } catch {}
-    // pace to target fps
+    const t = Date.now();
+    await new Promise((resolve) => {
+      const tmp = new Image();
+      tmp.onload = () => { img.src = tmp.src; resolve(); };
+      tmp.onerror = () => resolve();
+      tmp.src = `/api/clients/${clientId}/screen?t=${t}`;
+    });
+    if (!running) break;
     const interval = 1000 / Math.max(cfg.fps, 1);
-    const elapsed = Date.now() - (img.dataset.lastFetch || 0);
-    img.dataset.lastFetch = Date.now();
-    if (elapsed < interval) await new Promise(r => setTimeout(r, interval - elapsed));
+    await new Promise((r) => setTimeout(r, interval));
   }
 }
 
-// ---------- preset ----------
-$('preset').addEventListener('change', (e) => {
-  const p = PRESETS[e.target.value];
+function applyPreset(name) {
+  const p = PRESETS[name];
   if (!p) return;
-  Object.assign(cfg, p);
-  // restart stream with new settings
+  if (name === 'native' && monitors[cfg.monitor]) {
+    cfg.width  = monitors[cfg.monitor].width;
+    cfg.height = monitors[cfg.monitor].height;
+    cfg.quality = p.quality;
+    cfg.fps     = p.fps;
+  } else {
+    Object.assign(cfg, p);
+  }
+}
+
+$('preset').addEventListener('change', async (e) => {
+  applyPreset(e.target.value);
   if (running) {
-    stop().then(() => setTimeout(start, 200));
+    await stop();
+    setTimeout(start, 200);
   }
 });
 
-// ---------- keyboard ----------
+$('monitor').addEventListener('change', async (e) => {
+  cfg.monitor = Number(e.target.value) || 0;
+  applyPreset($('preset').value);
+  if (running) {
+    await stop();
+    setTimeout(start, 200);
+  }
+});
+
 $('kb').addEventListener('click', () => {
   cfg.keyboard = !cfg.keyboard;
   $('kb').classList.toggle('active', cfg.keyboard);
-  $('kb').textContent = cfg.keyboard ? '⌨ on' : '⌨ off';
 });
 
-// ---------- mouse toggle ----------
 $('mouse').addEventListener('click', () => {
   cfg.mouse = !cfg.mouse;
   $('mouse').classList.toggle('active', cfg.mouse);
-  $('mouse').textContent = cfg.mouse ? '🖱 on' : '🖱 off';
 });
 
-// ---------- input senders ----------
 function sendInput(payload) {
   fetch(`/api/clients/${clientId}/input`, {
     method: 'POST',
@@ -128,7 +155,7 @@ function norm(e) {
 img.addEventListener('mousemove', (e) => {
   if (!cfg.mouse) return;
   const now = performance.now();
-  if (now - lastMouseSent < 30) return;   // ~30fps mouse
+  if (now - lastMouseSent < 25) return;
   lastMouseSent = now;
   const p = norm(e);
   sendInput({ type: 'mouse_move', x: p.x, y: p.y });
@@ -170,7 +197,6 @@ document.addEventListener('keyup', (e) => {
 
 function btnName(b) { return b === 2 ? 'right' : b === 1 ? 'middle' : 'left'; }
 
-// ---------- disconnect ----------
 $('stop').addEventListener('click', async () => {
   await stop();
   window.close();
@@ -178,5 +204,4 @@ $('stop').addEventListener('click', async () => {
 
 window.addEventListener('beforeunload', () => { stop(); });
 
-// ---------- go ----------
-start();
+loadMonitors().then(start);
