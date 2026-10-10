@@ -2,15 +2,12 @@
 const $ = (id) => document.getElementById(id);
 
 let me = null;
-
 const HOST_PAGE_SIZE = 50;
 const REMOTE_PAGE_SIZE = 50;
-
 const state = {
-  hosts:  { offset: 0, q: '', status: 'all', total: 0 },
+  hosts:  { offset: 0, q: '', status: 'all' },
   remote: { offset: 0, q: '' },
 };
-
 let pollTimer = null;
 
 async function loadMe() {
@@ -99,6 +96,12 @@ function esc(s) {
   }[c]));
 }
 
+function humanSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
 // ---------- HOSTS ----------
 async function loadHosts() {
   const s = state.hosts;
@@ -108,7 +111,6 @@ async function loadHosts() {
   const r = await fetch('/api/clients?' + q);
   if (!r.ok) return;
   const d = await r.json();
-  s.total = d.total;
   $('h-count').textContent = `${d.total} total · ${d.online} online · ${d.offline} offline`;
 
   const host = $('h-rows');
@@ -134,11 +136,9 @@ function buildRow(c, onOpen) {
     <span class="host">${esc(c.hostname)}</span>
     <span class="ip">${esc(c.ip)}</span>
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
-    <span class="actions">
-      <button class="ghost mini" data-open>open</button>
-    </span>`;
+    <span class="actions"><button class="ghost mini" data-open>view</button></span>`;
   el.addEventListener('click', (e) => {
-    if (e.target.closest('[data-open]') || !e.target.closest('button')) onOpen();
+    if (!e.target.closest('button') || e.target.closest('[data-open]')) onOpen();
   });
   return el;
 }
@@ -154,27 +154,29 @@ async function openHostDetail(c) {
     <div class="sub" style="margin:0;color:var(--green-2)">${esc(c.ip)}</div>
 
     <div class="kv">
-      <div class="k">client id</div><div class="v">${c.id}</div>
-      <div class="k">state</div>   <div class="v plain" style="color:${c.online ? 'var(--green-2)' : 'var(--muted)'}">${c.online ? 'online' : 'offline'}</div>
-      <div class="k">ipv4</div>    <div class="v">${esc(c.ip)}</div>
-      <div class="k">last seen</div><div class="v plain">${new Date(c.lastSeen).toLocaleString()}</div>
+      <div class="k">client id</div> <div class="v">${c.id}</div>
+      <div class="k">state</div>     <div class="v plain" style="color:${c.online ? 'var(--green-2)' : 'var(--muted)'}">${c.online ? 'online' : 'offline'}</div>
+      <div class="k">ipv4</div>      <div class="v">${esc(c.ip)}</div>
+      <div class="k">last seen</div> <div class="v plain">${new Date(c.lastSeen).toLocaleString()}</div>
     </div>
 
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
-      <button class="ghost mini" data-cmd>open cmd</button>
-      <button class="ghost mini" data-ps>open powershell</button>
+      <button class="ghost mini" data-remote>go to remote</button>
       <button class="ghost mini" data-del style="border-color:var(--red);color:var(--red)">delete</button>
       <button class="ghost mini" data-close>close</button>
     </div>
 
     <h3 style="margin-top:20px">uploads</h3>
-    <div id="u-list"><div class="note">loading…</div></div>
-  `;
+    <div id="u-list"><div class="note">loading…</div></div>`;
   box.appendChild(el);
 
-  el.querySelector('[data-cmd]').addEventListener('click', () => openConsole(c, 'cmd'));
-  el.querySelector('[data-ps]').addEventListener('click',  () => openConsole(c, 'powershell'));
   el.querySelector('[data-close]').addEventListener('click', () => box.innerHTML = '');
+  el.querySelector('[data-remote]').addEventListener('click', () => {
+    document.querySelector('.nav a[data-tab="remote"]')?.click();
+    state.remote.q = c.hostname;
+    $('r-search').value = c.hostname;
+    loadRemote();
+  });
   el.querySelector('[data-del]').addEventListener('click', async () => {
     if (!confirm(`delete ${c.hostname}?`)) return;
     const r = await fetch(`/api/clients/${c.id}`, { method: 'DELETE' });
@@ -209,12 +211,6 @@ async function loadUploads(clientId, container) {
   });
 }
 
-function humanSize(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
-
 // ---------- REMOTE ----------
 async function loadRemote() {
   const s = state.remote;
@@ -231,7 +227,7 @@ async function loadRemote() {
   if (d.rows.length === 0) {
     host.innerHTML = '<div class="empty">no online clients</div>';
   } else {
-    d.rows.forEach(c => host.appendChild(buildRow(c, () => openConsole(c, null))));
+    d.rows.forEach(c => host.appendChild(buildRemoteRow(c)));
   }
 
   const page = Math.floor(s.offset / REMOTE_PAGE_SIZE) + 1;
@@ -241,15 +237,38 @@ async function loadRemote() {
   $('r-next').disabled = s.offset + REMOTE_PAGE_SIZE >= d.online;
 }
 
-// ---------- console ----------
+function buildRemoteRow(c) {
+  const el = document.createElement('div');
+  el.className = 'row';
+  el.innerHTML = `
+    <span class="dot on"></span>
+    <span class="host">${esc(c.hostname)}</span>
+    <span class="ip">${esc(c.ip)}</span>
+    <span class="seen">${fmtAgo(c.lastSeen)}</span>
+    <span class="actions" style="display:flex;gap:6px;justify-content:flex-end">
+      <button class="ghost mini" disabled title="RDP not implemented">rdp</button>
+      <button class="ghost mini" data-cmd>cmd</button>
+      <button class="ghost mini" data-ps>powershell</button>
+    </span>`;
+  el.querySelector('[data-cmd]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openConsole(c, 'cmd');
+  });
+  el.querySelector('[data-ps]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openConsole(c, 'powershell');
+  });
+  return el;
+}
+
 function openConsole(c, shell) {
   const q = new URLSearchParams({
     id: String(c.id),
     host: c.hostname || '',
     ip: c.ip || '',
+    shell: shell || 'cmd',
   });
-  if (shell) q.set('shell', shell);
-  window.open('/cmd.html?' + q.toString(), '_blank', 'width=900,height=580');
+  window.open('/cmd.html?' + q.toString(), '_blank', 'width=1000,height=640');
 }
 
 // ---------- toolbar wiring ----------

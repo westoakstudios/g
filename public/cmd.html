@@ -6,86 +6,110 @@
 <title>WeedHack — console</title>
 <link rel="stylesheet" href="/css/style.css">
 <style>
-  body { background: #04100a; overflow: hidden; }
+  html, body { height: 100%; overflow: hidden; }
+  body { background: #04100a; }
+
   .wrap { height: 100vh; display: flex; flex-direction: column; }
-  .bar {
+
+  .topbar {
     display: flex; align-items: center; gap: 12px;
-    padding: 10px 14px;
-    background: linear-gradient(180deg, var(--panel), var(--bg-2));
+    padding: 10px 16px; flex-shrink: 0;
+    background: linear-gradient(180deg, #0b2313, #071a0e);
     border-bottom: 1px solid var(--line);
     font-size: 12px; color: var(--muted);
   }
-  .bar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-2); box-shadow: 0 0 6px var(--green-2); }
-  .bar .shell  { color: var(--green-2); font-family: var(--mono); }
-  .bar .target { color: var(--text); }
-  .bar .spacer { flex: 1; }
-  .bar button.mini { padding: 5px 10px; font-size: 11px; }
+  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-2); box-shadow: 0 0 6px var(--green-2); }
+  .topbar .label { color: var(--muted); letter-spacing: .16em; text-transform: uppercase; font-size: 10px; }
+  .topbar .target { color: var(--text); font-family: var(--mono); }
+  .topbar .spacer { flex: 1; }
 
-  .picker {
-    flex: 1; display: grid; place-items: center;
+  .shelltabs { display: flex; gap: 4px; background: #04140a; border: 1px solid var(--line); border-radius: 6px; padding: 3px; }
+  .shelltabs button {
+    margin: 0; padding: 6px 14px; font-size: 11px; font-family: var(--mono);
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; border-radius: 4px;
   }
-  .picker-inner {
-    max-width: 420px; width: 100%;
-    background: linear-gradient(180deg, var(--panel), var(--bg-2));
-    border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 28px; text-align: center;
-  }
-  .picker h2 { font-size: 16px; font-weight: 400; margin-bottom: 6px; }
-  .picker .sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
-  .picker .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .picker .opts button { margin-top: 0; padding: 22px 12px; font-size: 14px; }
+  .shelltabs button.active { background: var(--green); color: #04170a; font-weight: 600; }
+  .shelltabs button:hover:not(.active) { color: var(--text); }
+
+  .topbar .close { width: auto; margin: 0; padding: 6px 12px; font-size: 11px; background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  .topbar .close:hover { color: var(--text); border-color: var(--green-2); }
 
   .term {
-    flex: 1; overflow-y: auto; padding: 14px 16px;
-    font-family: var(--mono); font-size: 13px; line-height: 1.5;
-    color: #c8e8d0; background: #04100a;
+    flex: 1; overflow-y: auto;
+    padding: 14px 18px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.55;
+    color: #c8e8d0;
   }
-  .term .line { white-space: pre-wrap; word-break: break-word; }
-  .term .in  { color: var(--green-2); }
-  .term .err { color: var(--orange-2); }
-  .term .meta { color: var(--muted); font-size: 11px; }
 
-  .input {
+  .term::-webkit-scrollbar { width: 8px; }
+  .term::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+
+  .blk { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px dashed #0e2b18; }
+  .blk:last-child { border-bottom: none; }
+
+  .blk .cmdline {
+    color: var(--green-2); word-break: break-all; white-space: pre-wrap;
+  }
+  .blk .cmdline .prompt { color: var(--muted); margin-right: 4px; }
+
+  .blk .out {
+    color: var(--text); white-space: pre-wrap; word-break: break-word;
+    margin-top: 4px; padding-left: 2px;
+  }
+
+  .blk .status {
+    color: var(--muted); font-size: 11px; margin-top: 4px;
+    display: flex; gap: 10px; align-items: center;
+  }
+  .blk .status.pending::before {
+    content: ""; display: inline-block;
+    width: 8px; height: 8px; border-radius: 50%;
+    border: 2px solid var(--green-2); border-top-color: transparent;
+    animation: spin .7s linear infinite;
+  }
+  .blk .status.err { color: var(--orange-2); }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .bottom {
+    flex-shrink: 0;
     display: flex; align-items: center; gap: 8px;
-    border-top: 1px solid var(--line); background: #071a0e;
-    padding: 10px 14px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--line);
+    background: #071a0e;
   }
-  .input .ps1 { color: var(--green-2); font-family: var(--mono); font-size: 13px; }
-  .input input {
+  .bottom .ps1 { color: var(--green-2); font-family: var(--mono); font-size: 13px; }
+  .bottom input {
     flex: 1; background: transparent; border: none; color: #fff;
-    font-family: var(--mono); font-size: 13px; padding: 0; margin: 0;
-    outline: none; border-radius: 0;
+    font-family: var(--mono); font-size: 13px; padding: 4px 0; margin: 0; outline: none;
   }
-  .input input:focus { box-shadow: none; }
+  .bottom input:focus { box-shadow: none; }
+
+  .empty { color: var(--muted); padding: 30px 4px; text-align: center; font-size: 12px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="bar">
+  <div class="topbar">
     <span class="dot"></span>
-    <span>WeedHack console</span>
-    <span class="shell" id="bar-shell"></span>
-    <span class="target" id="bar-target"></span>
+    <span class="label">console</span>
+    <span class="target" id="target">—</span>
     <span class="spacer"></span>
-    <button class="ghost mini" id="swap" style="display:none">swap shell</button>
-  </div>
-
-  <div class="picker" id="picker">
-    <div class="picker-inner">
-      <h2>choose a shell</h2>
-      <div class="sub" id="pick-target"></div>
-      <div class="opts">
-        <button class="ghost" data-shell="cmd">cmd</button>
-        <button class="ghost" data-shell="powershell">powershell</button>
-      </div>
+    <div class="shelltabs">
+      <button data-shell="cmd">cmd</button>
+      <button data-shell="powershell">powershell</button>
     </div>
+    <button class="close" id="clear">clear</button>
   </div>
 
-  <div class="term" id="term" style="display:none"></div>
+  <div class="term" id="term">
+    <div class="empty">type a command below and press enter</div>
+  </div>
 
-  <div class="input" id="input" style="display:none">
+  <div class="bottom">
     <span class="ps1" id="ps1">C:\&gt;</span>
-    <input id="cmdline" autocomplete="off" spellcheck="false" placeholder="type a command and press enter">
+    <input id="cmdline" autocomplete="off" spellcheck="false" placeholder="type a command…" autofocus>
   </div>
 </div>
 <script src="/js/cmd.js"></script>
