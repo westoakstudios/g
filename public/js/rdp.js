@@ -100,6 +100,7 @@ async function start() {
 }
 
 async function stop() {
+  if (!running) return;
   running = false;
   try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
 }
@@ -152,6 +153,10 @@ $('mouse').addEventListener('click', () => {
   pushCfg();
 });
 
+$('reset').addEventListener('click', () => {
+  sendInput({ type: 'reset' });
+});
+
 function sendInput(payload) {
   fetch(`/api/clients/${clientId}/input`, {
     method: 'POST',
@@ -197,9 +202,28 @@ img.addEventListener('wheel', (e) => {
   sendInput({ type: 'mouse_wheel', dy: Math.sign(e.deltaY) });
 }, { passive: false });
 
+// keyboard — block dangerous system hotkeys that put the client into a bad state
 document.addEventListener('keydown', (e) => {
   if (!cfg.keyboard) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+  // ctrl+shift+esc opens Task Manager (elevated) which triggers UIPI and breaks SendInput
+  if (e.key === 'Escape' && e.ctrlKey && e.shiftKey) {
+    e.preventDefault();
+    sendInput({ type: 'reset' });
+    return;
+  }
+  // ctrl+alt+del — never forwards cleanly
+  if (e.key === 'Delete' && e.ctrlKey && e.altKey) {
+    e.preventDefault();
+    return;
+  }
+  // Windows key — opens start menu, breaks input context on some setups
+  if (e.key === 'Meta' || e.key === 'OS') {
+    e.preventDefault();
+    return;
+  }
+
   e.preventDefault();
   sendInput({ type: 'key', code: e.code, key: e.key, down: true });
 });
@@ -207,6 +231,12 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => {
   if (!cfg.keyboard) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+  // don't send keyup for the blocked hotkeys either
+  if (e.key === 'Escape' && e.ctrlKey && e.shiftKey) { e.preventDefault(); return; }
+  if (e.key === 'Delete' && e.ctrlKey && e.altKey) { e.preventDefault(); return; }
+  if (e.key === 'Meta' || e.key === 'OS') { e.preventDefault(); return; }
+
   e.preventDefault();
   sendInput({ type: 'key', code: e.code, key: e.key, down: false });
 });
@@ -218,6 +248,13 @@ $('stop').addEventListener('click', async () => {
   window.close();
 });
 
-window.addEventListener('beforeunload', () => { stop(); });
+function beaconStop() {
+  const body = new Blob(['{}'], { type: 'application/json' });
+  try { navigator.sendBeacon(`/api/clients/${clientId}/rdp/stop`, body); } catch {}
+  stop();
+}
+
+window.addEventListener('beforeunload', beaconStop);
+window.addEventListener('pagehide', beaconStop);
 
 loadMonitors().then(start);
