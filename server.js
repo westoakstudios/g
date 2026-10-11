@@ -600,6 +600,7 @@ app.get('/api/build/bases', requireAuth, (req, res) => {
 });
 
 // build a single self-extracting exe — compiles the launcher live with key+config+base baked in
+// key: client-supplied if non-empty, else falls back to the caller's account_key
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const { base, key, config } = req.body || {};
 
@@ -613,9 +614,14 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   if (!baseSrc.startsWith(baseRoot + path.sep)) return res.status(400).json({ error: 'bad path' });
   if (!fs.existsSync(baseSrc)) return res.status(404).json({ error: 'base not found' });
 
+  // key: use what the client sent; if empty, fall back to the account key
+  const row = getOwnUser(req.user.uid);
+  const acctKey = row?.account_key || '';
   const buildKey = (typeof key === 'string' && key.trim().length > 0)
     ? key.trim().slice(0, 128)
-    : genKey();
+    : acctKey;
+
+  if (!buildKey) return res.status(400).json({ error: 'no key — type one or set an account key' });
 
   const cfg = (typeof config === 'object' && config !== null) ? config : {};
 
