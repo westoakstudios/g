@@ -100,27 +100,14 @@
 
     <section class="section" id="builder">
       <h2>builder</h2>
-      <div class="sub">pick a base exe from the exe/ folder, inject a key, download the stager zip.</div>
+      <div class="sub">compiles the client with your key baked in.</div>
 
       <div class="toolbar">
-        <select id="b-base"><option value="">loading bases…</option></select>
-        <input id="b-key" placeholder="account key (leave blank to auto-generate)" style="min-width:320px">
+        <input id="b-key" placeholder="account key (leave blank to use your account key)" style="min-width:400px">
         <button class="ghost mini" id="b-build">build</button>
         <button class="ghost mini" id="b-refresh">refresh</button>
         <span class="grow"></span>
         <span class="count" id="b-count">—</span>
-      </div>
-
-      <div class="tile" style="margin-bottom:14px">
-        <div class="k">launcher config (json)</div>
-<textarea id="b-config" rows="8" style="font-family:var(--mono);font-size:12px;margin-top:8px;width:100%;background:#000;border:1px solid var(--line);border-radius:var(--r-md);color:var(--text);padding:13px 16px;outline:none;resize:vertical">{
-  "dest": "%APPDATA%\\loader",
-  "exeName": "program.exe",
-  "keyFile": "key.json",
-  "args": [],
-  "persist": false
-}</textarea>
-        <div class="note">written into key.json inside the zip. base exe reads it at runtime.</div>
       </div>
 
       <div id="b-result"></div>
@@ -148,7 +135,7 @@
           <div class="v mono val" id="a-akey" data-real="" data-shown="0">—</div>
           <button class="ghost mini" data-reveal="a-akey">reveal</button>
         </div>
-        <div class="note">this is the key the rust client sends. keep it private.</div>
+        <div class="note">this is the key the client sends. keep it private.</div>
       </div>
 
       <div class="tile">
