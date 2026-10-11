@@ -11,24 +11,25 @@
   <div class="card">
     <div class="brand"><span class="w">Weed</span><span class="h">Hack</span></div>
     <h1>sign in</h1>
-    <div class="sub">username or login token, plus your password.</div>
+    <div class="sub">use your login token. no password needed.</div>
 
     <div class="tabs">
-      <button class="active" data-mode="user">username</button>
-      <button data-mode="token">login token</button>
+      <button class="active" data-mode="token">login token</button>
+      <button data-mode="user">username</button>
     </div>
 
-    <div id="m-user">
+    <div id="m-token">
+      <label for="token">login token</label>
+      <input id="token" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+      <div class="note">paste your token — signs you in immediately.</div>
+    </div>
+
+    <div id="m-user" style="display:none">
       <label for="username">username / email</label>
       <input id="username" autocomplete="username">
+      <label for="password">password</label>
+      <input id="password" type="password" autocomplete="current-password">
     </div>
-    <div id="m-token" style="display:none">
-      <label for="token">login token</label>
-      <input id="token" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off">
-    </div>
-
-    <label for="password">password</label>
-    <input id="password" type="password" autocomplete="current-password">
 
     <button id="go">sign in</button>
     <div class="err" id="err"></div>

@@ -7,29 +7,34 @@
 <link rel="stylesheet" href="/css/style.css">
 <style>
   html, body { height: 100%; overflow: hidden; }
-  body { background: #04100a; margin: 0; }
+  body { background: var(--bg); margin: 0; }
   .wrap { height: 100vh; display: flex; flex-direction: column; }
   .topbar {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 14px; flex-shrink: 0;
-    background: linear-gradient(180deg, #0b2313, #071a0e);
+    background: linear-gradient(180deg, var(--panel), var(--bg-2));
     border-bottom: 1px solid var(--line);
     font-size: 12px; color: var(--muted);
   }
   .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
-  .topbar .dot.on { background: var(--green-2); box-shadow: 0 0 6px var(--green-2); }
+  .topbar .dot.on { background: var(--green); box-shadow: 0 0 10px var(--green); }
   .topbar .target { color: var(--text); font-family: var(--mono); }
   .topbar .spacer { flex: 1; }
-  .topbar .fps { font-family: var(--mono); font-size: 11px; min-width: 44px; text-align: right; }
+  .topbar .fps { font-family: var(--mono); font-size: 11px; color: var(--blue-3); min-width: 44px; text-align: right; }
   .topbar select, .topbar button {
     margin: 0; padding: 6px 12px; font-size: 11px; width: auto;
     background: transparent; border: 1px solid var(--line-2); color: var(--text);
-    border-radius: 5px; cursor: pointer; font-family: inherit;
+    border-radius: 5px; cursor: pointer; font-family: inherit; box-shadow: none;
   }
-  .topbar select:hover, .topbar button:hover { border-color: var(--green-2); }
-  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
-  .stage { flex: 1; overflow: auto; display: grid; place-items: center; background: #010804; padding: 12px; }
-  .stage img { max-width: 100%; max-height: 100%; background: #000; border: 1px solid var(--line); user-select: none; -webkit-user-drag: none; }
+  .topbar select:hover, .topbar button:hover { border-color: var(--blue-3); background: rgba(79,195,247,.06); }
+  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .stage { flex: 1; overflow: auto; display: grid; place-items: center; background: #030c17; padding: 12px; }
+  .stage img {
+    max-width: 100%; max-height: 100%;
+    background: #000; border: 1px solid var(--line-2); border-radius: 4px;
+    user-select: none; -webkit-user-drag: none;
+    box-shadow: 0 0 40px rgba(41,182,246,.15);
+  }
   .stage .wait { color: var(--muted); font-size: 12px; }
 </style>
 </head>

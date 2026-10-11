@@ -7,69 +7,51 @@
 <link rel="stylesheet" href="/css/style.css">
 <style>
   html, body { height: 100%; overflow: hidden; }
-  body { background: #04100a; }
+  body { background: var(--bg); }
 
   .wrap { height: 100vh; display: flex; flex-direction: column; }
 
   .topbar {
     display: flex; align-items: center; gap: 12px;
     padding: 10px 16px; flex-shrink: 0;
-    background: linear-gradient(180deg, #0b2313, #071a0e);
+    background: linear-gradient(180deg, var(--panel), var(--bg-2));
     border-bottom: 1px solid var(--line);
     font-size: 12px; color: var(--muted);
   }
-  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-2); box-shadow: 0 0 6px var(--green-2); }
+  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); }
   .topbar .label { color: var(--muted); letter-spacing: .16em; text-transform: uppercase; font-size: 10px; }
   .topbar .target { color: var(--text); font-family: var(--mono); }
   .topbar .spacer { flex: 1; }
 
-  .shelltabs { display: flex; gap: 4px; background: #04140a; border: 1px solid var(--line); border-radius: 6px; padding: 3px; }
+  .shelltabs { display: flex; gap: 4px; background: #061322; border: 1px solid var(--line); border-radius: 6px; padding: 3px; }
   .shelltabs button {
     margin: 0; padding: 6px 14px; font-size: 11px; font-family: var(--mono);
     background: transparent; border: none; color: var(--muted);
-    cursor: pointer; border-radius: 4px;
+    cursor: pointer; border-radius: 4px; box-shadow: none;
+    transition: background .12s, color .12s;
   }
-  .shelltabs button.active { background: var(--green); color: #04170a; font-weight: 600; }
+  .shelltabs button.active { background: linear-gradient(135deg, var(--blue), var(--blue-2)); color: #031220; font-weight: 700; }
   .shelltabs button:hover:not(.active) { color: var(--text); }
-
-  .topbar .close { width: auto; margin: 0; padding: 6px 12px; font-size: 11px; background: transparent; border: 1px solid var(--line); color: var(--muted); }
-  .topbar .close:hover { color: var(--text); border-color: var(--green-2); }
 
   .term {
     flex: 1; overflow-y: auto;
     padding: 14px 18px;
     font-family: var(--mono); font-size: 13px; line-height: 1.55;
-    color: #c8e8d0;
+    color: var(--text);
   }
-
-  .term::-webkit-scrollbar { width: 8px; }
-  .term::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
-
-  .blk { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px dashed #0e2b18; }
+  .blk { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
   .blk:last-child { border-bottom: none; }
-
-  .blk .cmdline {
-    color: var(--green-2); word-break: break-all; white-space: pre-wrap;
-  }
+  .blk .cmdline { color: var(--blue-3); word-break: break-all; white-space: pre-wrap; }
   .blk .cmdline .prompt { color: var(--muted); margin-right: 4px; }
-
-  .blk .out {
-    color: var(--text); white-space: pre-wrap; word-break: break-word;
-    margin-top: 4px; padding-left: 2px;
-  }
-
-  .blk .status {
-    color: var(--muted); font-size: 11px; margin-top: 4px;
-    display: flex; gap: 10px; align-items: center;
-  }
+  .blk .out { color: var(--text); white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
+  .blk .status { color: var(--muted); font-size: 11px; margin-top: 4px; display: flex; gap: 10px; align-items: center; }
   .blk .status.pending::before {
     content: ""; display: inline-block;
     width: 8px; height: 8px; border-radius: 50%;
-    border: 2px solid var(--green-2); border-top-color: transparent;
+    border: 2px solid var(--blue-3); border-top-color: transparent;
     animation: spin .7s linear infinite;
   }
-  .blk .status.err { color: var(--orange-2); }
-
+  .blk .status.err { color: var(--orange); }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .bottom {
@@ -77,14 +59,15 @@
     display: flex; align-items: center; gap: 8px;
     padding: 10px 16px;
     border-top: 1px solid var(--line);
-    background: #071a0e;
+    background: var(--bg-2);
   }
-  .bottom .ps1 { color: var(--green-2); font-family: var(--mono); font-size: 13px; }
+  .bottom .ps1 { color: var(--blue-3); font-family: var(--mono); font-size: 13px; }
   .bottom input {
     flex: 1; background: transparent; border: none; color: #fff;
-    font-family: var(--mono); font-size: 13px; padding: 4px 0; margin: 0; outline: none;
+    font-family: var(--mono); font-size: 13px; padding: 4px 0; margin: 0;
+    outline: none; box-shadow: none; border-radius: 0;
   }
-  .bottom input:focus { box-shadow: none; }
+  .bottom input:focus { box-shadow: none; background: transparent; }
 
   .empty { color: var(--muted); padding: 30px 4px; text-align: center; font-size: 12px; }
 </style>
@@ -100,13 +83,11 @@
       <button data-shell="cmd">cmd</button>
       <button data-shell="powershell">powershell</button>
     </div>
-    <button class="close" id="clear">clear</button>
+    <button class="ghost mini" id="clear">clear</button>
   </div>
-
   <div class="term" id="term">
     <div class="empty">type a command below and press enter</div>
   </div>
-
   <div class="bottom">
     <span class="ps1" id="ps1">C:\&gt;</span>
     <input id="cmdline" autocomplete="off" spellcheck="false" placeholder="type a command…" autofocus>

