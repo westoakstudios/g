@@ -27,50 +27,55 @@ setInterval(() => {
   for (const [k, b] of frameBuffers)  if (now - b.lastAt > FRAME_TIMEOUT_MS * 2) frameBuffers.delete(k);
 }, 15_000);
 
-// CRC32 (IEEE) — matches the Rust implementation in rdp.rs / webcam.rs
-function crc32(str) {
-  const table = crc32.table || (crc32.table = (() => {
-    const t = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) {
-      let c = i;
-      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-      t[i] = c >>> 0;
-    }
-    return t;
-  })());
+// CRC32 (IEEE) over raw bytes — matches rdp.rs
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
   let crc = 0xFFFFFFFF;
-  for (let i = 0; i < str.length; i++) {
-    crc = (crc >>> 8) ^ table[(crc ^ str.charCodeAt(i)) & 0xFF];
+  for (let i = 0; i < buf.length; i++) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buf[i]) & 0xFF];
   }
   return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
 }
 
+// assemble a frame from raw chunks; return null if incomplete or CRC fails
 function assembleFrame(buf) {
-  const ordered = [];
+  let total = 0;
   for (let i = 0; i < buf.total; i++) {
     const c = buf.chunks.get(i);
-    if (c === undefined) return null;     // missing — reject
-    ordered.push(c);
+    if (!c) return null;
+    total += c.length;
   }
-  const b64 = ordered.join('');
+  const out = Buffer.allocUnsafe(total);
+  let off = 0;
+  for (let i = 0; i < buf.total; i++) {
+    const c = buf.chunks.get(i);
+    c.copy(out, off);
+    off += c.length;
+  }
 
-  // CRC check if header carried one
+  // CRC over the raw bytes
   if (buf.crc) {
-    const got = crc32(b64);
-    if (got !== buf.crc) return null;     // corrupt — reject
+    const got = crc32(out);
+    if (got !== buf.crc) return null;
   }
-
-  // decode to bytes
-  try { return Buffer.from(b64, 'base64'); }
-  catch { return null; }
+  return out;
 }
 
 function storeFrame(buf) {
-  const jpeg = assembleFrame(buf);
-  if (!jpeg || jpeg.length === 0) return;     // incomplete or corrupt — drop
+  const bytes = assembleFrame(buf);
+  if (!bytes || bytes.length === 0) return;
 
-  if (buf.kind === 'screen') frameStore.set(buf.cid,  { jpeg, updatedAt: Date.now() });
-  else                       webcamStore.set(buf.cid, { jpeg, updatedAt: Date.now() });
+  if (buf.kind === 'screen') frameStore.set(buf.cid,  { jpeg: bytes, updatedAt: Date.now() });
+  else                       webcamStore.set(buf.cid, { jpeg: bytes, updatedAt: Date.now() });
 
   const k = `${buf.kind}:${buf.cid}`;
   framesRecv.set(k, (framesRecv.get(k) || 0) + 1);
@@ -85,38 +90,54 @@ export function startUdp({ host, port, onMsg }) {
 
   udpSock.on('message', (msg, rinfo) => {
     if (msg.length > MAX_UDP_MSG) return;
-    const text = msg.toString('utf8');
-    const firstColon = text.indexOf(':');
-    if (firstColon === -1) return;
-    const tag = text.slice(0, firstColon);
 
-    if (tag === 'WHREG') {
-      const [, cidStr, key] = text.split(':');
-      const cid = Number(cidStr);
-      if (!cid || !key) return;
-      clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
+    // split on first '\n' — header is ASCII, body is raw binary
+    const nl = msg.indexOf(0x0A);
+    if (nl === -1) {
+      // no binary body — a control message (WHREG, WHMON, WHINP ack, etc.)
+      const text = msg.toString('utf8');
+      const firstColon = text.indexOf(':');
+      if (firstColon === -1) return;
+      const tag = text.slice(0, firstColon);
+
+      if (tag === 'WHREG') {
+        const [, cidStr, key] = text.split(':');
+        const cid = Number(cidStr);
+        if (!cid || !key) return;
+        clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
+        return;
+      }
+
+      if (tag === 'WHMON') {
+        const afterTag = text.slice(6);
+        const colon = afterTag.indexOf(':');
+        if (colon === -1) return;
+        const cid = Number(afterTag.slice(0, colon));
+        if (!cid) return;
+        try {
+          const list = JSON.parse(afterTag.slice(colon + 1));
+          monitorStore.set(cid, Array.isArray(list) ? list : []);
+        } catch {}
+        return;
+      }
+
+      if (onMsg) onMsg(text, rinfo, udpSock);
       return;
     }
 
-    if (tag === 'WHMON') {
-      const afterTag = text.slice(6);
-      const colon = afterTag.indexOf(':');
-      if (colon === -1) return;
-      const cid = Number(afterTag.slice(0, colon));
-      if (!cid) return;
-      try {
-        const list = JSON.parse(afterTag.slice(colon + 1));
-        monitorStore.set(cid, Array.isArray(list) ? list : []);
-      } catch {}
-      return;
-    }
+    // binary-framed: header \n body
+    const header = msg.slice(0, nl).toString('utf8');
+    const body   = msg.slice(nl + 1);
+
+    const parts = header.split(':');
+    const tag = parts[0];
 
     if (tag === 'WHFRM' || tag === 'WHCAM') {
       const kind = tag === 'WHFRM' ? 'screen' : 'webcam';
-      const parts = text.split(':');
-      // screen: cid:seq:idx:total:crc:data  (7 parts min)
-      // webcam: cid:seq:idx:total:data      (6 parts min, no crc for now)
+      // format: WHFRM:cid:seq:idx:total:crc   (6 parts after tag → 7 total)
+      // format: WHCAM:cid:seq:idx:total        (5 parts after tag → 6 total)
       if (parts.length < 6) return;
+
       const cid   = Number(parts[1]);
       const seq   = Number(parts[2]);
       const idx   = Number(parts[3]);
@@ -124,21 +145,15 @@ export function startUdp({ host, port, onMsg }) {
       if (!cid || !total) return;
 
       let crc = null;
-      let dataStart;
       if (tag === 'WHFRM') {
-        if (parts.length < 7) return;
+        if (parts.length < 6) return;
         crc = parts[5];
-        dataStart = 6;
-      } else {
-        dataStart = 5;
       }
-      const data = parts.slice(dataStart).join(':');
 
       const key = `${kind}:${cid}`;
       let buf = frameBuffers.get(key);
 
       if (buf && buf.seq !== seq) {
-        // stale partial — attempt final store before dropping
         if (buf.chunks.size === buf.total) storeFrame(buf);
         buf = null;
       }
@@ -148,7 +163,7 @@ export function startUdp({ host, port, onMsg }) {
         frameBuffers.set(key, buf);
       }
 
-      buf.chunks.set(idx, data);
+      buf.chunks.set(idx, body);
       buf.lastAt = Date.now();
 
       if (buf.chunks.size === buf.total) {
@@ -158,15 +173,13 @@ export function startUdp({ host, port, onMsg }) {
       return;
     }
 
-    if (onMsg) onMsg(text, rinfo, udpSock);
+    // unknown binary-framed tag — ignore
   });
 
-  // assembly sweep — only store COMPLETE frames; partials get dropped
   setInterval(() => {
     const now = Date.now();
     for (const [key, buf] of frameBuffers) {
       if (now - buf.lastAt > FRAME_TIMEOUT_MS) {
-        // if fully assembled but slow, store it; otherwise drop
         if (buf.chunks.size === buf.total) storeFrame(buf);
         frameBuffers.delete(key);
       }

