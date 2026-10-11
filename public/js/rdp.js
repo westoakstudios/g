@@ -35,7 +35,7 @@ img.addEventListener('load', () => {
   framesThisSec++;
   const now = Date.now();
   if (now - lastFpsTick >= 1000) {
-    $('fps').textContent = `${framesThisSec} fps`;
+    $('fps').textContent = `${framesThisSec}/${cfg.fps} fps`;
     framesThisSec = 0;
     lastFpsTick = now;
   }
