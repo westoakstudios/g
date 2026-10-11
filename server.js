@@ -541,7 +541,7 @@ const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin'];
 
 const limitDownloadExe = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 10,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'download limit reached — 10 per hour' },
