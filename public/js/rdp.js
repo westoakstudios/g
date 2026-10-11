@@ -11,6 +11,7 @@ $('target').textContent = `${hostName} @ ${hostIp}`;
 let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: false, mouse: false };
 let monitors = [];
 let running = false;
+let restarting = false;
 let lastMouseSent = 0;
 let framesThisSec = 0;
 let lastFpsTick = Date.now();
@@ -105,6 +106,43 @@ async function stop() {
   try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
 }
 
+async function restart() {
+  if (restarting) return;
+  restarting = true;
+
+  const btn = $('reset');
+  const orig = btn.textContent;
+  btn.textContent = 'resetting…';
+  btn.disabled = true;
+
+  // 1) send stop — client bumps its session counter, capture thread exits
+  try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
+  running = false;
+
+  // 2) pause long enough for the client to pick up the stop command
+  //    (client polls every 3s, so give it ~3.5s)
+  await new Promise(r => setTimeout(r, 3500));
+
+  // 3) start fresh
+  const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+
+  if (r.ok) {
+    running = true;
+    const stage = $('stage');
+    stage.innerHTML = '';
+    stage.appendChild(img);
+    loop();
+  }
+
+  btn.textContent = orig;
+  btn.disabled = false;
+  restarting = false;
+}
+
 async function loop() {
   while (running) {
     const t0 = performance.now();
@@ -153,9 +191,7 @@ $('mouse').addEventListener('click', () => {
   pushCfg();
 });
 
-$('reset').addEventListener('click', () => {
-  sendInput({ type: 'reset' });
-});
+$('reset').addEventListener('click', restart);
 
 function sendInput(payload) {
   fetch(`/api/clients/${clientId}/input`, {
@@ -202,27 +238,14 @@ img.addEventListener('wheel', (e) => {
   sendInput({ type: 'mouse_wheel', dy: Math.sign(e.deltaY) });
 }, { passive: false });
 
-// keyboard — block dangerous system hotkeys that put the client into a bad state
 document.addEventListener('keydown', (e) => {
   if (!cfg.keyboard) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
 
-  // ctrl+shift+esc opens Task Manager (elevated) which triggers UIPI and breaks SendInput
-  if (e.key === 'Escape' && e.ctrlKey && e.shiftKey) {
-    e.preventDefault();
-    sendInput({ type: 'reset' });
-    return;
-  }
-  // ctrl+alt+del — never forwards cleanly
-  if (e.key === 'Delete' && e.ctrlKey && e.altKey) {
-    e.preventDefault();
-    return;
-  }
-  // Windows key — opens start menu, breaks input context on some setups
-  if (e.key === 'Meta' || e.key === 'OS') {
-    e.preventDefault();
-    return;
-  }
+  // never forward these — they break input on the target
+  if (e.key === 'Escape' && e.ctrlKey && e.shiftKey) { e.preventDefault(); return; }
+  if (e.key === 'Delete' && e.ctrlKey && e.altKey)   { e.preventDefault(); return; }
+  if (e.key === 'Meta' || e.key === 'OS')             { e.preventDefault(); return; }
 
   e.preventDefault();
   sendInput({ type: 'key', code: e.code, key: e.key, down: true });
@@ -232,10 +255,9 @@ document.addEventListener('keyup', (e) => {
   if (!cfg.keyboard) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
 
-  // don't send keyup for the blocked hotkeys either
   if (e.key === 'Escape' && e.ctrlKey && e.shiftKey) { e.preventDefault(); return; }
-  if (e.key === 'Delete' && e.ctrlKey && e.altKey) { e.preventDefault(); return; }
-  if (e.key === 'Meta' || e.key === 'OS') { e.preventDefault(); return; }
+  if (e.key === 'Delete' && e.ctrlKey && e.altKey)   { e.preventDefault(); return; }
+  if (e.key === 'Meta' || e.key === 'OS')             { e.preventDefault(); return; }
 
   e.preventDefault();
   sendInput({ type: 'key', code: e.code, key: e.key, down: false });
