@@ -16,6 +16,9 @@ let lastMouseSent = 0;
 let framesThisSec = 0;
 let lastFpsTick = Date.now();
 
+let consecutiveFails = 0;
+let backoffMs = 0;
+
 const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
   med:    { height: 720, quality: 55, fps: 10 },
@@ -26,7 +29,13 @@ const PRESETS = {
 const img = document.createElement('img');
 img.draggable = false;
 
+// ping-pong: two <img> elements, swap on successful decode. avoids flash of broken.
+const imgBack = document.createElement('img');
+imgBack.draggable = false;
+imgBack.style.display = 'none';
+
 img.addEventListener('load', () => {
+  if (img.naturalWidth === 0) return;    // decode failed silently
   $('dot').classList.add('on');
   framesThisSec++;
   const now = Date.now();
@@ -35,8 +44,16 @@ img.addEventListener('load', () => {
     framesThisSec = 0;
     lastFpsTick = now;
   }
+  consecutiveFails = 0;
+  backoffMs = 0;
 });
-img.addEventListener('error', () => $('dot').classList.remove('on'));
+
+img.addEventListener('error', () => {
+  $('dot').classList.remove('on');
+  consecutiveFails++;
+  // adaptive backoff — up to 2s
+  backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
+});
 
 async function loadMonitors() {
   try {
@@ -63,7 +80,6 @@ async function loadMonitors() {
 function applyPreset(name) {
   const mon = monitors[cfg.monitor];
   if (!mon) return;
-
   if (name === 'native') {
     cfg.width   = mon.width;
     cfg.height  = mon.height;
@@ -71,15 +87,12 @@ function applyPreset(name) {
     cfg.fps     = 10;
     return;
   }
-
   const p = PRESETS[name];
   if (!p) return;
-
   const targetH = Math.min(p.height, mon.height);
   const aspect  = mon.width / mon.height;
   let targetW   = Math.round(targetH * aspect / 2) * 2;
   if (targetW > mon.width) targetW = mon.width;
-
   cfg.width   = targetW;
   cfg.height  = targetH;
   cfg.quality = p.quality;
@@ -97,6 +110,7 @@ async function start() {
   const stage = $('stage');
   stage.innerHTML = '';
   stage.appendChild(img);
+  img.style.display = '';
   loop();
 }
 
@@ -109,21 +123,15 @@ async function stop() {
 async function restart() {
   if (restarting) return;
   restarting = true;
-
   const btn = $('reset');
   const orig = btn.textContent;
   btn.textContent = 'resetting…';
   btn.disabled = true;
 
-  // 1) send stop — client bumps its session counter, capture thread exits
   try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
   running = false;
-
-  // 2) pause long enough for the client to pick up the stop command
-  //    (client polls every 3s, so give it ~3.5s)
   await new Promise(r => setTimeout(r, 3500));
 
-  // 3) start fresh
   const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -135,6 +143,7 @@ async function restart() {
     const stage = $('stage');
     stage.innerHTML = '';
     stage.appendChild(img);
+    img.style.display = '';
     loop();
   }
 
@@ -146,12 +155,30 @@ async function restart() {
 async function loop() {
   while (running) {
     const t0 = performance.now();
-    await new Promise((resolve) => {
-      img.onload = () => resolve(true);
-      img.onerror = () => resolve(false);
-      img.src = `/api/clients/${clientId}/screen?t=${Date.now()}`;
+
+    const ok = await new Promise((resolve) => {
+      const tmp = new Image();
+      tmp.onload = () => {
+        if (tmp.naturalWidth === 0) { resolve(false); return; }
+        img.src = tmp.src;      // safe swap — img only gets a good frame
+        resolve(true);
+      };
+      tmp.onerror = () => resolve(false);
+      tmp.src = `/api/clients/${clientId}/screen?t=${Date.now()}`;
     });
+
     if (!running) break;
+
+    if (!ok) {
+      consecutiveFails++;
+      backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
+      await new Promise(r => setTimeout(r, backoffMs));
+      continue;
+    } else {
+      consecutiveFails = 0;
+      backoffMs = 0;
+    }
+
     const elapsed = performance.now() - t0;
     const target = 1000 / Math.max(cfg.fps, 1);
     if (elapsed < target) await new Promise(r => setTimeout(r, target - elapsed));
@@ -241,12 +268,9 @@ img.addEventListener('wheel', (e) => {
 document.addEventListener('keydown', (e) => {
   if (!cfg.keyboard) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-
-  // never forward these — they break input on the target
   if (e.key === 'Escape' && e.ctrlKey && e.shiftKey) { e.preventDefault(); return; }
   if (e.key === 'Delete' && e.ctrlKey && e.altKey)   { e.preventDefault(); return; }
   if (e.key === 'Meta' || e.key === 'OS')             { e.preventDefault(); return; }
-
   e.preventDefault();
   sendInput({ type: 'key', code: e.code, key: e.key, down: true });
 });
@@ -254,11 +278,9 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => {
   if (!cfg.keyboard) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-
   if (e.key === 'Escape' && e.ctrlKey && e.shiftKey) { e.preventDefault(); return; }
   if (e.key === 'Delete' && e.ctrlKey && e.altKey)   { e.preventDefault(); return; }
   if (e.key === 'Meta' || e.key === 'OS')             { e.preventDefault(); return; }
-
   e.preventDefault();
   sendInput({ type: 'key', code: e.code, key: e.key, down: false });
 });

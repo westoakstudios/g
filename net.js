@@ -2,21 +2,20 @@
 import dgram from 'node:dgram';
 
 const MAX_UDP_MSG = 65500;
-const FRAME_TIMEOUT_MS = 80;   // assemble partial frames after this long
+const FRAME_TIMEOUT_MS = 100;
 let udpSock = null;
 
 const clientAddr   = new Map();
-const frameStore   = new Map();   // clientId -> { jpeg, updatedAt }
-const webcamStore  = new Map();   // clientId -> { jpeg, updatedAt }
-const frameBuffers = new Map();   // key -> { seq, total, chunks, createdAt, lastAt, kind, cid }
-const monitorStore = new Map();   // clientId -> [ {name,x,y,width,height} ]
+const frameStore   = new Map();
+const webcamStore  = new Map();
+const frameBuffers = new Map();
+const monitorStore = new Map();
 
-// per-second frame counters for diagnostics
 const framesRecv = new Map();
 setInterval(() => {
   if (framesRecv.size === 0) return;
   const parts = [];
-  for (const [k, n] of framesRecv) { parts.push(`${k}=${n}/s`); }
+  for (const [k, n] of framesRecv) parts.push(`${k}=${n}/s`);
   console.log(`[udp] frames ${parts.join(' ')}`);
   framesRecv.clear();
 }, 1000);
@@ -28,15 +27,48 @@ setInterval(() => {
   for (const [k, b] of frameBuffers)  if (now - b.lastAt > FRAME_TIMEOUT_MS * 2) frameBuffers.delete(k);
 }, 15_000);
 
+// CRC32 (IEEE) — matches the Rust implementation in rdp.rs / webcam.rs
+function crc32(str) {
+  const table = crc32.table || (crc32.table = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c >>> 0;
+    }
+    return t;
+  })());
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < str.length; i++) {
+    crc = (crc >>> 8) ^ table[(crc ^ str.charCodeAt(i)) & 0xFF];
+  }
+  return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
+}
+
 function assembleFrame(buf) {
   const ordered = [];
-  for (let i = 0; i < buf.total; i++) ordered.push(buf.chunks.get(i) || Buffer.alloc(0));
-  return Buffer.concat(ordered);
+  for (let i = 0; i < buf.total; i++) {
+    const c = buf.chunks.get(i);
+    if (c === undefined) return null;     // missing — reject
+    ordered.push(c);
+  }
+  const b64 = ordered.join('');
+
+  // CRC check if header carried one
+  if (buf.crc) {
+    const got = crc32(b64);
+    if (got !== buf.crc) return null;     // corrupt — reject
+  }
+
+  // decode to bytes
+  try { return Buffer.from(b64, 'base64'); }
+  catch { return null; }
 }
 
 function storeFrame(buf) {
   const jpeg = assembleFrame(buf);
-  if (jpeg.length === 0) return;
+  if (!jpeg || jpeg.length === 0) return;     // incomplete or corrupt — drop
+
   if (buf.kind === 'screen') frameStore.set(buf.cid,  { jpeg, updatedAt: Date.now() });
   else                       webcamStore.set(buf.cid, { jpeg, updatedAt: Date.now() });
 
@@ -82,29 +114,41 @@ export function startUdp({ host, port, onMsg }) {
     if (tag === 'WHFRM' || tag === 'WHCAM') {
       const kind = tag === 'WHFRM' ? 'screen' : 'webcam';
       const parts = text.split(':');
+      // screen: cid:seq:idx:total:crc:data  (7 parts min)
+      // webcam: cid:seq:idx:total:data      (6 parts min, no crc for now)
       if (parts.length < 6) return;
       const cid   = Number(parts[1]);
       const seq   = Number(parts[2]);
       const idx   = Number(parts[3]);
       const total = Number(parts[4]);
-      const data  = parts.slice(5).join(':');
       if (!cid || !total) return;
+
+      let crc = null;
+      let dataStart;
+      if (tag === 'WHFRM') {
+        if (parts.length < 7) return;
+        crc = parts[5];
+        dataStart = 6;
+      } else {
+        dataStart = 5;
+      }
+      const data = parts.slice(dataStart).join(':');
 
       const key = `${kind}:${cid}`;
       let buf = frameBuffers.get(key);
 
-      // new frame (different seq) — if we had a stale one, assemble it as partial and store
       if (buf && buf.seq !== seq) {
-        storeFrame(buf);
+        // stale partial — attempt final store before dropping
+        if (buf.chunks.size === buf.total) storeFrame(buf);
         buf = null;
       }
 
       if (!buf) {
-        buf = { seq, total, chunks: new Map(), createdAt: Date.now(), lastAt: Date.now(), kind, cid };
+        buf = { seq, total, crc, chunks: new Map(), createdAt: Date.now(), lastAt: Date.now(), kind, cid };
         frameBuffers.set(key, buf);
       }
 
-      buf.chunks.set(idx, Buffer.from(data, 'base64'));
+      buf.chunks.set(idx, data);
       buf.lastAt = Date.now();
 
       if (buf.chunks.size === buf.total) {
@@ -117,13 +161,13 @@ export function startUdp({ host, port, onMsg }) {
     if (onMsg) onMsg(text, rinfo, udpSock);
   });
 
-  // assembly sweep — if a frame hasn't received a chunk in FRAME_TIMEOUT_MS, store what we have
+  // assembly sweep — only store COMPLETE frames; partials get dropped
   setInterval(() => {
     const now = Date.now();
     for (const [key, buf] of frameBuffers) {
-      if (now - buf.lastAt > FRAME_TIMEOUT_MS && buf.chunks.size > buf.total * 0.4) {
-        // got at least 40% of the frame — assemble partial, missing pieces become zeroes
-        storeFrame(buf);
+      if (now - buf.lastAt > FRAME_TIMEOUT_MS) {
+        // if fully assembled but slow, store it; otherwise drop
+        if (buf.chunks.size === buf.total) storeFrame(buf);
         frameBuffers.delete(key);
       }
     }
