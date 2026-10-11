@@ -23,13 +23,12 @@
   </aside>
 
   <main class="main">
-    <!-- OVERVIEW -->
     <section class="section active" id="overview">
       <h2>overview</h2>
       <div class="sub">welcome back, <span id="who">—</span></div>
 
       <div class="tiles" style="margin-bottom:14px">
-        <div class="tile"><div class="k">online</div><div class="v" id="ov-online" style="color:var(--green-2)">0</div></div>
+        <div class="tile"><div class="k">online</div><div class="v" id="ov-online" style="color:var(--green)">0</div></div>
         <div class="tile"><div class="k">offline</div><div class="v" id="ov-offline">0</div></div>
         <div class="tile"><div class="k">total</div><div class="v" id="ov-total">0</div></div>
       </div>
@@ -41,7 +40,6 @@
       </div>
     </section>
 
-    <!-- HOSTS -->
     <section class="section" id="hosts">
       <h2>hosts</h2>
       <div class="sub">every client that has ever checked in.</div>
@@ -74,7 +72,6 @@
       <div id="h-detail"></div>
     </section>
 
-    <!-- REMOTE -->
     <section class="section" id="remote">
       <h2>remote</h2>
       <div class="sub">online clients only.</div>
@@ -100,19 +97,18 @@
       </div>
     </section>
 
-    <!-- ACCOUNT -->
     <section class="section" id="account">
       <h2>account</h2>
       <div class="sub">identity and tokens.</div>
 
-      <div class="tiles" style="margin-bottom:12px">
+      <div class="tiles" style="margin-bottom:14px">
         <div class="tile"><div class="k">username</div><div class="v plain" id="a-user">—</div></div>
         <div class="tile"><div class="k">email</div><div class="v plain" id="a-mail">—</div></div>
       </div>
 
-      <div class="tile" style="margin-bottom:12px">
+      <div class="tile" style="margin-bottom:14px">
         <div class="k">account key — authenticates clients</div>
-        <div class="reveal-wrap" style="margin-top:6px">
+        <div class="reveal-wrap" style="margin-top:8px">
           <div class="v mono val" id="a-akey" data-real="" data-shown="0">—</div>
           <button class="ghost mini" data-reveal="a-akey">reveal</button>
         </div>
@@ -120,22 +116,21 @@
       </div>
 
       <div class="tile">
-        <div class="k">login token — sign in with token + password</div>
-        <div class="reveal-wrap" style="margin-top:6px">
+        <div class="k">login token — sign in with just this</div>
+        <div class="reveal-wrap" style="margin-top:8px">
           <div class="v mono val" id="a-ltok" data-real="" data-shown="0">—</div>
           <button class="ghost mini" data-reveal="a-ltok">reveal</button>
         </div>
-        <div class="note">on sign-in, enter this token in the "login token" field instead of your username.</div>
+        <div class="note">paste it on the sign-in page. no password needed.</div>
       </div>
     </section>
 
-    <!-- SETTINGS -->
     <section class="section" id="settings">
       <h2>settings</h2>
       <div class="sub">discord webhook — test and save.</div>
       <label for="whurl">webhook url</label>
       <input id="whurl" placeholder="https://discord.com/api/webhooks/...">
-      <button class="ghost" id="whtest" style="max-width:180px">test + save</button>
+      <button class="ghost" id="whtest" style="max-width:200px">test + save</button>
       <div class="err" id="wherr"></div>
     </section>
   </main>

@@ -6,37 +6,44 @@
 <title>WeedHack — screen</title>
 <link rel="stylesheet" href="/css/style.css">
 <style>
-  html, body { height: 100%; overflow: hidden; }
-  body { background: var(--bg); margin: 0; }
-
+  html, body { height: 100%; overflow: hidden; background: #000; }
   .wrap { height: 100vh; display: flex; flex-direction: column; }
 
   .topbar {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 14px; flex-shrink: 0;
-    background: linear-gradient(180deg, var(--panel), var(--bg-2));
+    padding: 12px 20px; flex-shrink: 0;
+    background: #000;
     border-bottom: 1px solid var(--line);
     font-size: 12px; color: var(--muted);
     flex-wrap: wrap;
   }
   .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); transition: background .2s, box-shadow .2s; }
-  .topbar .dot.on { background: var(--green); box-shadow: 0 0 10px var(--green); }
+  .topbar .dot.on { background: var(--green); box-shadow: 0 0 12px var(--green); }
   .topbar .target { color: var(--text); font-family: var(--mono); font-size: 12px; }
   .topbar .spacer { flex: 1; }
-  .topbar .fps { font-family: var(--mono); font-size: 11px; color: var(--blue-3); min-width: 44px; text-align: right; }
+  .topbar .fps { font-family: var(--mono); font-size: 11px; color: var(--accent); min-width: 48px; text-align: right; font-weight: 600; }
   .topbar select, .topbar button {
-    margin: 0; padding: 6px 12px; font-size: 11px; width: auto;
+    margin: 0; padding: 8px 16px; font-size: 11px; font-weight: 600; width: auto;
     background: transparent; border: 1px solid var(--line-2); color: var(--text);
-    border-radius: 5px; cursor: pointer; font-family: inherit;
-    box-shadow: none;
+    border-radius: var(--r-pill); cursor: pointer; font-family: inherit; box-shadow: none;
   }
-  .topbar select:hover, .topbar button:hover:not([disabled]) { border-color: var(--blue-3); background: rgba(79,195,247,.06); }
-  .topbar button.active { background: linear-gradient(135deg, var(--blue), var(--blue-2)); border-color: var(--blue-2); color: #031220; font-weight: 700; box-shadow: 0 4px 14px rgba(41,182,246,.35); }
-  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .topbar select:hover, .topbar button:hover:not([disabled]) { border-color: var(--accent); color: var(--accent); }
+  .topbar button.active {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    border-color: transparent; color: #000;
+    box-shadow: 0 4px 20px rgba(79,195,247,.4);
+  }
+  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .topbar select { padding-right: 34px; }
 
   .stage {
     flex: 1; overflow: auto; display: grid; place-items: center;
-    background: #030c17; padding: 12px; position: relative;
+    background: #000;
+    padding: 16px; position: relative;
+    background-image:
+      linear-gradient(rgba(79,195,247,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(79,195,247,.03) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
   .stage img {
     max-width: 100%; max-height: 100%;
@@ -45,8 +52,8 @@
     outline: none; cursor: crosshair;
     background: #000;
     border: 1px solid var(--line-2);
-    border-radius: 4px;
-    box-shadow: 0 0 40px rgba(41,182,246,.15);
+    border-radius: var(--r-md);
+    box-shadow: 0 0 60px rgba(79, 195, 247, .2);
   }
   .stage .wait { color: var(--muted); font-size: 12px; }
 </style>
@@ -67,8 +74,8 @@
     </select>
     <span class="spacer"></span>
     <span class="fps" id="fps"></span>
-    <button id="kb" title="keyboard capture">⌨</button>
-    <button id="mouse" title="mouse capture">🖱</button>
+    <button id="kb" title="keyboard">⌨</button>
+    <button id="mouse" title="mouse">🖱</button>
     <button id="stop" style="border-color:var(--red);color:var(--red)">disconnect</button>
   </div>
   <div class="stage" id="stage">

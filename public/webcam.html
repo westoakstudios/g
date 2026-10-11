@@ -6,34 +6,45 @@
 <title>WeedHack — webcam</title>
 <link rel="stylesheet" href="/css/style.css">
 <style>
-  html, body { height: 100%; overflow: hidden; }
-  body { background: var(--bg); margin: 0; }
+  html, body { height: 100%; overflow: hidden; background: #000; }
   .wrap { height: 100vh; display: flex; flex-direction: column; }
   .topbar {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 14px; flex-shrink: 0;
-    background: linear-gradient(180deg, var(--panel), var(--bg-2));
+    padding: 12px 20px; flex-shrink: 0;
+    background: #000;
     border-bottom: 1px solid var(--line);
     font-size: 12px; color: var(--muted);
   }
   .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
-  .topbar .dot.on { background: var(--green); box-shadow: 0 0 10px var(--green); }
+  .topbar .dot.on { background: var(--green); box-shadow: 0 0 12px var(--green); }
   .topbar .target { color: var(--text); font-family: var(--mono); }
   .topbar .spacer { flex: 1; }
-  .topbar .fps { font-family: var(--mono); font-size: 11px; color: var(--blue-3); min-width: 44px; text-align: right; }
+  .topbar .fps { font-family: var(--mono); font-size: 11px; color: var(--accent); min-width: 48px; text-align: right; font-weight: 600; }
   .topbar select, .topbar button {
-    margin: 0; padding: 6px 12px; font-size: 11px; width: auto;
+    margin: 0; padding: 8px 16px; font-size: 11px; font-weight: 600; width: auto;
     background: transparent; border: 1px solid var(--line-2); color: var(--text);
-    border-radius: 5px; cursor: pointer; font-family: inherit; box-shadow: none;
+    border-radius: var(--r-pill); cursor: pointer; font-family: inherit; box-shadow: none;
   }
-  .topbar select:hover, .topbar button:hover { border-color: var(--blue-3); background: rgba(79,195,247,.06); }
-  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
-  .stage { flex: 1; overflow: auto; display: grid; place-items: center; background: #030c17; padding: 12px; }
+  .topbar select:hover, .topbar button:hover { border-color: var(--accent); color: var(--accent); }
+  .topbar select { padding-right: 34px; }
+  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+  .stage {
+    flex: 1; overflow: auto; display: grid; place-items: center;
+    background: #000;
+    padding: 16px;
+    background-image:
+      linear-gradient(rgba(79,195,247,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(79,195,247,.03) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
   .stage img {
     max-width: 100%; max-height: 100%;
-    background: #000; border: 1px solid var(--line-2); border-radius: 4px;
+    background: #000;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
     user-select: none; -webkit-user-drag: none;
-    box-shadow: 0 0 40px rgba(41,182,246,.15);
+    box-shadow: 0 0 60px rgba(79, 195, 247, .2);
   }
   .stage .wait { color: var(--muted); font-size: 12px; }
 </style>
