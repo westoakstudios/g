@@ -222,7 +222,6 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   res.json({ ok: true, accountKey, loginToken, username });
 });
 
-// sign-in — accepts EITHER username+password OR login_token alone OR login_token+password
 app.post('/api/signin', limitAuth, async (req, res) => {
   const { username, loginToken, password } = req.body || {};
 
@@ -394,7 +393,7 @@ app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
     width:    Math.min(Math.max(Number(req.body.width  || 1280), 320), 3840),
     height:   Math.min(Math.max(Number(req.body.height || 720),  240), 2160),
     quality:  Math.min(Math.max(Number(req.body.quality || 50),   10),  90),
-    fps:      Math.min(Math.max(Number(req.body.fps     || 10),    1),  30),
+    fps:      Math.min(Math.max(Number(req.body.fps     || 10),    1),  60),
     keyboard: req.body.keyboard === true,
     mouse:    req.body.mouse === true,
   };
@@ -431,7 +430,6 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   const bytes = getFrame(cid);
   if (!bytes) return res.status(204).end();
 
-  // sniff: RIFF....WEBP → image/webp, FFD8FF → image/jpeg, else octet-stream
   let ctype = 'application/octet-stream';
   if (bytes.length >= 12 &&
       bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
@@ -630,7 +628,6 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   if (!baseSrc.startsWith(baseRoot + path.sep)) return res.status(400).json({ error: 'bad path' });
   if (!fs.existsSync(baseSrc)) return res.status(404).json({ error: 'base not found' });
 
-  // key: use what the client sent; if empty, fall back to the account key
   const row = getOwnUser(req.user.uid);
   const acctKey = row?.account_key || '';
   const buildKey = (typeof key === 'string' && key.trim().length > 0)

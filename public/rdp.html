@@ -36,6 +36,46 @@
   .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
   .topbar select { padding-right: 34px; }
 
+  .topbar input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: var(--line-2);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+    width: 120px;
+    padding: 0;
+    border: none;
+    box-shadow: none;
+  }
+  .topbar input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    box-shadow: 0 0 8px var(--accent);
+  }
+  .topbar input[type=range]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 0 8px var(--accent);
+  }
+  .topbar .fps-val {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    min-width: 22px;
+    font-weight: 600;
+  }
+
   .stage {
     flex: 1; overflow: auto; display: grid; place-items: center;
     background: #000;
@@ -72,6 +112,9 @@
       <option value="high">high</option>
       <option value="native">native</option>
     </select>
+    <span class="lbl">fps</span>
+    <input id="fps" type="range" min="1" max="60" step="1" value="10">
+    <span class="fps-val" id="fps-val">10</span>
     <span class="spacer"></span>
     <span class="fps" id="fps"></span>
     <button id="kb" title="keyboard">⌨</button>

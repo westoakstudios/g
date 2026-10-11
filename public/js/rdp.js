@@ -22,20 +22,15 @@ let backoffMs = 0;
 const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
   med:    { height: 720, quality: 55, fps: 10 },
-  high:   { height: 900, quality: 75, fps: 12 },
+  high:   { height: 900, quality: 75, fps: 15 },
   native: null,
 };
 
 const img = document.createElement('img');
 img.draggable = false;
 
-// ping-pong: two <img> elements, swap on successful decode. avoids flash of broken.
-const imgBack = document.createElement('img');
-imgBack.draggable = false;
-imgBack.style.display = 'none';
-
 img.addEventListener('load', () => {
-  if (img.naturalWidth === 0) return;    // decode failed silently
+  if (img.naturalWidth === 0) return;
   $('dot').classList.add('on');
   framesThisSec++;
   const now = Date.now();
@@ -51,7 +46,6 @@ img.addEventListener('load', () => {
 img.addEventListener('error', () => {
   $('dot').classList.remove('on');
   consecutiveFails++;
-  // adaptive backoff — up to 2s
   backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
 });
 
@@ -85,6 +79,7 @@ function applyPreset(name) {
     cfg.height  = mon.height;
     cfg.quality = 75;
     cfg.fps     = 10;
+    syncFpsUI();
     return;
   }
   const p = PRESETS[name];
@@ -97,6 +92,14 @@ function applyPreset(name) {
   cfg.height  = targetH;
   cfg.quality = p.quality;
   cfg.fps     = p.fps;
+  syncFpsUI();
+}
+
+function syncFpsUI() {
+  const slider = $('fps');
+  const label  = $('fps-val');
+  if (slider) slider.value = String(cfg.fps);
+  if (label)  label.textContent = String(cfg.fps);
 }
 
 async function start() {
@@ -160,7 +163,7 @@ async function loop() {
       const tmp = new Image();
       tmp.onload = () => {
         if (tmp.naturalWidth === 0) { resolve(false); return; }
-        img.src = tmp.src;      // safe swap — img only gets a good frame
+        img.src = tmp.src;
         resolve(true);
       };
       tmp.onerror = () => resolve(false);
@@ -187,7 +190,9 @@ async function loop() {
 
 $('preset').addEventListener('change', async (e) => {
   applyPreset(e.target.value);
-  if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
+  if (running) {
+    await pushCfg({ fps: cfg.fps, quality: cfg.quality });
+  }
 });
 
 $('monitor').addEventListener('change', async (e) => {
@@ -196,12 +201,27 @@ $('monitor').addEventListener('change', async (e) => {
   if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
 });
 
-async function pushCfg() {
+// fps slider — live update via WHCFG, no restart
+{
+  const slider = $('fps');
+  const label  = $('fps-val');
+  if (slider) {
+    slider.addEventListener('input', () => {
+      cfg.fps = Math.max(1, Math.min(60, Number(slider.value) || 10));
+      if (label) label.textContent = String(cfg.fps);
+    });
+    slider.addEventListener('change', () => {
+      if (running) pushCfg({ fps: cfg.fps });
+    });
+  }
+}
+
+async function pushCfg(extra) {
   try {
     await fetch(`/api/clients/${clientId}/rdp/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyboard: cfg.keyboard, mouse: cfg.mouse }),
+      body: JSON.stringify({ keyboard: cfg.keyboard, mouse: cfg.mouse, ...(extra || {}) }),
     });
   } catch {}
 }
@@ -301,4 +321,7 @@ function beaconStop() {
 window.addEventListener('beforeunload', beaconStop);
 window.addEventListener('pagehide', beaconStop);
 
-loadMonitors().then(start);
+loadMonitors().then(() => {
+  syncFpsUI();
+  start();
+});
