@@ -21,7 +21,6 @@
   .topbar .dot.on { background: var(--green); box-shadow: 0 0 12px var(--green); }
   .topbar .target { color: var(--text); font-family: var(--mono); font-size: 12px; }
   .topbar .spacer { flex: 1; }
-  .topbar .fps { font-family: var(--mono); font-size: 11px; color: var(--accent); min-width: 68px; text-align: right; font-weight: 600; }
   .topbar select, .topbar button {
     margin: 0; padding: 8px 16px; font-size: 11px; font-weight: 600; width: auto;
     background: transparent; border: 1px solid var(--line-2); color: var(--text);
@@ -76,6 +75,27 @@
     font-weight: 600;
   }
 
+  /* the FPS readout — now a visible pill */
+  .topbar .fps {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    background: rgba(79, 195, 247, 0.10);
+    border: 1px solid rgba(79, 195, 247, 0.35);
+    border-radius: var(--r-pill);
+    padding: 6px 14px;
+    min-width: 80px;
+    justify-content: center;
+    letter-spacing: .02em;
+  }
+  .topbar .fps .num { color: var(--accent-2); }
+  .topbar .fps .sep { color: var(--muted); }
+  .topbar .fps .target { color: var(--muted); font-size: 11px; }
+
   .stage {
     flex: 1; overflow: auto; display: grid; place-items: center;
     background: #000;
@@ -113,10 +133,17 @@
       <option value="native">native</option>
     </select>
     <span class="lbl">fps</span>
-    <input id="fps" type="range" min="1" max="60" step="1" value="10">
+    <input id="fps-slider" type="range" min="1" max="60" step="1" value="10">
     <span class="fps-val" id="fps-val">10</span>
+
+    <span class="fps" id="fps">
+      <span class="num" id="fps-now">0</span>
+      <span class="sep">/</span>
+      <span class="target" id="fps-target">10</span>
+      <span class="target">fps</span>
+    </span>
+
     <span class="spacer"></span>
-    <span class="fps" id="fps"></span>
     <button id="kb" title="keyboard">⌨</button>
     <button id="mouse" title="mouse">🖱</button>
     <button id="reset" title="release all keys and buttons">reset</button>

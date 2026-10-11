@@ -35,7 +35,8 @@ img.addEventListener('load', () => {
   framesThisSec++;
   const now = Date.now();
   if (now - lastFpsTick >= 1000) {
-    $('fps').textContent = `${framesThisSec}/${cfg.fps} fps`;
+    const nowEl = $('fps-now');
+    if (nowEl) nowEl.textContent = String(framesThisSec);
     framesThisSec = 0;
     lastFpsTick = now;
   }
@@ -96,10 +97,12 @@ function applyPreset(name) {
 }
 
 function syncFpsUI() {
-  const slider = $('fps');
+  const slider = $('fps-slider');
   const label  = $('fps-val');
+  const target = $('fps-target');
   if (slider) slider.value = String(cfg.fps);
   if (label)  label.textContent = String(cfg.fps);
+  if (target) target.textContent = String(cfg.fps);
 }
 
 async function start() {
@@ -203,12 +206,14 @@ $('monitor').addEventListener('change', async (e) => {
 
 // fps slider — live update via WHCFG, no restart
 {
-  const slider = $('fps');
+  const slider = $('fps-slider');
   const label  = $('fps-val');
+  const target = $('fps-target');
   if (slider) {
     slider.addEventListener('input', () => {
       cfg.fps = Math.max(1, Math.min(60, Number(slider.value) || 10));
-      if (label) label.textContent = String(cfg.fps);
+      if (label)  label.textContent = String(cfg.fps);
+      if (target) target.textContent = String(cfg.fps);
     });
     slider.addEventListener('change', () => {
       if (running) pushCfg({ fps: cfg.fps });
