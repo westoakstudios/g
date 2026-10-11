@@ -1,19 +1,22 @@
 // language: JavaScript, file: builder/rustbuild.js
 // per-build Rust compile with the account key baked into src/embedded_key.rs.
-// produces boot.exe (the stager) only. st.exe is uploaded separately.
-// serialized via a queue — one cargo build at a time.
+// paths are relative to this file, so nothing depends on the server's cwd.
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const CARGO  = process.env.CARGO  || 'cargo';
 const TARGET = process.env.RUST_TARGET || 'x86_64-pc-windows-gnu';
 
-const SRC_DIR  = process.env.RUST_SRC || '/g/client';
+// rust project lives one level up from builder/, in client/
+const SRC_DIR  = process.env.RUST_SRC || path.join(__dirname, '..', 'client');
 const KEY_FILE = path.join(SRC_DIR, 'src', 'embedded_key.rs');
 
 let queue = Promise.resolve();
@@ -46,11 +49,14 @@ pub const ACCOUNT_KEY: &str = "";
 export async function buildBoot({ key }) {
   if (!key || !String(key).trim()) throw new Error('key required');
 
+  if (!fs.existsSync(SRC_DIR)) throw new Error(`rust source dir not found: ${SRC_DIR}`);
+  if (!fs.existsSync(path.join(SRC_DIR, 'src'))) throw new Error(`src/ not found in ${SRC_DIR}`);
+  if (!fs.existsSync(path.join(SRC_DIR, 'src', 'main.rs'))) throw new Error(`main.rs not found in ${SRC_DIR}/src`);
+
   return enqueue(async () => {
     writeEmbeddedKey(key.trim());
 
     try {
-      // touch main.rs so cargo picks up the mtime change on embedded_key.rs
       const srcMain = path.join(SRC_DIR, 'src', 'main.rs');
       const now = new Date();
       try { fs.utimesSync(srcMain, now, now); } catch {}
