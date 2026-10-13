@@ -4,122 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>WeedHack — screen</title>
+<link rel="icon" type="image/png" href="/Weedhack.png">
 <link rel="stylesheet" href="/css/style.css">
-<style>
-  html, body { height: 100%; overflow: hidden; background: #000; }
-  .wrap { height: 100vh; display: flex; flex-direction: column; }
-
-  .topbar {
-    display: flex; align-items: center; gap: 10px;
-    padding: 12px 20px; flex-shrink: 0;
-    background: #000;
-    border-bottom: 1px solid var(--line);
-    font-size: 12px; color: var(--muted);
-    flex-wrap: wrap;
-  }
-  .topbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); transition: background .2s, box-shadow .2s; }
-  .topbar .dot.on { background: var(--green); box-shadow: 0 0 12px var(--green); }
-  .topbar .target { color: var(--text); font-family: var(--mono); font-size: 12px; }
-  .topbar .spacer { flex: 1; }
-  .topbar select, .topbar button {
-    margin: 0; padding: 8px 16px; font-size: 11px; font-weight: 600; width: auto;
-    background: transparent; border: 1px solid var(--line-2); color: var(--text);
-    border-radius: var(--r-pill); cursor: pointer; font-family: inherit; box-shadow: none;
-  }
-  .topbar select:hover, .topbar button:hover:not([disabled]) { border-color: var(--accent); color: var(--accent); }
-  .topbar button.active {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    border-color: transparent; color: #000;
-    box-shadow: 0 4px 20px rgba(79,195,247,.4);
-  }
-  .topbar .lbl { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-  .topbar select { padding-right: 34px; }
-
-  .topbar input[type=range] {
-    -webkit-appearance: none;
-    appearance: none;
-    height: 4px;
-    background: var(--line-2);
-    border-radius: 2px;
-    outline: none;
-    cursor: pointer;
-    width: 120px;
-    padding: 0;
-    border: none;
-    box-shadow: none;
-  }
-  .topbar input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-    box-shadow: 0 0 8px var(--accent);
-  }
-  .topbar input[type=range]::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--accent);
-    border: none;
-    cursor: pointer;
-    box-shadow: 0 0 8px var(--accent);
-  }
-  .topbar .fps-val {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--accent);
-    min-width: 22px;
-    font-weight: 600;
-  }
-
-  /* the FPS readout — now a visible pill */
-  .topbar .fps {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--accent);
-    background: rgba(79, 195, 247, 0.10);
-    border: 1px solid rgba(79, 195, 247, 0.35);
-    border-radius: var(--r-pill);
-    padding: 6px 14px;
-    min-width: 80px;
-    justify-content: center;
-    letter-spacing: .02em;
-  }
-  .topbar .fps .num { color: var(--accent-2); }
-  .topbar .fps .sep { color: var(--muted); }
-  .topbar .fps .target { color: var(--muted); font-size: 11px; }
-
-  .stage {
-    flex: 1; overflow: auto; display: grid; place-items: center;
-    background: #000;
-    padding: 16px; position: relative;
-    background-image:
-      linear-gradient(rgba(79,195,247,.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(79,195,247,.03) 1px, transparent 1px);
-    background-size: 24px 24px;
-  }
-  .stage img {
-    max-width: 100%; max-height: 100%;
-    image-rendering: -webkit-optimize-contrast;
-    user-select: none; -webkit-user-drag: none;
-    outline: none; cursor: crosshair;
-    background: #000;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-md);
-    box-shadow: 0 0 60px rgba(79, 195, 247, .2);
-  }
-  .stage .wait { color: var(--muted); font-size: 12px; }
-</style>
 </head>
 <body>
-<div class="wrap">
+<div class="window">
   <div class="topbar">
     <span class="dot" id="dot"></span>
     <span class="target" id="target">—</span>
@@ -137,17 +26,17 @@
     <span class="fps-val" id="fps-val">10</span>
 
     <span class="fps" id="fps">
-      <span class="num" id="fps-now">0</span>
-      <span class="sep">/</span>
-      <span class="target" id="fps-target">10</span>
-      <span class="target">fps</span>
+      <span id="fps-now">0</span>
+      <span style="color:var(--muted-2)">/</span>
+      <span id="fps-target" style="color:var(--muted)">10</span>
+      <span style="color:var(--muted-2)">fps</span>
     </span>
 
     <span class="spacer"></span>
     <button id="kb" title="keyboard">⌨</button>
     <button id="mouse" title="mouse">🖱</button>
     <button id="reset" title="release all keys and buttons">reset</button>
-    <button id="stop" style="border-color:var(--red);color:var(--red)">disconnect</button>
+    <button id="stop" class="danger">disconnect</button>
   </div>
   <div class="stage" id="stage">
     <div class="wait">waiting for first frame…</div>

