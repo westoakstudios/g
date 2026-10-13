@@ -10,28 +10,51 @@
 <div class="shell">
   <aside class="side">
     <div class="brand"><span class="w">Weed</span><span class="h">Hack</span></div>
+
     <nav class="nav">
+      <div class="group">dashboard</div>
       <a data-tab="overview" class="active">overview</a>
       <a data-tab="hosts">hosts</a>
       <a data-tab="remote">remote</a>
-      <a data-tab="builder">builder</a>
-      <a data-tab="account">account</a>
+
+      <div class="group">builder</div>
+      <a data-tab="builder">build</a>
+
+      <div class="group">config</div>
       <a data-tab="settings">settings</a>
+
+      <div class="group">account</div>
+      <a data-tab="account">my account</a>
     </nav>
+
     <div class="bottom">
       <button class="ghost" id="logout">sign out</button>
     </div>
   </aside>
 
   <main class="main">
+    <!-- OVERVIEW -->
     <section class="section active" id="overview">
-      <h2>overview</h2>
-      <div class="sub">welcome back, <span id="who">—</span></div>
+      <div class="page-head">
+        <div>
+          <h2>overview</h2>
+          <div class="sub">welcome back, <span id="who">—</span></div>
+        </div>
+      </div>
 
-      <div class="tiles" style="margin-bottom:14px">
-        <div class="tile"><div class="k">online</div><div class="v" id="ov-online" style="color:var(--green)">0</div></div>
-        <div class="tile"><div class="k">offline</div><div class="v" id="ov-offline">0</div></div>
-        <div class="tile"><div class="k">total</div><div class="v" id="ov-total">0</div></div>
+      <div class="hero-tiles">
+        <div class="hero-tile">
+          <div class="k">online</div>
+          <div class="v green" id="ov-online">0</div>
+        </div>
+        <div class="hero-tile">
+          <div class="k">offline</div>
+          <div class="v" id="ov-offline">0</div>
+        </div>
+        <div class="hero-tile">
+          <div class="k">total</div>
+          <div class="v accent" id="ov-total">0</div>
+        </div>
       </div>
 
       <div class="tiles">
@@ -41,9 +64,17 @@
       </div>
     </section>
 
+    <!-- HOSTS -->
     <section class="section" id="hosts">
-      <h2>hosts</h2>
-      <div class="sub">every client that has ever checked in.</div>
+      <div class="page-head">
+        <div>
+          <h2>hosts</h2>
+          <div class="sub">every client that has ever checked in.</div>
+        </div>
+        <div class="actions">
+          <span class="count" id="h-count">—</span>
+        </div>
+      </div>
 
       <div class="toolbar">
         <input id="h-search" placeholder="search hostname or ip">
@@ -53,8 +84,6 @@
           <option value="offline">offline</option>
         </select>
         <button class="ghost mini" id="h-refresh">refresh</button>
-        <span class="grow"></span>
-        <span class="count" id="h-count">—</span>
       </div>
 
       <div class="rows">
@@ -73,15 +102,21 @@
       <div id="h-detail"></div>
     </section>
 
+    <!-- REMOTE -->
     <section class="section" id="remote">
-      <h2>remote</h2>
-      <div class="sub">online clients only.</div>
+      <div class="page-head">
+        <div>
+          <h2>remote</h2>
+          <div class="sub">online clients only.</div>
+        </div>
+        <div class="actions">
+          <span class="count" id="r-count">—</span>
+        </div>
+      </div>
 
       <div class="toolbar">
         <input id="r-search" placeholder="search online hostname or ip">
         <button class="ghost mini" id="r-refresh">refresh</button>
-        <span class="grow"></span>
-        <span class="count" id="r-count">—</span>
       </div>
 
       <div class="rows">
@@ -98,16 +133,22 @@
       </div>
     </section>
 
+    <!-- BUILDER -->
     <section class="section" id="builder">
-      <h2>builder</h2>
-      <div class="sub">compiles the client with your key baked in.</div>
+      <div class="page-head">
+        <div>
+          <h2>build</h2>
+          <div class="sub">compiles the client with your key baked in.</div>
+        </div>
+        <div class="actions">
+          <span class="count" id="b-count">—</span>
+        </div>
+      </div>
 
       <div class="toolbar">
         <input id="b-key" placeholder="account key (leave blank to use your account key)" style="min-width:400px">
         <button class="ghost mini" id="b-build">build</button>
         <button class="ghost mini" id="b-refresh">refresh</button>
-        <span class="grow"></span>
-        <span class="count" id="b-count">—</span>
       </div>
 
       <div id="b-result"></div>
@@ -120,9 +161,14 @@
       </div>
     </section>
 
+    <!-- ACCOUNT -->
     <section class="section" id="account">
-      <h2>account</h2>
-      <div class="sub">identity and tokens.</div>
+      <div class="page-head">
+        <div>
+          <h2>my account</h2>
+          <div class="sub">identity and tokens.</div>
+        </div>
+      </div>
 
       <div class="tiles" style="margin-bottom:14px">
         <div class="tile"><div class="k">username</div><div class="v plain" id="a-user">—</div></div>
@@ -148,9 +194,15 @@
       </div>
     </section>
 
+    <!-- SETTINGS -->
     <section class="section" id="settings">
-      <h2>settings</h2>
-      <div class="sub">discord webhook — test and save.</div>
+      <div class="page-head">
+        <div>
+          <h2>settings</h2>
+          <div class="sub">discord webhook — test and save.</div>
+        </div>
+      </div>
+
       <label for="whurl">webhook url</label>
       <input id="whurl" placeholder="https://discord.com/api/webhooks/...">
       <button class="ghost" id="whtest" style="max-width:200px">test + save</button>
