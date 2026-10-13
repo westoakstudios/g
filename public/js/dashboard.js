@@ -22,7 +22,6 @@ async function loadMe() {
   $('a-user').textContent = me.username;
   $('a-mail').textContent = me.email;
   $('a-akey').textContent = me.accountKey;
-  $('a-ltok').textContent = me.loginToken;
 }
 
 document.querySelectorAll('.nav a').forEach((a) => {
@@ -80,7 +79,6 @@ function humanSize(n) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
-// country cell — flag emoji + name, or muted dash when unknown
 function countryCell(c) {
   if (!c || !c.name) return `<span class="country"><span class="country-empty">—</span></span>`;
   const flag = c.flag ? `<span class="country-flag">${esc(c.flag)}</span>` : '';
