@@ -21,32 +21,9 @@ async function loadMe() {
   $('whurl').value = me.discordWebhook || '';
   $('a-user').textContent = me.username;
   $('a-mail').textContent = me.email;
-  revealSetup('a-akey', me.accountKey);
-  revealSetup('a-ltok', me.loginToken);
+  $('a-akey').textContent = me.accountKey;
+  $('a-ltok').textContent = me.loginToken;
 }
-
-function revealSetup(id, value) {
-  const el = $(id);
-  el.dataset.real = value;
-  el.dataset.shown = '0';
-  el.textContent = '•'.repeat(value.length);
-}
-
-document.addEventListener('click', (e) => {
-  const b = e.target.closest('[data-reveal]');
-  if (!b) return;
-  const el = $(b.dataset.reveal);
-  const shown = el.dataset.shown === '1';
-  if (shown) {
-    el.textContent = '•'.repeat(el.dataset.real.length);
-    el.dataset.shown = '0';
-    b.textContent = 'reveal';
-  } else {
-    el.textContent = el.dataset.real;
-    el.dataset.shown = '1';
-    b.textContent = 'hide';
-  }
-});
 
 document.querySelectorAll('.nav a').forEach((a) => {
   a.addEventListener('click', () => {
@@ -103,6 +80,13 @@ function humanSize(n) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
+// country cell — flag emoji + name, or muted dash when unknown
+function countryCell(c) {
+  if (!c || !c.name) return `<span class="country"><span class="country-empty">—</span></span>`;
+  const flag = c.flag ? `<span class="country-flag">${esc(c.flag)}</span>` : '';
+  return `<span class="country">${flag}<span class="country-name">${esc(c.name)}</span></span>`;
+}
+
 // ---------- HOSTS ----------
 async function loadHosts() {
   const s = state.hosts;
@@ -136,6 +120,7 @@ function buildRow(c, onOpen) {
     <span class="dot ${c.online ? 'on' : 'off'}"></span>
     <span class="host">${esc(c.hostname)}</span>
     <span class="ip">${esc(c.ip)}</span>
+    ${countryCell(c.country)}
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
     <span class="actions"><button class="ghost mini" data-open>view</button></span>`;
   el.addEventListener('click', (e) => {
@@ -152,18 +137,19 @@ async function openHostDetail(c) {
   el.className = 'detail';
   el.innerHTML = `
     <h3>${esc(c.hostname)}</h3>
-    <div class="sub" style="margin:0;color:var(--blue-3)">${esc(c.ip)}</div>
+    <div class="sub" style="margin:0;color:var(--muted)">${esc(c.ip)}</div>
 
     <div class="kv">
       <div class="k">client id</div> <div class="v">${c.id}</div>
       <div class="k">state</div>     <div class="v plain" style="color:${c.online ? 'var(--green)' : 'var(--muted)'}">${c.online ? 'online' : 'offline'}</div>
       <div class="k">ipv4</div>      <div class="v">${esc(c.ip)}</div>
+      <div class="k">country</div>   <div class="v plain">${c.country ? esc(c.country.flag + ' ' + c.country.name) : '—'}</div>
       <div class="k">last seen</div> <div class="v plain">${new Date(c.lastSeen).toLocaleString()}</div>
     </div>
 
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
       <button class="ghost mini" data-remote>go to remote</button>
-      <button class="ghost mini" data-del style="border-color:var(--red);color:var(--red)">delete</button>
+      <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
       <button class="ghost mini" data-close>close</button>
     </div>
 
@@ -245,6 +231,7 @@ function buildRemoteRow(c) {
     <span class="dot on"></span>
     <span class="host">${esc(c.hostname)}</span>
     <span class="ip">${esc(c.ip)}</span>
+    ${countryCell(c.country)}
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
     <span class="actions" style="position:relative">
       <button class="ghost mini" data-gear title="actions" style="padding:4px 10px">⚙</button>
