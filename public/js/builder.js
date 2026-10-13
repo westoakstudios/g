@@ -1,5 +1,5 @@
 // language: JavaScript, file: public/js/builder.js
-// builder tab — key field, build button, builds list. no launch options.
+// builder tab — key field, build button, auto-download on success, builds list.
 
 (function () {
   'use strict';
@@ -42,7 +42,7 @@
           <span class="seen">${new Date(b.created_at).toLocaleString()}</span>
           <span class="actions">
             <button class="ghost mini" data-dl>download</button>
-            <button class="ghost mini" data-del style="border-color:var(--red);color:var(--red)">delete</button>
+            <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
           </span>`;
         el.querySelector('[data-dl]').addEventListener('click', (e) => {
           e.stopPropagation();
@@ -84,13 +84,21 @@
       } else {
         out.innerHTML = `
           <div class="tile">
-            <div class="k">build ready — key compiled in</div>
+            <div class="k">build ready — download starting</div>
             <div class="v mono" style="font-size:13px;margin-top:8px">${esc(d.key)}</div>
             <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-              <button class="ghost mini" id="b-dl-now">download boot.exe</button>
+              <button class="ghost mini" id="b-dl-now">download again</button>
             </div>
             <div class="note">live url: <code style="color:var(--accent);font-family:var(--mono)">/api/downloads/boot.exe</code></div>
           </div>`;
+
+        // auto-download via hidden iframe — no navigation away from the dashboard
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = d.url;
+        document.body.appendChild(iframe);
+        setTimeout(() => iframe.remove(), 30000);
+
         document.getElementById('b-dl-now')?.addEventListener('click', () => {
           window.location.href = d.url;
         });
@@ -108,11 +116,11 @@
     const keyField = $('b-key');
     if (!keyField || keyField.value) return;
 
-    const fromAcct = document.getElementById('a-akey')?.dataset?.real;
+    const fromAcct = document.getElementById('a-akey')?.textContent;
     if (fromAcct && fromAcct !== '—') { keyField.value = fromAcct; return; }
 
     const fromOv = document.getElementById('ov-akey')?.textContent;
-    if (fromOv && fromOv !== '—' && !fromOv.startsWith('•')) { keyField.value = fromOv; return; }
+    if (fromOv && fromOv !== '—') { keyField.value = fromOv; return; }
 
     fetch('/api/me', { credentials: 'same-origin' })
       .then(r => r.ok ? r.json() : null)

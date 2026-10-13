@@ -882,3 +882,83 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 }
 .log .chunk:hover { border-left-color: var(--accent); }
 .log .t { color: var(--muted); font-size: 11px; font-weight: 600; }
+/* ---------- loading overlay ---------- */
+.stage .loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.stage .loading .ring {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--text);
+  animation: ring-spin .8s linear infinite;
+}
+@keyframes ring-spin { to { transform: rotate(360deg); } }
+
+/* inline version used in the topbar next to the target */
+.topbar .spin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--text);
+  animation: ring-spin .8s linear infinite;
+  flex-shrink: 0;
+}
+/* ---------- loading spinner ---------- */
+.stage .loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.stage .loading .ring,
+.log .loading .ring {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--text);
+  animation: ring-spin .8s linear infinite;
+}
+@keyframes ring-spin { to { transform: rotate(360deg); } }
+
+/* ---------- builder card ---------- */
+.builder-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 24px;
+}
+.builder-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+.builder-input { flex: 1; }
+.builder-input label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.builder-input input {
+  width: 100%;
+  padding: 12px 14px;
+}
+.builder-row button {
+  margin: 0;
+  padding: 12px 28px;
+  width: auto;
+}

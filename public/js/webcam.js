@@ -10,6 +10,7 @@ let cfg = { camera: 0, width: 640, height: 480, quality: 55, fps: 12 };
 let running = false;
 let frames = 0;
 let lastFps = Date.now();
+let firstFrameSeen = false;
 
 const PRESETS = {
   low:  { width: 320,  height: 240, quality: 40, fps: 8  },
@@ -21,6 +22,13 @@ const img = document.createElement('img');
 img.draggable = false;
 img.addEventListener('load', () => {
   $('dot').classList.add('on');
+
+  if (!firstFrameSeen) {
+    firstFrameSeen = true;
+    const l = document.querySelector('.stage .loading');
+    if (l) l.remove();
+  }
+
   frames++;
   const now = Date.now();
   if (now - lastFps >= 1000) {
@@ -30,7 +38,15 @@ img.addEventListener('load', () => {
 });
 img.addEventListener('error', () => $('dot').classList.remove('on'));
 
+function showSpinner(text) {
+  const stage = $('stage');
+  stage.innerHTML = `<div class="loading"><div class="ring"></div><span>${text}</span></div>`;
+}
+
 async function start() {
+  showSpinner('connecting to camera…');
+  firstFrameSeen = false;
+
   const r = await fetch(`/api/clients/${clientId}/webcam/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -42,6 +58,13 @@ async function start() {
   stage.innerHTML = '';
   stage.appendChild(img);
   loop();
+
+  setTimeout(() => {
+    const l = document.querySelector('.stage .loading');
+    if (l && !firstFrameSeen) {
+      l.innerHTML = '<span style="color:var(--muted)">no frames yet — check the camera</span>';
+    }
+  }, 8000);
 }
 
 async function stop() {

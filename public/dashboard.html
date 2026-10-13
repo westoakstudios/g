@@ -28,7 +28,7 @@
       <a data-tab="settings">settings</a>
 
       <div class="group">account</div>
-      <a data-tab="account">my account</a>
+      <a data-tab="account">account</a>
     </nav>
 
     <div class="bottom">
@@ -145,10 +145,15 @@
         </div>
       </div>
 
-      <div class="toolbar">
-        <input id="b-key" placeholder="account key (leave blank to use your account key)" style="min-width:400px">
-        <button class="primary mini" id="b-build">build</button>
-        <button class="ghost mini" id="b-refresh">refresh</button>
+      <div class="builder-card">
+        <div class="builder-row">
+          <div class="builder-input">
+            <label for="b-key">account key</label>
+            <input id="b-key" placeholder="leave blank to use your account key">
+          </div>
+          <button class="primary" id="b-build">build</button>
+        </div>
+        <div class="note">the key gets compiled into the binary. each build replaces the live boot.exe.</div>
       </div>
 
       <div id="b-result"></div>
@@ -164,7 +169,7 @@
     <section class="section" id="account">
       <div class="page-head">
         <div>
-          <h2>my account</h2>
+          <h2>account</h2>
           <div class="sub">identity and tokens.</div>
         </div>
       </div>
@@ -176,20 +181,12 @@
 
       <div class="tile" style="margin-bottom:14px">
         <div class="k">account key — authenticates clients</div>
-        <div class="reveal-wrap" style="margin-top:8px">
-          <div class="v mono val" id="a-akey" data-real="" data-shown="0">—</div>
-          <button class="ghost mini" data-reveal="a-akey">reveal</button>
-        </div>
-        <div class="note">this is the key the client sends. keep it private.</div>
+        <div class="v mono" id="a-akey" style="margin-top:8px">—</div>
       </div>
 
       <div class="tile">
         <div class="k">login token — sign in with just this</div>
-        <div class="reveal-wrap" style="margin-top:8px">
-          <div class="v mono val" id="a-ltok" data-real="" data-shown="0">—</div>
-          <button class="ghost mini" data-reveal="a-ltok">reveal</button>
-        </div>
-        <div class="note">paste it on the sign-in page. no password needed.</div>
+        <div class="v mono" id="a-ltok" style="margin-top:8px">—</div>
       </div>
     </section>
 

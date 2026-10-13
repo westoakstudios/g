@@ -15,6 +15,7 @@ let restarting = false;
 let lastMouseSent = 0;
 let framesThisSec = 0;
 let lastFpsTick = Date.now();
+let firstFrameSeen = false;
 
 let consecutiveFails = 0;
 let backoffMs = 0;
@@ -32,6 +33,13 @@ img.draggable = false;
 img.addEventListener('load', () => {
   if (img.naturalWidth === 0) return;
   $('dot').classList.add('on');
+
+  if (!firstFrameSeen) {
+    firstFrameSeen = true;
+    const l = document.querySelector('.stage .loading');
+    if (l) l.remove();
+  }
+
   framesThisSec++;
   const now = Date.now();
   if (now - lastFpsTick >= 1000) {
@@ -105,7 +113,15 @@ function syncFpsUI() {
   if (target) target.textContent = String(cfg.fps);
 }
 
+function showSpinner(text) {
+  const stage = $('stage');
+  stage.innerHTML = `<div class="loading"><div class="ring"></div><span>${text}</span></div>`;
+}
+
 async function start() {
+  showSpinner('connecting…');
+  firstFrameSeen = false;
+
   const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -118,6 +134,13 @@ async function start() {
   stage.appendChild(img);
   img.style.display = '';
   loop();
+
+  setTimeout(() => {
+    const l = document.querySelector('.stage .loading');
+    if (l && !firstFrameSeen) {
+      l.innerHTML = '<span style="color:var(--muted)">no frames yet — check the client</span>';
+    }
+  }, 8000);
 }
 
 async function stop() {
@@ -204,7 +227,6 @@ $('monitor').addEventListener('change', async (e) => {
   if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
 });
 
-// fps slider — live update via WHCFG, no restart
 {
   const slider = $('fps-slider');
   const label  = $('fps-val');
