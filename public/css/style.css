@@ -946,3 +946,23 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 }
 .log .chunk:hover { border-left-color: var(--accent); }
 .log .t { color: var(--muted); font-size: 11px; font-weight: 600; }
+/* ---------- build tab: 5-column grid so text isn't cramped ---------- */
+.rows.build-rows .row,
+.rows.build-rows .rowhead {
+  grid-template-columns: 14px 1fr 140px 1fr 220px;
+}
+.rows.build-rows .row .seen {
+  text-align: right;
+  white-space: nowrap;
+}
+.rows.build-rows .row .actions {
+  gap: 8px;
+}
+.rows.build-rows .row .actions button {
+  padding: 6px 14px;
+}
+
+/* ---------- reveal toggle spacing ---------- */
+.reveal-wrap { display: flex; align-items: center; gap: 12px; }
+.reveal-wrap .val { flex: 1; min-width: 0; word-break: break-all; }
+.reveal-wrap button { margin: 0; }

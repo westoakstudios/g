@@ -22,7 +22,33 @@ async function loadMe() {
   $('a-user').textContent = me.username;
   $('a-mail').textContent = me.email;
   $('a-akey').textContent = me.accountKey;
+  revealSetup('a-ltok', me.loginToken);
 }
+
+function revealSetup(id, value) {
+  const el = $(id);
+  if (!el) return;
+  el.dataset.real = value;
+  el.dataset.shown = '0';
+  el.textContent = '•'.repeat(value.length);
+}
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-reveal]');
+  if (!b) return;
+  const el = $(b.dataset.reveal);
+  if (!el) return;
+  const shown = el.dataset.shown === '1';
+  if (shown) {
+    el.textContent = '•'.repeat(el.dataset.real.length);
+    el.dataset.shown = '0';
+    b.textContent = 'reveal';
+  } else {
+    el.textContent = el.dataset.real;
+    el.dataset.shown = '1';
+    b.textContent = 'hide';
+  }
+});
 
 document.querySelectorAll('.nav a').forEach((a) => {
   a.addEventListener('click', () => {
