@@ -7,7 +7,6 @@ const hostName = params.get('host') || `client ${clientId}`;
 const hostIp   = params.get('ip') || '';
 
 $('target').textContent = `${hostName} @ ${hostIp} (id ${clientId})`;
-console.log(`[rdp] clientId=${clientId} host=${hostName}`);
 
 let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: false, mouse: false };
 let monitors = [];
@@ -251,7 +250,6 @@ async function loop() {
 function startCursorPolling() {
   stopCursorPolling();
   cursorTimer = setInterval(pollCursor, 80);
-  console.log(`[rdp] cursor polling started for client ${clientId}`);
 }
 function stopCursorPolling() {
   if (cursorTimer) { clearInterval(cursorTimer); cursorTimer = null; }
@@ -260,12 +258,13 @@ function stopCursorPolling() {
 async function pollCursor() {
   if (!running) return;
   try {
-    const r = await fetch(`/api/clients/${clientId}/cursor`, { credentials: 'same-origin' });
+    const r = await fetch(`/api/clients/${clientId}/cursor?t=${Date.now()}`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+    });
     if (r.status === 204) {
       cursorMisses++;
-      if (cursorMisses === 1 || cursorMisses % 50 === 0) {
-        console.log(`[rdp] /cursor 204 miss #${cursorMisses} for client ${clientId}`);
-      }
       lastCursor = null;
       cursorDot.style.display = 'none';
       return;

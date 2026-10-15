@@ -489,8 +489,9 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   }
 
   res.setHeader('Content-Type', ctype);
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.send(bytes);
 });
 
@@ -499,11 +500,11 @@ app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
 
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   const c = getCursor(cid);
-  console.log(`[cursor] id=${cid} => ${c ? JSON.stringify(c) : 'null'}`);
   if (!c) return res.status(204).end();
   res.json(c);
 });
