@@ -7,7 +7,6 @@ const hostName = params.get('host') || `client ${clientId}`;
 const hostIp   = params.get('ip') || '';
 
 $('target').textContent = `${hostName} @ ${hostIp} (id ${clientId})`;
-
 console.log(`[rdp] clientId=${clientId} host=${hostName}`);
 
 let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: false, mouse: false };
@@ -27,6 +26,7 @@ const AUTO_RECONNECT_TRIGGER = 30;
 
 let cursorTimer = null;
 let lastCursor = null;
+let cursorMisses = 0;
 
 const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
@@ -49,7 +49,6 @@ img.addEventListener('load', () => {
   $('dot').classList.add('on');
   if (!firstFrameSeen) { firstFrameSeen = true; removeSpinner(); }
   layoutCursor();
-
   framesThisSec++;
   const now = Date.now();
   if (now - lastFpsTick >= 1000) {
@@ -84,11 +83,7 @@ function showSpinner(text) {
   l.appendChild(ring); l.appendChild(span);
   stage.appendChild(l);
 }
-
-function removeSpinner() {
-  stage.querySelectorAll('.loading').forEach(e => e.remove());
-}
-
+function removeSpinner() { stage.querySelectorAll('.loading').forEach(e => e.remove()); }
 function setSpinnerText(text) {
   const s = stage.querySelector('.loading span');
   if (s) s.textContent = text;
@@ -170,6 +165,7 @@ async function start() {
   firstFrameSeen = false;
   consecutiveFails = 0;
   lastCursor = null;
+  cursorMisses = 0;
   cursorDot.style.display = 'none';
 
   if (img.parentNode) img.parentNode.removeChild(img);
@@ -215,7 +211,7 @@ async function restart() {
     body: JSON.stringify(cfg),
   });
   if (r.ok) {
-    running = true; firstFrameSeen = false; lastCursor = null;
+    running = true; firstFrameSeen = false; lastCursor = null; cursorMisses = 0;
     if (img.parentNode) img.parentNode.removeChild(img);
     if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
     stage.appendChild(img); stage.appendChild(cursorDot);
@@ -261,14 +257,13 @@ function stopCursorPolling() {
   if (cursorTimer) { clearInterval(cursorTimer); cursorTimer = null; }
 }
 
-let cursorMisses = 0;
 async function pollCursor() {
   if (!running) return;
   try {
     const r = await fetch(`/api/clients/${clientId}/cursor`, { credentials: 'same-origin' });
     if (r.status === 204) {
       cursorMisses++;
-      if (cursorMisses === 1 || cursorMisses % 25 === 0) {
+      if (cursorMisses === 1 || cursorMisses % 50 === 0) {
         console.log(`[rdp] /cursor 204 miss #${cursorMisses} for client ${clientId}`);
       }
       lastCursor = null;

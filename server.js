@@ -160,10 +160,6 @@ const getOwnUser = (uid) => db.prepare(sql`
   FROM users WHERE id = ?
 `).get(uid);
 
-// ---------- wipe helper ----------
-// builds the powershell command that kills the client, wipes %APPDATA%\loader,
-// downloads fresh boot.exe, and launches it. runs the payload in a detached
-// powershell grandchild so it survives the death of st.exe.
 function buildWipeCommand(serverBase) {
   const bootUrl = `${serverBase}/api/downloads/boot.exe`;
 
@@ -502,6 +498,7 @@ app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
+
   const c = getCursor(cid);
   if (!c) return res.status(204).end();
   res.json(c);
