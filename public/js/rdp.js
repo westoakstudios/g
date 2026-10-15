@@ -24,6 +24,7 @@ const AUTO_RECONNECT_LIMIT = 5;
 const AUTO_RECONNECT_TRIGGER = 30;
 
 let cursorTimer = null;
+let lastCursor = null;   // {x, y, visible}
 
 const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
@@ -40,7 +41,6 @@ cursorDot.style.display = 'none';
 
 const img = document.createElement('img');
 img.draggable = false;
-img.style.display = 'none';
 
 img.addEventListener('load', () => {
   if (img.naturalWidth === 0) return;
@@ -49,8 +49,10 @@ img.addEventListener('load', () => {
   if (!firstFrameSeen) {
     firstFrameSeen = true;
     removeSpinner();
-    img.style.display = '';
   }
+
+  // image box may have just settled — re-anchor the cursor dot to the new bounds
+  layoutCursor();
 
   framesThisSec++;
   const now = Date.now();
@@ -92,6 +94,28 @@ function removeSpinner() {
 function setSpinnerText(text) {
   const l = stage.querySelector('.loading span');
   if (l) l.textContent = text;
+}
+
+// --- cursor helpers ---
+function layoutCursor() {
+  if (!lastCursor || !lastCursor.visible) {
+    cursorDot.style.display = 'none';
+    return;
+  }
+  const rect = img.getBoundingClientRect();
+  const stageRect = stage.getBoundingClientRect();
+
+  // if the image has no size yet, hide the dot rather than placing it top-left
+  if (rect.width === 0 || rect.height === 0) {
+    cursorDot.style.display = 'none';
+    return;
+  }
+
+  const x = (rect.left - stageRect.left) + lastCursor.x * rect.width;
+  const y = (rect.top - stageRect.top)  + lastCursor.y * rect.height;
+  cursorDot.style.left = `${x}px`;
+  cursorDot.style.top  = `${y}px`;
+  cursorDot.style.display = 'block';
 }
 
 // --- lifecycle ---
@@ -164,9 +188,10 @@ async function start() {
   showSpinner('connecting…');
   firstFrameSeen = false;
   consecutiveFails = 0;
-  img.style.display = 'none';
+  lastCursor = null;
+  cursorDot.style.display = 'none';
 
-  // detach any old image and the cursor dot before we re-attach
+  // detach previous nodes
   if (img.parentNode) img.parentNode.removeChild(img);
   if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
 
@@ -224,7 +249,7 @@ async function restart() {
   if (r.ok) {
     running = true;
     firstFrameSeen = false;
-    img.style.display = 'none';
+    lastCursor = null;
     if (img.parentNode) img.parentNode.removeChild(img);
     if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
     stage.appendChild(img);
@@ -278,7 +303,7 @@ async function loop() {
   }
 }
 
-// ---------- cursor ----------
+// ---------- cursor polling ----------
 function startCursorPolling() {
   stopCursorPolling();
   cursorTimer = setInterval(pollCursor, 100);
@@ -293,24 +318,19 @@ async function pollCursor() {
   try {
     const r = await fetch(`/api/clients/${clientId}/cursor`, { credentials: 'same-origin' });
     if (r.status === 204) {
+      lastCursor = null;
       cursorDot.style.display = 'none';
       return;
     }
     if (!r.ok) return;
     const c = await r.json();
-    if (!c || !c.visible) {
-      cursorDot.style.display = 'none';
-      return;
-    }
-    const rect = img.getBoundingClientRect();
-    const stageRect = stage.getBoundingClientRect();
-    const x = (rect.left - stageRect.left) + c.x * rect.width;
-    const y = (rect.top - stageRect.top)  + c.y * rect.height;
-    cursorDot.style.left = `${x}px`;
-    cursorDot.style.top  = `${y}px`;
-    cursorDot.style.display = 'block';
+    lastCursor = { x: c.x, y: c.y, visible: c.visible };
+    layoutCursor();
   } catch {}
 }
+
+// re-anchor the dot when the window resizes or scrolls
+window.addEventListener('resize', layoutCursor);
 
 $('preset').addEventListener('change', async (e) => {
   applyPreset(e.target.value);
