@@ -24,7 +24,7 @@ const AUTO_RECONNECT_LIMIT = 5;
 const AUTO_RECONNECT_TRIGGER = 30;
 
 let cursorTimer = null;
-let lastCursor = null;   // {x, y, visible}
+let lastCursor = null;
 
 const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
@@ -35,6 +35,7 @@ const PRESETS = {
 
 const stage = $('stage');
 
+// build everything with createElement — no innerHTML — so CSP never complains
 const cursorDot = document.createElement('div');
 cursorDot.className = 'cursor-dot';
 cursorDot.style.display = 'none';
@@ -51,7 +52,6 @@ img.addEventListener('load', () => {
     removeSpinner();
   }
 
-  // image box may have just settled — re-anchor the cursor dot to the new bounds
   layoutCursor();
 
   framesThisSec++;
@@ -78,12 +78,17 @@ img.addEventListener('error', () => {
   }
 });
 
-// --- spinner helpers ---
+// --- spinner helpers, built with createElement ---
 function showSpinner(text) {
   removeSpinner();
   const l = document.createElement('div');
   l.className = 'loading';
-  l.innerHTML = `<div class="ring"></div><span>${text}</span>`;
+  const ring = document.createElement('div');
+  ring.className = 'ring';
+  const span = document.createElement('span');
+  span.textContent = text;
+  l.appendChild(ring);
+  l.appendChild(span);
   stage.appendChild(l);
 }
 
@@ -92,8 +97,8 @@ function removeSpinner() {
 }
 
 function setSpinnerText(text) {
-  const l = stage.querySelector('.loading span');
-  if (l) l.textContent = text;
+  const s = stage.querySelector('.loading span');
+  if (s) s.textContent = text;
 }
 
 // --- cursor helpers ---
@@ -105,7 +110,6 @@ function layoutCursor() {
   const rect = img.getBoundingClientRect();
   const stageRect = stage.getBoundingClientRect();
 
-  // if the image has no size yet, hide the dot rather than placing it top-left
   if (rect.width === 0 || rect.height === 0) {
     cursorDot.style.display = 'none';
     return;
@@ -137,7 +141,10 @@ async function loadMonitors() {
     const sel = $('monitor');
     sel.innerHTML = '';
     if (monitors.length === 0) {
-      sel.innerHTML = '<option value="0">default</option>';
+      const o = document.createElement('option');
+      o.value = '0';
+      o.textContent = 'default';
+      sel.appendChild(o);
       return;
     }
     monitors.forEach((m, i) => {
@@ -191,7 +198,6 @@ async function start() {
   lastCursor = null;
   cursorDot.style.display = 'none';
 
-  // detach previous nodes
   if (img.parentNode) img.parentNode.removeChild(img);
   if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
 
@@ -329,7 +335,6 @@ async function pollCursor() {
   } catch {}
 }
 
-// re-anchor the dot when the window resizes or scrolls
 window.addEventListener('resize', layoutCursor);
 
 $('preset').addEventListener('change', async (e) => {
