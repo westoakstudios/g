@@ -981,3 +981,19 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
   transition: left .06s linear, top .06s linear;
   will-change: left, top;
 }
+/* ---------- remote tab: extra columns ---------- */
+.rows .rowhead,
+.rows .row {
+  grid-template-columns: 14px 1fr 140px 160px 110px 90px 80px 60px;
+}
+.row .priv {
+  font-size: 12px;
+  color: var(--text-2);
+  text-align: left;
+}
+.row .ping {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}

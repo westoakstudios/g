@@ -4,6 +4,7 @@ import dgram from 'node:dgram';
 const MAX_UDP_MSG   = 65500;
 const FRAME_TIMEOUT = 100;
 const CURSOR_TTL_MS = 8000;
+const WHREG_TTL_MS  = 30000;
 let udpSock = null;
 
 const clientAddr   = new Map();
@@ -12,6 +13,7 @@ const webcamStore  = new Map();
 const frameBuffers = new Map();
 const monitorStore = new Map();
 const cursorStore  = new Map();
+const whregInfo    = new Map();   // cid -> { lastAt, interval }
 
 const framesRecv = new Map();
 const cursorRecv = new Map();
@@ -32,6 +34,7 @@ setInterval(() => {
   for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000)   webcamStore.delete(cid);
   for (const [k, b] of frameBuffers)  if (now - b.lastAt   > FRAME_TIMEOUT * 2) frameBuffers.delete(k);
   for (const [cid, c] of cursorStore) if (now - c.updatedAt > CURSOR_TTL_MS)    cursorStore.delete(cid);
+  for (const [cid, w] of whregInfo)   if (now - w.lastAt   > WHREG_TTL_MS)     whregInfo.delete(cid);
 }, 15_000);
 
 const CRC_TABLE = (() => {
@@ -95,6 +98,12 @@ function handleTextMessage(text, rinfo) {
     const cid = Number(parts[1]);
     const key = parts[2];
     if (!cid || !key) return null;
+
+    const now = Date.now();
+    const prev = whregInfo.get(cid);
+    const interval = (prev && prev.lastAt) ? (now - prev.lastAt) : null;
+    whregInfo.set(cid, { lastAt: now, interval });
+
     clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
     return 'WHREG';
   }
@@ -239,9 +248,14 @@ export function hasClient(clientId)    { return clientAddr.has(clientId); }
 
 export function getCursor(clientId) {
   const c = cursorStore.get(clientId);
-  const age = c ? (Date.now() - c.updatedAt) : -1;
-  console.log(`[getCursor] cid=${clientId} storeSize=${cursorStore.size} hit=${!!c} age=${age}`);
   if (!c) return null;
   if (Date.now() - c.updatedAt > CURSOR_TTL_MS) return null;
   return { x: c.x, y: c.y, visible: c.visible };
+}
+
+export function getPing(clientId) {
+  const w = whregInfo.get(clientId);
+  if (!w || w.interval === null) return null;
+  if (Date.now() - w.lastAt > 5000) return null;
+  return w.interval;
 }
