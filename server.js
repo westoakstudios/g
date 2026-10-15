@@ -56,7 +56,7 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc:  ["'self'"],
-      scriptSrcAttr: ["'unsafe-inline'"],       // allow inline event handlers (onclick=, etc.)
+      scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc:   ["'self'", "'unsafe-inline'"],
       imgSrc:     ["'self'", 'data:', 'blob:'],
       connectSrc: ["'self'"],
@@ -458,6 +458,7 @@ app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
+
   const c = getCursor(cid);
   if (!c) return res.status(204).end();
   res.json(c);

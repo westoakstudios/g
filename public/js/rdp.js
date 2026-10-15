@@ -35,7 +35,6 @@ const PRESETS = {
 
 const stage = $('stage');
 
-// build everything with createElement — no innerHTML — so CSP never complains
 const cursorDot = document.createElement('div');
 cursorDot.className = 'cursor-dot';
 cursorDot.style.display = 'none';
@@ -46,12 +45,7 @@ img.draggable = false;
 img.addEventListener('load', () => {
   if (img.naturalWidth === 0) return;
   $('dot').classList.add('on');
-
-  if (!firstFrameSeen) {
-    firstFrameSeen = true;
-    removeSpinner();
-  }
-
+  if (!firstFrameSeen) { firstFrameSeen = true; removeSpinner(); }
   layoutCursor();
 
   framesThisSec++;
@@ -70,7 +64,6 @@ img.addEventListener('error', () => {
   $('dot').classList.remove('on');
   consecutiveFails++;
   backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
-
   if (consecutiveFails >= AUTO_RECONNECT_TRIGGER && autoReconnects < AUTO_RECONNECT_LIMIT) {
     autoReconnects++;
     consecutiveFails = 0;
@@ -78,7 +71,6 @@ img.addEventListener('error', () => {
   }
 });
 
-// --- spinner helpers, built with createElement ---
 function showSpinner(text) {
   removeSpinner();
   const l = document.createElement('div');
@@ -87,8 +79,7 @@ function showSpinner(text) {
   ring.className = 'ring';
   const span = document.createElement('span');
   span.textContent = text;
-  l.appendChild(ring);
-  l.appendChild(span);
+  l.appendChild(ring); l.appendChild(span);
   stage.appendChild(l);
 }
 
@@ -101,28 +92,18 @@ function setSpinnerText(text) {
   if (s) s.textContent = text;
 }
 
-// --- cursor helpers ---
 function layoutCursor() {
-  if (!lastCursor || !lastCursor.visible) {
-    cursorDot.style.display = 'none';
-    return;
-  }
+  if (!lastCursor || !lastCursor.visible) { cursorDot.style.display = 'none'; return; }
   const rect = img.getBoundingClientRect();
   const stageRect = stage.getBoundingClientRect();
-
-  if (rect.width === 0 || rect.height === 0) {
-    cursorDot.style.display = 'none';
-    return;
-  }
-
+  if (rect.width === 0 || rect.height === 0) { cursorDot.style.display = 'none'; return; }
   const x = (rect.left - stageRect.left) + lastCursor.x * rect.width;
-  const y = (rect.top - stageRect.top)  + lastCursor.y * rect.height;
+  const y = (rect.top  - stageRect.top)  + lastCursor.y * rect.height;
   cursorDot.style.left = `${x}px`;
   cursorDot.style.top  = `${y}px`;
   cursorDot.style.display = 'block';
 }
 
-// --- lifecycle ---
 async function doAutoReconnect() {
   if (!running) return;
   running = false;
@@ -142,8 +123,7 @@ async function loadMonitors() {
     sel.innerHTML = '';
     if (monitors.length === 0) {
       const o = document.createElement('option');
-      o.value = '0';
-      o.textContent = 'default';
+      o.value = '0'; o.textContent = 'default';
       sel.appendChild(o);
       return;
     }
@@ -162,30 +142,22 @@ function applyPreset(name) {
   const mon = monitors[cfg.monitor];
   if (!mon) return;
   if (name === 'native') {
-    cfg.width   = mon.width;
-    cfg.height  = mon.height;
-    cfg.quality = 75;
-    cfg.fps     = 10;
-    syncFpsUI();
-    return;
+    cfg.width = mon.width; cfg.height = mon.height;
+    cfg.quality = 75; cfg.fps = 10;
+    syncFpsUI(); return;
   }
-  const p = PRESETS[name];
-  if (!p) return;
+  const p = PRESETS[name]; if (!p) return;
   const targetH = Math.min(p.height, mon.height);
   const aspect  = mon.width / mon.height;
   let targetW   = Math.round(targetH * aspect / 2) * 2;
   if (targetW > mon.width) targetW = mon.width;
-  cfg.width   = targetW;
-  cfg.height  = targetH;
-  cfg.quality = p.quality;
-  cfg.fps     = p.fps;
+  cfg.width = targetW; cfg.height = targetH;
+  cfg.quality = p.quality; cfg.fps = p.fps;
   syncFpsUI();
 }
 
 function syncFpsUI() {
-  const slider = $('fps-slider');
-  const label  = $('fps-val');
-  const target = $('fps-target');
+  const slider = $('fps-slider'), label = $('fps-val'), target = $('fps-target');
   if (slider) slider.value = String(cfg.fps);
   if (label)  label.textContent = String(cfg.fps);
   if (target) target.textContent = String(cfg.fps);
@@ -206,10 +178,7 @@ async function start() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   });
-  if (!r.ok) {
-    setSpinnerText('rdp start failed');
-    return;
-  }
+  if (!r.ok) { setSpinnerText('rdp start failed'); return; }
 
   running = true;
   stage.appendChild(img);
@@ -218,9 +187,7 @@ async function start() {
   loop();
 
   setTimeout(() => {
-    if (!firstFrameSeen && running) {
-      setSpinnerText('no frames yet — check the client');
-    }
+    if (!firstFrameSeen && running) setSpinnerText('no frames yet — check the client');
   }, 8000);
 }
 
@@ -235,86 +202,58 @@ async function stop() {
 async function restart() {
   if (restarting) return;
   restarting = true;
-  const btn = $('reset');
-  const orig = btn.textContent;
-  btn.textContent = 'resetting…';
-  btn.disabled = true;
-
+  const btn = $('reset'); const orig = btn.textContent;
+  btn.textContent = 'resetting…'; btn.disabled = true;
   try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
-  running = false;
-  stopCursorPolling();
-  cursorDot.style.display = 'none';
+  running = false; stopCursorPolling(); cursorDot.style.display = 'none';
   await new Promise(r => setTimeout(r, 3500));
-
   const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   });
-
   if (r.ok) {
-    running = true;
-    firstFrameSeen = false;
-    lastCursor = null;
+    running = true; firstFrameSeen = false; lastCursor = null;
     if (img.parentNode) img.parentNode.removeChild(img);
     if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
-    stage.appendChild(img);
-    stage.appendChild(cursorDot);
-    showSpinner('connecting…');
-    startCursorPolling();
-    loop();
+    stage.appendChild(img); stage.appendChild(cursorDot);
+    showSpinner('connecting…'); startCursorPolling(); loop();
   }
-
-  btn.textContent = orig;
-  btn.disabled = false;
-  restarting = false;
+  btn.textContent = orig; btn.disabled = false; restarting = false;
 }
 
 async function loop() {
   while (running) {
     const t0 = performance.now();
-
     const ok = await new Promise((resolve) => {
       const tmp = new Image();
       tmp.onload = () => {
         if (tmp.naturalWidth === 0) { resolve(false); return; }
-        img.src = tmp.src;
-        resolve(true);
+        img.src = tmp.src; resolve(true);
       };
       tmp.onerror = () => resolve(false);
       tmp.src = `/api/clients/${clientId}/screen?t=${Date.now()}`;
     });
-
     if (!running) break;
-
     if (!ok) {
       consecutiveFails++;
       backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
       await new Promise(r => setTimeout(r, backoffMs));
       if (consecutiveFails >= AUTO_RECONNECT_TRIGGER && autoReconnects < AUTO_RECONNECT_LIMIT) {
-        autoReconnects++;
-        consecutiveFails = 0;
-        doAutoReconnect();
-        break;
+        autoReconnects++; consecutiveFails = 0; doAutoReconnect(); break;
       }
       continue;
-    } else {
-      consecutiveFails = 0;
-      backoffMs = 0;
-    }
-
+    } else { consecutiveFails = 0; backoffMs = 0; }
     const elapsed = performance.now() - t0;
     const target = 1000 / Math.max(cfg.fps, 1);
     if (elapsed < target) await new Promise(r => setTimeout(r, target - elapsed));
   }
 }
 
-// ---------- cursor polling ----------
 function startCursorPolling() {
   stopCursorPolling();
-  cursorTimer = setInterval(pollCursor, 100);
+  cursorTimer = setInterval(pollCursor, 80);
 }
-
 function stopCursorPolling() {
   if (cursorTimer) { clearInterval(cursorTimer); cursorTimer = null; }
 }
@@ -323,11 +262,7 @@ async function pollCursor() {
   if (!running) return;
   try {
     const r = await fetch(`/api/clients/${clientId}/cursor`, { credentials: 'same-origin' });
-    if (r.status === 204) {
-      lastCursor = null;
-      cursorDot.style.display = 'none';
-      return;
-    }
+    if (r.status === 204) { lastCursor = null; cursorDot.style.display = 'none'; return; }
     if (!r.ok) return;
     const c = await r.json();
     lastCursor = { x: c.x, y: c.y, visible: c.visible };
@@ -339,73 +274,56 @@ window.addEventListener('resize', layoutCursor);
 
 $('preset').addEventListener('change', async (e) => {
   applyPreset(e.target.value);
-  if (running) {
-    await pushCfg({ fps: cfg.fps, quality: cfg.quality });
-  }
+  if (running) await pushCfg({ fps: cfg.fps, quality: cfg.quality });
 });
-
 $('monitor').addEventListener('change', async (e) => {
   cfg.monitor = Number(e.target.value) || 0;
   applyPreset($('preset').value);
   if (running) { await stop(); await new Promise(r => setTimeout(r, 250)); await start(); }
 });
-
 {
-  const slider = $('fps-slider');
-  const label  = $('fps-val');
-  const target = $('fps-target');
+  const slider = $('fps-slider'), label = $('fps-val'), target = $('fps-target');
   if (slider) {
     slider.addEventListener('input', () => {
       cfg.fps = Math.max(1, Math.min(60, Number(slider.value) || 10));
       if (label)  label.textContent = String(cfg.fps);
       if (target) target.textContent = String(cfg.fps);
     });
-    slider.addEventListener('change', () => {
-      if (running) pushCfg({ fps: cfg.fps });
-    });
+    slider.addEventListener('change', () => { if (running) pushCfg({ fps: cfg.fps }); });
   }
 }
-
 async function pushCfg(extra) {
   try {
     await fetch(`/api/clients/${clientId}/rdp/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keyboard: cfg.keyboard, mouse: cfg.mouse, ...(extra || {}) }),
     });
   } catch {}
 }
-
 $('kb').addEventListener('click', () => {
   cfg.keyboard = !cfg.keyboard;
   $('kb').classList.toggle('active', cfg.keyboard);
   pushCfg();
 });
-
 $('mouse').addEventListener('click', () => {
   cfg.mouse = !cfg.mouse;
   $('mouse').classList.toggle('active', cfg.mouse);
   pushCfg();
 });
-
 $('reset').addEventListener('click', restart);
 
 function sendInput(payload) {
   fetch(`/api/clients/${clientId}/input`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    keepalive: true,
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload), keepalive: true,
   }).catch(() => {});
 }
-
 function norm(e) {
   const r = img.getBoundingClientRect();
   const x = (e.clientX - r.left) / r.width;
   const y = (e.clientY - r.top)  / r.height;
   return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
 }
-
 img.addEventListener('mousemove', (e) => {
   if (!cfg.mouse) return;
   const now = performance.now();
@@ -414,26 +332,10 @@ img.addEventListener('mousemove', (e) => {
   const p = norm(e);
   sendInput({ type: 'mouse_move', x: p.x, y: p.y });
 });
-
-img.addEventListener('mousedown', (e) => {
-  if (!cfg.mouse) return;
-  e.preventDefault();
-  sendInput({ type: 'mouse_down', button: btnName(e.button) });
-});
-
-img.addEventListener('mouseup', (e) => {
-  if (!cfg.mouse) return;
-  e.preventDefault();
-  sendInput({ type: 'mouse_up', button: btnName(e.button) });
-});
-
+img.addEventListener('mousedown', (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_down', button: btnName(e.button) }); });
+img.addEventListener('mouseup',   (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_up',   button: btnName(e.button) }); });
 img.addEventListener('contextmenu', (e) => e.preventDefault());
-
-img.addEventListener('wheel', (e) => {
-  if (!cfg.mouse) return;
-  e.preventDefault();
-  sendInput({ type: 'mouse_wheel', dy: Math.sign(e.deltaY) });
-}, { passive: false });
+img.addEventListener('wheel', (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_wheel', dy: Math.sign(e.deltaY) }); }, { passive: false });
 
 document.addEventListener('keydown', (e) => {
   if (!cfg.keyboard) return;
@@ -444,7 +346,6 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   sendInput({ type: 'key', code: e.code, key: e.key, down: true });
 });
-
 document.addEventListener('keyup', (e) => {
   if (!cfg.keyboard) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
@@ -457,21 +358,13 @@ document.addEventListener('keyup', (e) => {
 
 function btnName(b) { return b === 2 ? 'right' : b === 1 ? 'middle' : 'left'; }
 
-$('stop').addEventListener('click', async () => {
-  await stop();
-  window.close();
-});
-
+$('stop').addEventListener('click', async () => { await stop(); window.close(); });
 function beaconStop() {
   const body = new Blob(['{}'], { type: 'application/json' });
   try { navigator.sendBeacon(`/api/clients/${clientId}/rdp/stop`, body); } catch {}
   stop();
 }
-
 window.addEventListener('beforeunload', beaconStop);
 window.addEventListener('pagehide', beaconStop);
 
-loadMonitors().then(() => {
-  syncFpsUI();
-  start();
-});
+loadMonitors().then(() => { syncFpsUI(); start(); });

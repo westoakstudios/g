@@ -978,6 +978,6 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
   pointer-events: none;
   transform: translate(-50%, -50%);
   z-index: 5;
-  transition: left .08s linear, top .08s linear;
+  transition: left .06s linear, top .06s linear;
   will-change: left, top;
 }

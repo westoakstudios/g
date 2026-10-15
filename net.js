@@ -1,35 +1,42 @@
 // language: JavaScript, file: net.js
 import dgram from 'node:dgram';
 
-const MAX_UDP_MSG = 65500;
-const FRAME_TIMEOUT_MS = 100;
-const CURSOR_STALE_MS = 5000;
+const MAX_UDP_MSG   = 65500;
+const FRAME_TIMEOUT = 100;
+const CURSOR_TTL_MS = 8000;    // cursor considered stale after this
 let udpSock = null;
 
-const clientAddr   = new Map();
-const frameStore   = new Map();
-const webcamStore  = new Map();
-const frameBuffers = new Map();
-const monitorStore = new Map();
-const cursorStore  = new Map();
+// -------- state --------
+const clientAddr   = new Map();   // cid -> {address, port}
+const frameStore   = new Map();   // cid -> {jpeg, updatedAt}
+const webcamStore  = new Map();   // cid -> {jpeg, updatedAt}
+const frameBuffers = new Map();   // "kind:cid" -> {seq,total,crc,chunks,lastAt}
+const monitorStore = new Map();   // cid -> [monitor json]
+const cursorStore  = new Map();   // cid -> {x, y, visible, updatedAt}
 
-const framesRecv = new Map();
+// -------- diagnostics --------
+const framesRecv  = new Map();
+const cursorRecv  = new Map();
+
 setInterval(() => {
-  if (framesRecv.size === 0) return;
-  const parts = [];
-  for (const [k, n] of framesRecv) parts.push(`${k}=${n}/s`);
-  console.log(`[udp] frames ${parts.join(' ')}`);
+  if (framesRecv.size === 0 && cursorRecv.size === 0) return;
+  const lines = [];
+  for (const [k, n] of framesRecv) lines.push(`${k}=${n}/s`);
+  for (const [k, n] of cursorRecv) lines.push(`cur:${k}=${n}/s`);
+  console.log(`[udp] ${lines.join(' ')}`);
   framesRecv.clear();
+  cursorRecv.clear();
 }, 1000);
 
 setInterval(() => {
   const now = Date.now();
-  for (const [cid, f] of frameStore)  if (now - f.updatedAt > 30_000) frameStore.delete(cid);
-  for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000) webcamStore.delete(cid);
-  for (const [k, b] of frameBuffers)  if (now - b.lastAt > FRAME_TIMEOUT_MS * 2) frameBuffers.delete(k);
-  for (const [cid, c] of cursorStore) if (now - c.updatedAt > CURSOR_STALE_MS) cursorStore.delete(cid);
+  for (const [cid, f] of frameStore)  if (now - f.updatedAt > 30_000)   frameStore.delete(cid);
+  for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000)   webcamStore.delete(cid);
+  for (const [k, b] of frameBuffers)  if (now - b.lastAt   > FRAME_TIMEOUT * 2) frameBuffers.delete(k);
+  for (const [cid, c] of cursorStore) if (now - c.updatedAt > CURSOR_TTL_MS)    cursorStore.delete(cid);
 }, 15_000);
 
+// -------- crc32 --------
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -48,6 +55,7 @@ function crc32(buf) {
   return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
 }
 
+// -------- frame assembly --------
 function assembleFrame(buf) {
   let total = 0;
   for (let i = 0; i < buf.total; i++) {
@@ -80,6 +88,57 @@ function storeFrame(buf) {
   framesRecv.set(k, (framesRecv.get(k) || 0) + 1);
 }
 
+// -------- message parser --------
+function handleTextMessage(text, rinfo) {
+  const colon = text.indexOf(':');
+  if (colon === -1) return null;
+  const tag = text.slice(0, colon);
+
+  if (tag === 'WHREG') {
+    const parts = text.split(':');
+    if (parts.length < 3) return null;
+    const cid = Number(parts[1]);
+    const key = parts[2];
+    if (!cid || !key) return null;
+    clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
+    return 'WHREG';
+  }
+
+  if (tag === 'WHCUR') {
+    // format: WHCUR:<cid>:<x>:<y>:<visible>
+    const parts = text.split(':');
+    if (parts.length < 5) return null;
+    const cid     = Number(parts[1]);
+    const x       = Number(parts[2]);
+    const y       = Number(parts[3]);
+    const visible = parts[4] === '1';
+
+    if (!cid) return null;
+    if (!isFinite(x) || !isFinite(y)) return null;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+
+    cursorStore.set(cid, { x, y, visible, updatedAt: Date.now() });
+    cursorRecv.set(cid, (cursorRecv.get(cid) || 0) + 1);
+    return 'WHCUR';
+  }
+
+  if (tag === 'WHMON') {
+    const rest = text.slice(6);
+    const c = rest.indexOf(':');
+    if (c === -1) return null;
+    const cid = Number(rest.slice(0, c));
+    if (!cid) return null;
+    try {
+      const list = JSON.parse(rest.slice(c + 1));
+      monitorStore.set(cid, Array.isArray(list) ? list : []);
+    } catch {}
+    return 'WHMON';
+  }
+
+  return null;
+}
+
+// -------- start --------
 export function startUdp({ host, port, onMsg }) {
   udpSock = dgram.createSocket({
     type: 'udp4',
@@ -90,54 +149,22 @@ export function startUdp({ host, port, onMsg }) {
   udpSock.on('message', (msg, rinfo) => {
     if (msg.length > MAX_UDP_MSG) return;
 
+    // binary-framed packets (frames) contain a \n between ASCII header and raw body
     const nl = msg.indexOf(0x0A);
+
     if (nl === -1) {
+      // text-only packet: WHREG, WHCUR, WHMON, or user-defined
       const text = msg.toString('utf8');
-      const firstColon = text.indexOf(':');
-      if (firstColon === -1) return;
-      const tag = text.slice(0, firstColon);
-
-      if (tag === 'WHREG') {
-        const [, cidStr, key] = text.split(':');
-        const cid = Number(cidStr);
-        if (!cid || !key) return;
-        clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
-        return;
-      }
-
-      if (tag === 'WHCUR') {
-        const parts = text.split(':');
-        if (parts.length < 5) return;
-        const cid = Number(parts[1]);
-        const x = Number(parts[2]);
-        const y = Number(parts[3]);
-        const visible = parts[4] === '1';
-        if (!cid || !isFinite(x) || !isFinite(y)) return;
-        cursorStore.set(cid, { x, y, visible, updatedAt: Date.now() });
-        return;
-      }
-
-      if (tag === 'WHMON') {
-        const afterTag = text.slice(6);
-        const colon = afterTag.indexOf(':');
-        if (colon === -1) return;
-        const cid = Number(afterTag.slice(0, colon));
-        if (!cid) return;
-        try {
-          const list = JSON.parse(afterTag.slice(colon + 1));
-          monitorStore.set(cid, Array.isArray(list) ? list : []);
-        } catch {}
-        return;
-      }
-
-      if (onMsg) onMsg(text, rinfo, udpSock);
+      const handled = handleTextMessage(text, rinfo);
+      if (!handled && onMsg) onMsg(text, rinfo, udpSock);
       return;
     }
 
+    // binary-framed frame packet
     const header = msg.slice(0, nl).toString('utf8');
     const body   = msg.slice(nl + 1);
-    const parts = header.split(':');
-    const tag = parts[0];
+    const parts  = header.split(':');
+    const tag    = parts[0];
 
     if (tag === 'WHFRM' || tag === 'WHCAM') {
       const kind = tag === 'WHFRM' ? 'screen' : 'webcam';
@@ -161,7 +188,7 @@ export function startUdp({ host, port, onMsg }) {
       }
 
       if (!buf) {
-        buf = { seq, total, crc, chunks: new Map(), createdAt: Date.now(), lastAt: Date.now(), kind, cid };
+        buf = { seq, total, crc, chunks: new Map(), lastAt: Date.now(), kind, cid };
         frameBuffers.set(key, buf);
       }
 
@@ -179,7 +206,7 @@ export function startUdp({ host, port, onMsg }) {
   setInterval(() => {
     const now = Date.now();
     for (const [key, buf] of frameBuffers) {
-      if (now - buf.lastAt > FRAME_TIMEOUT_MS) {
+      if (now - buf.lastAt > FRAME_TIMEOUT) {
         if (buf.chunks.size === buf.total) storeFrame(buf);
         frameBuffers.delete(key);
       }
@@ -195,6 +222,7 @@ export function startUdp({ host, port, onMsg }) {
   return udpSock;
 }
 
+// -------- sends --------
 export function sendInput(clientId, payload) {
   if (!udpSock) return false;
   const addr = clientAddr.get(clientId);
@@ -215,6 +243,7 @@ export function sendCfg(clientId, payload) {
   return true;
 }
 
+// -------- getters --------
 export function getFrame(clientId)     { const f = frameStore.get(clientId);  return f ? f.jpeg : null; }
 export function getWebcamFrame(cid)    { const f = webcamStore.get(cid);      return f ? f.jpeg : null; }
 export function getMonitors(clientId)  { return monitorStore.get(clientId) || []; }
@@ -223,6 +252,6 @@ export function hasClient(clientId)    { return clientAddr.has(clientId); }
 export function getCursor(clientId) {
   const c = cursorStore.get(clientId);
   if (!c) return null;
-  if (Date.now() - c.updatedAt > CURSOR_STALE_MS) return null;
+  if (Date.now() - c.updatedAt > CURSOR_TTL_MS) return null;
   return { x: c.x, y: c.y, visible: c.visible };
 }
