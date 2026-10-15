@@ -3,6 +3,7 @@ import dgram from 'node:dgram';
 
 const MAX_UDP_MSG = 65500;
 const FRAME_TIMEOUT_MS = 100;
+const CURSOR_STALE_MS = 5000;
 let udpSock = null;
 
 const clientAddr   = new Map();
@@ -10,6 +11,7 @@ const frameStore   = new Map();
 const webcamStore  = new Map();
 const frameBuffers = new Map();
 const monitorStore = new Map();
+const cursorStore  = new Map();
 
 const framesRecv = new Map();
 setInterval(() => {
@@ -25,9 +27,9 @@ setInterval(() => {
   for (const [cid, f] of frameStore)  if (now - f.updatedAt > 30_000) frameStore.delete(cid);
   for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000) webcamStore.delete(cid);
   for (const [k, b] of frameBuffers)  if (now - b.lastAt > FRAME_TIMEOUT_MS * 2) frameBuffers.delete(k);
+  for (const [cid, c] of cursorStore) if (now - c.updatedAt > CURSOR_STALE_MS) cursorStore.delete(cid);
 }, 15_000);
 
-// CRC32 (IEEE) over raw bytes — matches rdp.rs
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -46,7 +48,6 @@ function crc32(buf) {
   return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
 }
 
-// assemble a frame from raw chunks; return null if incomplete or CRC fails
 function assembleFrame(buf) {
   let total = 0;
   for (let i = 0; i < buf.total; i++) {
@@ -61,8 +62,6 @@ function assembleFrame(buf) {
     c.copy(out, off);
     off += c.length;
   }
-
-  // CRC over the raw bytes
   if (buf.crc) {
     const got = crc32(out);
     if (got !== buf.crc) return null;
@@ -91,10 +90,8 @@ export function startUdp({ host, port, onMsg }) {
   udpSock.on('message', (msg, rinfo) => {
     if (msg.length > MAX_UDP_MSG) return;
 
-    // split on first '\n' — header is ASCII, body is raw binary
     const nl = msg.indexOf(0x0A);
     if (nl === -1) {
-      // no binary body — a control message (WHREG, WHMON, WHINP ack, etc.)
       const text = msg.toString('utf8');
       const firstColon = text.indexOf(':');
       if (firstColon === -1) return;
@@ -105,6 +102,18 @@ export function startUdp({ host, port, onMsg }) {
         const cid = Number(cidStr);
         if (!cid || !key) return;
         clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
+        return;
+      }
+
+      if (tag === 'WHCUR') {
+        const parts = text.split(':');
+        if (parts.length < 5) return;
+        const cid = Number(parts[1]);
+        const x = Number(parts[2]);
+        const y = Number(parts[3]);
+        const visible = parts[4] === '1';
+        if (!cid || !isFinite(x) || !isFinite(y)) return;
+        cursorStore.set(cid, { x, y, visible, updatedAt: Date.now() });
         return;
       }
 
@@ -125,17 +134,13 @@ export function startUdp({ host, port, onMsg }) {
       return;
     }
 
-    // binary-framed: header \n body
     const header = msg.slice(0, nl).toString('utf8');
     const body   = msg.slice(nl + 1);
-
     const parts = header.split(':');
     const tag = parts[0];
 
     if (tag === 'WHFRM' || tag === 'WHCAM') {
       const kind = tag === 'WHFRM' ? 'screen' : 'webcam';
-      // format: WHFRM:cid:seq:idx:total:crc   (6 parts after tag → 7 total)
-      // format: WHCAM:cid:seq:idx:total        (5 parts after tag → 6 total)
       if (parts.length < 6) return;
 
       const cid   = Number(parts[1]);
@@ -145,10 +150,7 @@ export function startUdp({ host, port, onMsg }) {
       if (!cid || !total) return;
 
       let crc = null;
-      if (tag === 'WHFRM') {
-        if (parts.length < 6) return;
-        crc = parts[5];
-      }
+      if (tag === 'WHFRM') crc = parts[5];
 
       const key = `${kind}:${cid}`;
       let buf = frameBuffers.get(key);
@@ -172,8 +174,6 @@ export function startUdp({ host, port, onMsg }) {
       }
       return;
     }
-
-    // unknown binary-framed tag — ignore
   });
 
   setInterval(() => {
@@ -219,3 +219,10 @@ export function getFrame(clientId)     { const f = frameStore.get(clientId);  re
 export function getWebcamFrame(cid)    { const f = webcamStore.get(cid);      return f ? f.jpeg : null; }
 export function getMonitors(clientId)  { return monitorStore.get(clientId) || []; }
 export function hasClient(clientId)    { return clientAddr.has(clientId); }
+
+export function getCursor(clientId) {
+  const c = cursorStore.get(clientId);
+  if (!c) return null;
+  if (Date.now() - c.updatedAt > CURSOR_STALE_MS) return null;
+  return { x: c.x, y: c.y, visible: c.visible };
+}

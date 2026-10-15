@@ -12,10 +12,27 @@ const sql = (strings, ...vals) => {
 };
 
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024);
+const UPLOAD_KEEP = 2;
 
 function authKey(key) {
   if (!key) return null;
   return db.prepare(sql`SELECT id, username FROM users WHERE account_key = ?`).get(key);
+}
+
+// keep at most UPLOAD_KEEP uploads per client — newest first.
+// deletes the file from disk and the row from the db for anything older.
+function pruneUploads(clientId) {
+  const rows = db.prepare(sql`
+    SELECT id, stored_name FROM uploads
+    WHERE client_id = ?
+    ORDER BY created_at DESC
+  `).all(clientId);
+
+  for (let i = UPLOAD_KEEP; i < rows.length; i++) {
+    const r = rows[i];
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, r.stored_name)); } catch {}
+    db.prepare(sql`DELETE FROM uploads WHERE id = ?`).run(r.id);
+  }
 }
 
 export function handleRpc(msg, remoteIp) {
@@ -124,6 +141,10 @@ export function handleRpc(msg, remoteIp) {
         INSERT INTO uploads (user_id, client_id, filename, stored_name, size, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(uid, client.id, name, storedName, bytes.length, Date.now());
+
+      // keep only the newest UPLOAD_KEEP — delete anything older
+      pruneUploads(client.id);
+
       return { ok: true, uploadId: Number(info.lastInsertRowid), filename: name, size: bytes.length };
     }
 

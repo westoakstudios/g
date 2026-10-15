@@ -19,6 +19,11 @@ let firstFrameSeen = false;
 
 let consecutiveFails = 0;
 let backoffMs = 0;
+let autoReconnects = 0;
+const AUTO_RECONNECT_LIMIT = 5;
+const AUTO_RECONNECT_TRIGGER = 30;
+
+let cursorTimer = null;
 
 const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
@@ -26,6 +31,13 @@ const PRESETS = {
   high:   { height: 900, quality: 75, fps: 15 },
   native: null,
 };
+
+const stage = $('stage');
+
+const cursorDot = document.createElement('div');
+cursorDot.className = 'cursor-dot';
+cursorDot.style.display = 'none';
+stage.appendChild(cursorDot);
 
 const img = document.createElement('img');
 img.draggable = false;
@@ -56,7 +68,23 @@ img.addEventListener('error', () => {
   $('dot').classList.remove('on');
   consecutiveFails++;
   backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
+
+  if (consecutiveFails >= AUTO_RECONNECT_TRIGGER && autoReconnects < AUTO_RECONNECT_LIMIT) {
+    autoReconnects++;
+    consecutiveFails = 0;
+    doAutoReconnect();
+  }
 });
+
+async function doAutoReconnect() {
+  if (!running) return;
+  running = false;
+  stopCursorPolling();
+  cursorDot.style.display = 'none';
+  try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
+  await new Promise(r => setTimeout(r, 1500));
+  try { await start(); } catch {}
+}
 
 async function loadMonitors() {
   try {
@@ -114,13 +142,17 @@ function syncFpsUI() {
 }
 
 function showSpinner(text) {
-  const stage = $('stage');
-  stage.innerHTML = `<div class="loading"><div class="ring"></div><span>${text}</span></div>`;
+  stage.querySelectorAll('.loading').forEach(e => e.remove());
+  const l = document.createElement('div');
+  l.className = 'loading';
+  l.innerHTML = `<div class="ring"></div><span>${text}</span>`;
+  stage.appendChild(l);
 }
 
 async function start() {
   showSpinner('connecting…');
   firstFrameSeen = false;
+  consecutiveFails = 0;
 
   const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
     method: 'POST',
@@ -129,10 +161,11 @@ async function start() {
   });
   if (!r.ok) { alert('rdp start failed'); return; }
   running = true;
-  const stage = $('stage');
-  stage.innerHTML = '';
+  stage.querySelectorAll('img').forEach(e => e.remove());
   stage.appendChild(img);
   img.style.display = '';
+  stage.appendChild(cursorDot);
+  startCursorPolling();
   loop();
 
   setTimeout(() => {
@@ -146,6 +179,8 @@ async function start() {
 async function stop() {
   if (!running) return;
   running = false;
+  stopCursorPolling();
+  cursorDot.style.display = 'none';
   try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
 }
 
@@ -159,6 +194,8 @@ async function restart() {
 
   try { await fetch(`/api/clients/${clientId}/rdp/stop`, { method: 'POST' }); } catch {}
   running = false;
+  stopCursorPolling();
+  cursorDot.style.display = 'none';
   await new Promise(r => setTimeout(r, 3500));
 
   const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
@@ -169,10 +206,11 @@ async function restart() {
 
   if (r.ok) {
     running = true;
-    const stage = $('stage');
-    stage.innerHTML = '';
+    stage.querySelectorAll('img').forEach(e => e.remove());
     stage.appendChild(img);
     img.style.display = '';
+    stage.appendChild(cursorDot);
+    startCursorPolling();
     loop();
   }
 
@@ -198,10 +236,17 @@ async function loop() {
 
     if (!running) break;
 
+    // if the server has no frame yet, back off a bit so we don't spin /screen
     if (!ok) {
       consecutiveFails++;
       backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
       await new Promise(r => setTimeout(r, backoffMs));
+      if (consecutiveFails >= AUTO_RECONNECT_TRIGGER && autoReconnects < AUTO_RECONNECT_LIMIT) {
+        autoReconnects++;
+        consecutiveFails = 0;
+        doAutoReconnect();
+        break;
+      }
       continue;
     } else {
       consecutiveFails = 0;
@@ -212,6 +257,40 @@ async function loop() {
     const target = 1000 / Math.max(cfg.fps, 1);
     if (elapsed < target) await new Promise(r => setTimeout(r, target - elapsed));
   }
+}
+
+// ---------- cursor ----------
+function startCursorPolling() {
+  stopCursorPolling();
+  cursorTimer = setInterval(pollCursor, 100);
+}
+
+function stopCursorPolling() {
+  if (cursorTimer) { clearInterval(cursorTimer); cursorTimer = null; }
+}
+
+async function pollCursor() {
+  if (!running) return;
+  try {
+    const r = await fetch(`/api/clients/${clientId}/cursor`, { credentials: 'same-origin' });
+    if (r.status === 204) {
+      cursorDot.style.display = 'none';
+      return;
+    }
+    if (!r.ok) return;
+    const c = await r.json();
+    if (!c || !c.visible) {
+      cursorDot.style.display = 'none';
+      return;
+    }
+    const rect = img.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    const x = (rect.left - stageRect.left) + c.x * rect.width;
+    const y = (rect.top - stageRect.top)  + c.y * rect.height;
+    cursorDot.style.left = `${x}px`;
+    cursorDot.style.top  = `${y}px`;
+    cursorDot.style.display = 'block';
+  } catch {}
 }
 
 $('preset').addEventListener('change', async (e) => {

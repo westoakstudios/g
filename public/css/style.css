@@ -966,3 +966,18 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .reveal-wrap { display: flex; align-items: center; gap: 12px; }
 .reveal-wrap .val { flex: 1; min-width: 0; word-break: break-all; }
 .reveal-wrap button { margin: 0; }
+/* ---------- remote cursor dot ---------- */
+.stage { position: relative; }
+.stage .cursor-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 12px rgba(239,68,68,.85);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  transition: left .08s linear, top .08s linear;
+  will-change: left, top;
+}

