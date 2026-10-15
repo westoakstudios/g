@@ -96,7 +96,7 @@ function fmtAgo(ts) {
 
 function fmtPing(ms) {
   if (ms === null || ms === undefined) return '—';
-  return `${Math.round(ms)} ms`;
+  return `${ms} ms`;
 }
 
 function esc(s) {
@@ -115,6 +115,11 @@ function countryCell(c) {
   if (!c || !c.name) return `<span class="country"><span class="country-empty">—</span></span>`;
   const flag = c.flag ? `<span class="country-flag">${esc(c.flag)}</span>` : '';
   return `<span class="country">${flag}<span class="country-name">${esc(c.name)}</span></span>`;
+}
+
+function privBadge(p) {
+  const label = esc(p || 'admin');
+  return `<span class="priv-badge">${label}</span>`;
 }
 
 // ---------- HOSTS ----------
@@ -256,15 +261,15 @@ async function loadRemote() {
 
 function buildRemoteRow(c) {
   const el = document.createElement('div');
-  el.className = 'row';
+  el.className = 'row remote-row';
   el.innerHTML = `
     <span class="dot on"></span>
     <span class="host">${esc(c.hostname)}</span>
     <span class="ip">${esc(c.ip)}</span>
     ${countryCell(c.country)}
-    <span class="seen">${fmtAgo(c.lastSeen)}</span>
-    <span class="priv">${esc(c.privileges || 'admin')}</span>
+    <span class="priv">${privBadge(c.privileges)}</span>
     <span class="ping">${fmtPing(c.ping)}</span>
+    <span class="seen">${fmtAgo(c.lastSeen)}</span>
     <span class="actions" style="position:relative">
       <button class="ghost mini" data-gear title="actions" style="padding:4px 10px">⚙</button>
     </span>`;

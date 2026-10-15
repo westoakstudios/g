@@ -4,16 +4,19 @@ import dgram from 'node:dgram';
 const MAX_UDP_MSG   = 65500;
 const FRAME_TIMEOUT = 100;
 const CURSOR_TTL_MS = 8000;
-const WHREG_TTL_MS  = 30000;
+const WHREG_TTL_MS  = 60000;
+const PING_EVERY_MS = 5000;
+const PING_TTL_MS   = 15000;
 let udpSock = null;
 
-const clientAddr   = new Map();
-const frameStore   = new Map();
-const webcamStore  = new Map();
-const frameBuffers = new Map();
-const monitorStore = new Map();
-const cursorStore  = new Map();
-const whregInfo    = new Map();   // cid -> { lastAt, interval }
+const clientAddr     = new Map();   // cid -> {address, port}      (from RDP WHREG)
+const clientPingAddr = new Map();   // cid -> {address, port, lastAt} (from WHREGP)
+const frameStore     = new Map();
+const webcamStore    = new Map();
+const frameBuffers   = new Map();
+const monitorStore   = new Map();
+const cursorStore    = new Map();
+const pingStore      = new Map();   // cid -> { rtt, updatedAt }
 
 const framesRecv = new Map();
 const cursorRecv = new Map();
@@ -34,8 +37,19 @@ setInterval(() => {
   for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000)   webcamStore.delete(cid);
   for (const [k, b] of frameBuffers)  if (now - b.lastAt   > FRAME_TIMEOUT * 2) frameBuffers.delete(k);
   for (const [cid, c] of cursorStore) if (now - c.updatedAt > CURSOR_TTL_MS)    cursorStore.delete(cid);
-  for (const [cid, w] of whregInfo)   if (now - w.lastAt   > WHREG_TTL_MS)     whregInfo.delete(cid);
+  for (const [cid, p] of clientPingAddr) if (now - p.lastAt > WHREG_TTL_MS)     clientPingAddr.delete(cid);
+  for (const [cid, p] of pingStore)   if (now - p.updatedAt > PING_TTL_MS)      pingStore.delete(cid);
 }, 15_000);
+
+// background ping loop: every 5s, ping every known ping address
+setInterval(() => {
+  if (!udpSock) return;
+  const now = Date.now();
+  for (const [cid, addr] of clientPingAddr) {
+    const pkt = Buffer.from(`WHPING:${cid}:${now}`);
+    udpSock.send(pkt, addr.port, addr.address, () => {});
+  }
+}, PING_EVERY_MS);
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -98,14 +112,31 @@ function handleTextMessage(text, rinfo) {
     const cid = Number(parts[1]);
     const key = parts[2];
     if (!cid || !key) return null;
-
-    const now = Date.now();
-    const prev = whregInfo.get(cid);
-    const interval = (prev && prev.lastAt) ? (now - prev.lastAt) : null;
-    whregInfo.set(cid, { lastAt: now, interval });
-
     clientAddr.set(cid, { address: rinfo.address, port: rinfo.port });
     return 'WHREG';
+  }
+
+  if (tag === 'WHREGP') {
+    const parts = text.split(':');
+    if (parts.length < 3) return null;
+    const cid = Number(parts[1]);
+    const key = parts[2];
+    if (!cid || !key) return null;
+    clientPingAddr.set(cid, { address: rinfo.address, port: rinfo.port, lastAt: Date.now() });
+    return 'WHREGP';
+  }
+
+  if (tag === 'WHPONG') {
+    const parts = text.split(':');
+    if (parts.length < 3) return null;
+    const cid = Number(parts[1]);
+    const sentTs = Number(parts[2]);
+    if (!cid || !isFinite(sentTs)) return null;
+    const rtt = Date.now() - sentTs;
+    if (rtt >= 0 && rtt < 60000) {
+      pingStore.set(cid, { rtt, updatedAt: Date.now() });
+    }
+    return 'WHPONG';
   }
 
   if (tag === 'WHCUR') {
@@ -254,8 +285,8 @@ export function getCursor(clientId) {
 }
 
 export function getPing(clientId) {
-  const w = whregInfo.get(clientId);
-  if (!w || w.interval === null) return null;
-  if (Date.now() - w.lastAt > 5000) return null;
-  return w.interval;
+  const p = pingStore.get(clientId);
+  if (!p) return null;
+  if (Date.now() - p.updatedAt > PING_TTL_MS) return null;
+  return Math.round(p.rtt);
 }
