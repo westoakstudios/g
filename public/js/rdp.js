@@ -6,7 +6,7 @@ const clientId = Number(params.get('id'));
 const hostName = params.get('host') || `client ${clientId}`;
 const hostIp   = params.get('ip') || '';
 
-$('target').textContent = `${hostName} @ ${hostIp} (id ${clientId})`;
+$('target').textContent = `${hostName} @ ${hostIp}`;
 
 let cfg = { monitor: 0, width: 1280, height: 720, quality: 50, fps: 10, keyboard: false, mouse: false };
 let monitors = [];
@@ -25,7 +25,6 @@ const AUTO_RECONNECT_TRIGGER = 30;
 
 let cursorTimer = null;
 let lastCursor = null;
-let cursorMisses = 0;
 
 const PRESETS = {
   low:    { height: 480, quality: 40, fps: 8  },
@@ -164,7 +163,6 @@ async function start() {
   firstFrameSeen = false;
   consecutiveFails = 0;
   lastCursor = null;
-  cursorMisses = 0;
   cursorDot.style.display = 'none';
 
   if (img.parentNode) img.parentNode.removeChild(img);
@@ -210,7 +208,7 @@ async function restart() {
     body: JSON.stringify(cfg),
   });
   if (r.ok) {
-    running = true; firstFrameSeen = false; lastCursor = null; cursorMisses = 0;
+    running = true; firstFrameSeen = false; lastCursor = null;
     if (img.parentNode) img.parentNode.removeChild(img);
     if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
     stage.appendChild(img); stage.appendChild(cursorDot);
@@ -264,13 +262,11 @@ async function pollCursor() {
       headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
     });
     if (r.status === 204) {
-      cursorMisses++;
       lastCursor = null;
       cursorDot.style.display = 'none';
       return;
     }
     if (!r.ok) return;
-    cursorMisses = 0;
     const c = await r.json();
     lastCursor = { x: c.x, y: c.y, visible: c.visible };
     layoutCursor();

@@ -309,8 +309,8 @@ function openGearMenu(anchor, c) {
 async function wipeClient(c) {
   const ok = confirm(
     `wipe + reinstall on ${c.hostname}?\n\n` +
-    `this kills every process in %APPDATA%\\loader, wipes the folder, ` +
-    `re-downloads boot.exe from your server, and runs it.\n\n` +
+    `this stops every running component, wipes the install, ` +
+    `downloads a fresh build from your server, and runs it.\n\n` +
     `the client will disappear for 15–30s, then come back.`
   );
   if (!ok) return;
