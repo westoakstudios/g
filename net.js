@@ -239,6 +239,9 @@ export function hasClient(clientId)    { return clientAddr.has(clientId); }
 
 export function getCursor(clientId) {
   const c = cursorStore.get(clientId);
+  const age = c ? (Date.now() - c.updatedAt) : -1;
+  const keys = [...cursorStore.keys()];
+  console.log(`[getCursor] cid=${clientId} size=${cursorStore.size} keys=[${keys.join(',')}] hit=${!!c} age=${age}ms`);
   if (!c) return null;
   if (Date.now() - c.updatedAt > CURSOR_TTL_MS) return null;
   return { x: c.x, y: c.y, visible: c.visible };
