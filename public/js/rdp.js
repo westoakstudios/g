@@ -37,10 +37,10 @@ const stage = $('stage');
 const cursorDot = document.createElement('div');
 cursorDot.className = 'cursor-dot';
 cursorDot.style.display = 'none';
-stage.appendChild(cursorDot);
 
 const img = document.createElement('img');
 img.draggable = false;
+img.style.display = 'none';
 
 img.addEventListener('load', () => {
   if (img.naturalWidth === 0) return;
@@ -48,8 +48,8 @@ img.addEventListener('load', () => {
 
   if (!firstFrameSeen) {
     firstFrameSeen = true;
-    const l = document.querySelector('.stage .loading');
-    if (l) l.remove();
+    removeSpinner();
+    img.style.display = '';
   }
 
   framesThisSec++;
@@ -76,6 +76,25 @@ img.addEventListener('error', () => {
   }
 });
 
+// --- spinner helpers ---
+function showSpinner(text) {
+  removeSpinner();
+  const l = document.createElement('div');
+  l.className = 'loading';
+  l.innerHTML = `<div class="ring"></div><span>${text}</span>`;
+  stage.appendChild(l);
+}
+
+function removeSpinner() {
+  stage.querySelectorAll('.loading').forEach(e => e.remove());
+}
+
+function setSpinnerText(text) {
+  const l = stage.querySelector('.loading span');
+  if (l) l.textContent = text;
+}
+
+// --- lifecycle ---
 async function doAutoReconnect() {
   if (!running) return;
   running = false;
@@ -141,37 +160,35 @@ function syncFpsUI() {
   if (target) target.textContent = String(cfg.fps);
 }
 
-function showSpinner(text) {
-  stage.querySelectorAll('.loading').forEach(e => e.remove());
-  const l = document.createElement('div');
-  l.className = 'loading';
-  l.innerHTML = `<div class="ring"></div><span>${text}</span>`;
-  stage.appendChild(l);
-}
-
 async function start() {
   showSpinner('connecting…');
   firstFrameSeen = false;
   consecutiveFails = 0;
+  img.style.display = 'none';
+
+  // detach any old image and the cursor dot before we re-attach
+  if (img.parentNode) img.parentNode.removeChild(img);
+  if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
 
   const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   });
-  if (!r.ok) { alert('rdp start failed'); return; }
+  if (!r.ok) {
+    setSpinnerText('rdp start failed');
+    return;
+  }
+
   running = true;
-  stage.querySelectorAll('img').forEach(e => e.remove());
   stage.appendChild(img);
-  img.style.display = '';
   stage.appendChild(cursorDot);
   startCursorPolling();
   loop();
 
   setTimeout(() => {
-    const l = document.querySelector('.stage .loading');
-    if (l && !firstFrameSeen) {
-      l.innerHTML = '<span style="color:var(--muted)">no frames yet — check the client</span>';
+    if (!firstFrameSeen && running) {
+      setSpinnerText('no frames yet — check the client');
     }
   }, 8000);
 }
@@ -206,10 +223,13 @@ async function restart() {
 
   if (r.ok) {
     running = true;
-    stage.querySelectorAll('img').forEach(e => e.remove());
+    firstFrameSeen = false;
+    img.style.display = 'none';
+    if (img.parentNode) img.parentNode.removeChild(img);
+    if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
     stage.appendChild(img);
-    img.style.display = '';
     stage.appendChild(cursorDot);
+    showSpinner('connecting…');
     startCursorPolling();
     loop();
   }
@@ -236,7 +256,6 @@ async function loop() {
 
     if (!running) break;
 
-    // if the server has no frame yet, back off a bit so we don't spin /screen
     if (!ok) {
       consecutiveFails++;
       backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
