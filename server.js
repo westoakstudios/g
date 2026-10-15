@@ -497,9 +497,11 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
 app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
+
   if (!client) return res.status(404).json({ error: 'client not found' });
 
   const c = getCursor(cid);
+  console.log(`[cursor] id=${cid} getCursor=${c ? JSON.stringify(c) : 'null'}`);
   if (!c) return res.status(204).end();
   res.json(c);
 });
