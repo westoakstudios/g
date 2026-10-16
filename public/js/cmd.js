@@ -11,7 +11,9 @@ if (!['cmd', 'powershell'].includes(shell)) shell = 'cmd';
 
 const blocks = new Map();
 let lastSeenId = 0;
-let clearedAt = 0;    // commands with created_at < clearedAt are hidden
+let clearedAt = 0;
+let hiddenIds = new Set();
+let pollGen = 0;
 let pollTimer = null;
 
 $('target').textContent = `${target} @ ${ip}`;
@@ -27,11 +29,26 @@ function paintChrome() {
 }
 
 function clearTerm() {
+  // invalidate any in-flight poll so it can't render into the fresh terminal
+  pollGen++;
+
   clearedAt = Date.now();
+  // mark every id we've ever seen as hidden — belt and braces
+  for (const id of blocks.keys()) hiddenIds.add(id);
+
   $('term').innerHTML = '<div class="empty">type a command below and press enter</div>';
   blocks.clear();
   lastSeenId = 0;
-  // don't call pollOnce here — the next scheduled poll will run and honor clearedAt
+}
+
+function isHidden(row) {
+  if (hiddenIds.has(row.id)) return true;
+  const ts = Number(row.created_at) || 0;
+  if (ts && ts < clearedAt) {
+    hiddenIds.add(row.id);
+    return true;
+  }
+  return false;
 }
 
 function ensureNotEmpty() {
@@ -106,17 +123,23 @@ async function send(line) {
 
 async function pollOnce() {
   if (!clientId) return;
+  const myGen = pollGen;
   try {
-    const r = await fetch(`/api/clients/${clientId}/commands`);
+    const r = await fetch(`/api/clients/${clientId}/commands?t=${Date.now()}`, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
     if (!r.ok) return;
     const rows = await r.json();
 
+    // a clear() happened while we were fetching — discard this batch entirely
+    if (myGen !== pollGen) return;
+
     const asc = rows.slice().reverse();
     for (const row of asc) {
-      // hide anything cleared
-      if (row.created_at && row.created_at < clearedAt) continue;
-
+      if (isHidden(row)) continue;
       if (row.shell !== shell) continue;
+
       let b = blocks.get(row.id);
 
       if (!b) {
@@ -154,10 +177,11 @@ document.querySelectorAll('.shelltabs button').forEach((b) => {
     if (next === shell) return;
     shell = next;
     paintChrome();
+    // mark all currently-known ids as hidden so shell-switch starts clean too
+    for (const id of blocks.keys()) hiddenIds.add(id);
     $('term').innerHTML = '';
     blocks.clear();
     lastSeenId = 0;
-    // don't reset clearedAt — switching shells shouldn't reveal old commands
     ensureNotEmpty();
     pollOnce();
     $('cmdline').focus();
