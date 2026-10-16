@@ -19,8 +19,6 @@ function authKey(key) {
   return db.prepare(sql`SELECT id, username FROM users WHERE account_key = ?`).get(key);
 }
 
-// keep at most UPLOAD_KEEP uploads per client — newest first.
-// deletes the file from disk and the row from the db for anything older.
 function pruneUploads(clientId) {
   const rows = db.prepare(sql`
     SELECT id, stored_name FROM uploads
@@ -64,6 +62,7 @@ export function handleRpc(msg, remoteIp) {
     }
 
     case 'pull': {
+      // resolve which client this is
       const clientId = Number(msg.clientId || 0);
       let client = null;
       if (clientId) {
@@ -75,25 +74,28 @@ export function handleRpc(msg, remoteIp) {
           ORDER BY last_seen DESC LIMIT 1
         `).get(uid, ip);
       }
-      if (client) {
-        db.prepare(sql`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`)
-          .run(Date.now(), ip, client.id);
-      }
 
+      // no client on file → nothing to hand out
+      if (!client) return { id: null, clientId: null };
+
+      db.prepare(sql`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`)
+        .run(Date.now(), ip, client.id);
+
+      // pull a pending command for THIS client only
       const c = db.prepare(sql`
         SELECT id, shell, line FROM commands
-        WHERE user_id = ? AND status = 'pending'
+        WHERE user_id = ? AND client_id = ? AND status = 'pending'
         ORDER BY created_at ASC LIMIT 1
-      `).get(uid);
+      `).get(uid, client.id);
 
-      if (!c) return { id: null, clientId: client ? Number(client.id) : null };
+      if (!c) return { id: null, clientId: Number(client.id) };
 
       db.prepare(sql`UPDATE commands SET status = 'sent' WHERE id = ?`).run(c.id);
       return {
         id: Number(c.id),
         shell: c.shell,
         line: c.line,
-        clientId: client ? Number(client.id) : null,
+        clientId: Number(client.id),
       };
     }
 
@@ -142,7 +144,6 @@ export function handleRpc(msg, remoteIp) {
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(uid, client.id, name, storedName, bytes.length, Date.now());
 
-      // keep only the newest UPLOAD_KEEP — delete anything older
       pruneUploads(client.id);
 
       return { ok: true, uploadId: Number(info.lastInsertRowid), filename: name, size: bytes.length };
