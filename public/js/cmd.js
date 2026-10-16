@@ -9,14 +9,14 @@ const ip       = params.get('ip') || '';
 let shell = (params.get('shell') || 'cmd').toLowerCase();
 if (!['cmd', 'powershell'].includes(shell)) shell = 'cmd';
 
-// id -> { el, out, status }
 const blocks = new Map();
 let lastSeenId = 0;
+let clearedAt = 0;    // commands with created_at < clearedAt are hidden
 let pollTimer = null;
 
 $('target').textContent = `${target} @ ${ip}`;
 
-function prompt() { return shell === 'powershell' ? 'PS>' : 'C:\\>'; }
+function prompt() { return shell === 'powershell' ? 'PS C:\\>' : 'C:\\>'; }
 
 function paintChrome() {
   document.querySelectorAll('.shelltabs button').forEach((b) => {
@@ -27,10 +27,11 @@ function paintChrome() {
 }
 
 function clearTerm() {
+  clearedAt = Date.now();
   $('term').innerHTML = '<div class="empty">type a command below and press enter</div>';
   blocks.clear();
   lastSeenId = 0;
-  pollOnce();
+  // don't call pollOnce here — the next scheduled poll will run and honor clearedAt
 }
 
 function ensureNotEmpty() {
@@ -76,7 +77,6 @@ async function send(line) {
   if (!line.trim()) return;
   ensureNotEmpty();
 
-  // optimistic block for immediate feedback
   const optimistic = makeBlock(line);
   $('term').appendChild(optimistic.el);
   optimistic.el.dataset.pending = '1';
@@ -94,7 +94,6 @@ async function send(line) {
       optimistic.statEl.textContent = `send failed: ${d.error || r.status}`;
       return;
     }
-    // server gives us an id — attach it so we can pair with output
     optimistic.serverId = d.commandId;
     blocks.set(d.commandId, optimistic);
     lastSeenId = Math.max(lastSeenId, d.commandId);
@@ -114,11 +113,13 @@ async function pollOnce() {
 
     const asc = rows.slice().reverse();
     for (const row of asc) {
-      if (row.shell !== shell) continue;   // only this shell's history in view
+      // hide anything cleared
+      if (row.created_at && row.created_at < clearedAt) continue;
+
+      if (row.shell !== shell) continue;
       let b = blocks.get(row.id);
 
       if (!b) {
-        // command we didn't send from this window (another tab, or reload) — render it
         ensureNotEmpty();
         const blk = makeBlock(row.line);
         if (row.status === 'pending' || row.status === 'sent') {
@@ -135,7 +136,6 @@ async function pollOnce() {
         continue;
       }
 
-      // existing block — update status if done
       if (row.status === 'done' && b.statEl) {
         b.outEl.textContent = row.output || '(no output)';
         b.statEl.remove();
@@ -154,10 +154,10 @@ document.querySelectorAll('.shelltabs button').forEach((b) => {
     if (next === shell) return;
     shell = next;
     paintChrome();
-    // rebuild the view for the new shell — clear visual, refetch
     $('term').innerHTML = '';
     blocks.clear();
     lastSeenId = 0;
+    // don't reset clearedAt — switching shells shouldn't reveal old commands
     ensureNotEmpty();
     pollOnce();
     $('cmdline').focus();
