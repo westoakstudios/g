@@ -12,6 +12,7 @@ const sql = (strings, ...vals) => {
 };
 
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024);
+const MAX_RESULT = 32 * 1024 * 1024;
 const UPLOAD_KEEP = 2;
 
 function authKey(key) {
@@ -62,7 +63,6 @@ export function handleRpc(msg, remoteIp) {
     }
 
     case 'pull': {
-      // resolve which client this is
       const clientId = Number(msg.clientId || 0);
       let client = null;
       if (clientId) {
@@ -75,13 +75,11 @@ export function handleRpc(msg, remoteIp) {
         `).get(uid, ip);
       }
 
-      // no client on file → nothing to hand out
       if (!client) return { id: null, clientId: null };
 
       db.prepare(sql`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`)
         .run(Date.now(), ip, client.id);
 
-      // pull a pending command for THIS client only
       const c = db.prepare(sql`
         SELECT id, shell, line FROM commands
         WHERE user_id = ? AND client_id = ? AND status = 'pending'
@@ -104,7 +102,7 @@ export function handleRpc(msg, remoteIp) {
       const info = db.prepare(sql`
         UPDATE commands SET output = ?, status = 'done'
         WHERE id = ? AND user_id = ?
-      `).run(String(msg.output || '').slice(0, 65536), msg.id, uid);
+      `).run(String(msg.output || '').slice(0, MAX_RESULT), msg.id, uid);
       if (info.changes === 0) return { error: 'not found' };
       return { ok: true };
     }

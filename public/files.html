@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WeedHack — files</title>
+<link rel="icon" type="image/png" href="/Weedhack.png">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="window">
+  <div class="topbar">
+    <span class="dot on" id="dot"></span>
+    <span class="target" id="target">—</span>
+    <span class="spacer"></span>
+    <button id="up" class="ghost">↑ up</button>
+    <button id="refresh" class="ghost">↻ refresh</button>
+    <button id="mkdir" class="ghost">+ folder</button>
+    <button id="upload" class="ghost" style="border-color:var(--green);color:var(--green)">↑ upload</button>
+    <input type="file" id="file-input" style="display:none">
+    <button id="close" class="danger">close</button>
+  </div>
+  <div class="filemgr-bar">
+    <span class="lbl">path</span>
+    <input id="path" class="fm-path" value="C:\" spellcheck="false" autocomplete="off">
+    <button id="go" class="ghost mini">go</button>
+  </div>
+  <div class="filemgr-bar">
+    <span class="lbl">drives</span>
+    <div id="drives" class="drives"><span class="muted">loading…</span></div>
+  </div>
+  <div class="filemgr-list" id="list">
+    <div class="fm-empty">loading…</div>
+  </div>
+  <div class="statusbar"><span id="status">ready</span></div>
+</div>
+<script src="/js/files.js"></script>
+</body>
+</html>
