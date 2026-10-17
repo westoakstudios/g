@@ -997,3 +997,78 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
   color: var(--muted);
   text-align: right;
 }
+/* ---------- PREMIUM FEEL OVERRIDES ---------- */
+
+/* 1. Tabular numbers everywhere so stats don't jitter */
+body, .tile .v, .hero-tile .v, .row .ping, .row .ip, .fps {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 2. Crisper typography contrast */
+.tile .k, .hero-tile .k, .lbl {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  font-weight: 600;
+}
+.tile .v, .hero-tile .v, .row .host {
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* 3. The 1px Inner Highlight (makes panels look like glass) */
+.tile, .hero-tile, .rows, .builder-card, .card {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* 4. Glassmorphism for dropdowns/menus */
+.gear-menu {
+  background: rgba(10, 10, 15, 0.85) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 5. Buttons feel tactile */
+button {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+button:active:not([disabled]) {
+  transform: scale(0.97) !important;
+}
+
+/* 6. Active Sidebar Tab Indicator */
+.nav a {
+  position: relative;
+}
+.nav a.active::after {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 20%;
+  height: 60%;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 0 10px var(--accent);
+}
+
+/* 7. SVG Icon alignment */
+.icon {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  flex-shrink: 0;
+}
+
+/* 8. Topbar buttons with icons */
+.topbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
