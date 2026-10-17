@@ -639,3 +639,19 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .log .t { color: var(--muted); font-size: 11px; font-weight: 600; }
 
 .stage .cursor-dot { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 12px rgba(239,68,68,.85); pointer-events: none; transform: translate(-50%, -50%); z-index: 5; transition: left .06s linear, top .06s linear; will-change: left, top; }
+/* File manager list rows */
+#file-list > div {
+  transition: all 0.15s ease;
+}
+#file-list > div:hover {
+  background: var(--panel-2) !important;
+  border-color: var(--line-3) !important;
+}
+#file-list button:hover {
+  background: rgba(255,255,255,0.05) !important;
+}
+
+/* Ensure drawer content can scroll */
+.drawer-content {
+  scrollbar-width: thin;
+}
