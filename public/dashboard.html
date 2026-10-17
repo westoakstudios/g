@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>WeedHack — dashboard</title>
-<link rel="icon" type="image/png" href="/Weedhack.png">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
 <div class="shell">
   <aside class="side">
     <div class="brand">
-      <img class="logo" src="/Weedhack.png" alt="WeedHack">
+      <span class="brand-logo"><svg viewBox="0 0 24 24"><path d="M4 20 L8 4 L12 14 L16 4 L20 20"/></svg></span>
       <span class="w">Weed</span><span class="h">Hack</span>
     </div>
 
@@ -232,7 +232,6 @@
   </main>
 </div>
 
-<!-- Drawer System for Host Details -->
 <div class="drawer-backdrop" id="drawer-backdrop"></div>
 <div class="drawer" id="drawer">
   <div class="drawer-head">
@@ -241,9 +240,7 @@
       <svg class="icon" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
     </button>
   </div>
-  <div class="drawer-content" id="drawer-content">
-    <!-- content injected by dashboard.js -->
-  </div>
+  <div class="drawer-content" id="drawer-content"></div>
 </div>
 
 <script src="/js/dashboard.js"></script>

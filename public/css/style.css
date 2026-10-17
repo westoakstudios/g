@@ -65,6 +65,42 @@ a:hover { color: var(--accent-2); }
 ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 8px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
 
+/* ICON FIX — one base rule makes every <svg class="icon"> render properly */
+.icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+/* BRAND LOGO — inline svg mark replacing the missing /Weedhack.png image */
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #1e1e24, #141417);
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.brand-logo svg {
+  width: 22px;
+  height: 22px;
+  stroke: var(--accent);
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.side .brand .brand-logo { width: 32px; height: 32px; }
+.side .brand .brand-logo svg { width: 18px; height: 18px; }
+
 /* ---------- brand ---------- */
 .brand {
   display: inline-flex;
@@ -76,13 +112,6 @@ a:hover { color: var(--accent-2); }
   color: var(--text);
   margin-bottom: 14px;
   line-height: 1;
-}
-.brand .logo {
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  border-radius: 10px;
-  flex-shrink: 0;
 }
 .brand .w { color: var(--text); }
 .brand .h { color: var(--text); }
@@ -177,7 +206,6 @@ button:hover:not([disabled]) {
 button:active:not([disabled]) { transform: scale(0.98); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* soft zinc primary button */
 button.primary {
   background: #e4e4e7;
   color: #09090b;
@@ -265,7 +293,6 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
   overflow-y: auto;
 }
 .side .brand { font-size: 17px; margin-bottom: 22px; padding: 0 10px; }
-.side .brand .logo { width: 32px; height: 32px; }
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav .group {
@@ -338,7 +365,6 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .page-head .sub { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
 .page-head .actions { display: flex; gap: 8px; align-items: center; }
 
-/* tiles */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .tile {
   background: var(--panel);
@@ -406,7 +432,6 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .toolbar .grow { flex: 1; }
 .toolbar .count { color: var(--muted); font-size: 12px; }
 
-/* rows */
 .rows {
   display: flex;
   flex-direction: column;
@@ -462,7 +487,16 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 }
 
 .empty { padding: 48px 20px; text-align: center; color: var(--muted); font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.empty svg { width: 32px; height: 32px; stroke: var(--muted-3); margin-bottom: 8px; }
+.empty svg {
+  width: 32px;
+  height: 32px;
+  stroke: var(--muted-3);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  margin-bottom: 8px;
+}
 
 .section { display: none; }
 .section.active { display: block; }
@@ -639,118 +673,9 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .log .t { color: var(--muted); font-size: 11px; font-weight: 600; }
 
 .stage .cursor-dot { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 12px rgba(239,68,68,.85); pointer-events: none; transform: translate(-50%, -50%); z-index: 5; transition: left .06s linear, top .06s linear; will-change: left, top; }
-/* File manager list rows */
-#file-list > div {
-  transition: all 0.15s ease;
-}
-#file-list > div:hover {
-  background: var(--panel-2) !important;
-  border-color: var(--line-3) !important;
-}
-#file-list button:hover {
-  background: rgba(255,255,255,0.05) !important;
-}
 
-/* Ensure drawer content can scroll */
-.drawer-content {
-  scrollbar-width: thin;
-}
-/* ---------- file manager ---------- */
-.filemgr-bar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 16px; flex-shrink: 0;
-  background: var(--bg-2); border-bottom: 1px solid var(--line);
-}
-.filemgr-bar .lbl {
-  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--muted-2); font-weight: 600; min-width: 44px;
-}
-.filemgr-bar .fm-path {
-  flex: 1; min-width: 0; margin: 0;
-  padding: 7px 12px; font-size: 12px;
-  font-family: var(--mono);
-  background: var(--bg); border: 1px solid var(--line);
-  border-radius: var(--r-md); color: var(--text);
-}
-.filemgr-bar .fm-path:focus {
-  border-color: var(--line-3);
-  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(108, 182, 255, 0.15);
-}
-.filemgr-bar button { margin: 0; padding: 6px 12px; font-size: 12px; width: auto; }
+#file-list > div { transition: all 0.15s ease; }
+#file-list > div:hover { background: var(--panel-2) !important; border-color: var(--line-3) !important; }
+#file-list button:hover { background: rgba(255,255,255,0.05) !important; }
 
-.drives {
-  display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
-  flex: 1;
-}
-.drives .muted { color: var(--muted-2); font-size: 11px; }
-.drives button {
-  width: auto; margin: 0; padding: 4px 12px;
-  font-size: 11px; font-family: var(--mono); font-weight: 600;
-  background: var(--panel); border: 1px solid var(--line);
-  color: var(--text-2); border-radius: var(--r-sm); cursor: pointer;
-  transition: background .12s, border-color .12s, color .12s;
-}
-.drives button:hover { background: var(--panel-2); border-color: var(--line-3); color: var(--text); }
-.drives button.active {
-  background: var(--accent); border-color: var(--accent); color: #09090b;
-}
-
-.filemgr-list {
-  flex: 1; min-height: 0; overflow-y: auto;
-  background: var(--bg);
-}
-
-.fm-head {
-  display: grid;
-  grid-template-columns: 1fr 100px 80px;
-  gap: 12px; padding: 9px 20px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-2);
-  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--muted-2); font-weight: 600;
-  position: sticky; top: 0; z-index: 1;
-}
-.fm-row {
-  display: grid;
-  grid-template-columns: 1fr 100px 80px;
-  gap: 12px; padding: 9px 20px;
-  border-bottom: 1px solid var(--line);
-  font-size: 13px; align-items: center;
-  transition: background .1s; cursor: default;
-}
-.fm-row:hover { background: var(--panel); }
-.fm-row:last-child { border-bottom: none; }
-.fm-row.dir { cursor: pointer; }
-.fm-row .nm {
-  display: flex; align-items: center; gap: 10px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text); min-width: 0;
-}
-.fm-row .nm svg {
-  width: 15px; height: 15px; flex-shrink: 0;
-  fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
-}
-.fm-row.dir .nm { font-weight: 600; }
-.fm-row.dir .nm svg { stroke: var(--accent); }
-.fm-row:not(.dir) .nm svg { stroke: var(--muted); }
-.fm-row .sz {
-  color: var(--muted); font-size: 11px;
-  font-family: var(--mono); text-align: right;
-}
-.fm-row .ac { display: flex; gap: 6px; justify-content: flex-end; }
-.fm-row .ac button { padding: 3px 9px; font-size: 11px; min-width: 28px; margin: 0; width: auto; }
-
-.fm-empty {
-  padding: 48px 20px; text-align: center;
-  color: var(--muted); font-size: 12px;
-}
-.fm-err {
-  padding: 24px 20px; color: var(--red); font-size: 12px;
-  font-family: var(--mono); word-break: break-word;
-}
-
-.statusbar {
-  flex-shrink: 0; padding: 8px 20px;
-  background: var(--bg-2); border-top: 1px solid var(--line);
-  font-size: 11px; color: var(--muted); font-family: var(--mono);
-}
+.drawer-content { scrollbar-width: thin; }
