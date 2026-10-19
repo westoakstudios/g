@@ -58,7 +58,6 @@ async function poll() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) {
       $('status').textContent = `error: ${d.error || r.status}`;
-      if (d.raw) console.error('Raw output:', d.raw);
       return;
     }
     state.data = d;
@@ -142,7 +141,6 @@ document.querySelectorAll('.gauge').forEach(el => {
     
     let sortType = el.dataset.sort;
     if (sortType === 'gpu') {
-      // GPU is system-wide, fallback to CPU sorting for processes
       sortType = 'cpu';
     }
     
