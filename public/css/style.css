@@ -785,3 +785,40 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .kill-btn:active {
   transform: scale(0.9);
 }
+/* ---------- process manager interactive elements ---------- */
+.gauge {
+  cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.gauge:hover {
+  background: var(--panel-2);
+  border-color: var(--line-2);
+}
+.gauge.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim), inset 0 1px 0 rgba(255,255,255,0.03);
+}
+
+.procs-table th:nth-child(6) { text-align: center; }
+.procs-table td.paction {
+  text-align: center;
+  padding: 4px 16px;
+}
+.kill-btn {
+  background: transparent;
+  border: 1px solid rgba(248,113,113,.35);
+  color: var(--red);
+  border-radius: var(--r-sm);
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .15s;
+}
+.kill-btn:hover {
+  background: rgba(248,113,113,.15);
+  border-color: var(--red);
+}
+.kill-btn:active {
+  transform: scale(0.9);
+}
