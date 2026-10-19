@@ -1,5 +1,6 @@
 // language: JavaScript, file: builder/sysinfo.js
 // samples cpu/gpu/ram + top processes on a client via PowerShell.
+// reuses /api/clients/:id/exec pipeline. inflight map prevents pileup.
 
 import db from '../db.js';
 
@@ -24,7 +25,7 @@ $cpu=0;$gpu=$null
 if($c -and $c.Count -ge 2){$last=$c[-1];foreach($s in $last.CounterSamples){if($s.Path -match '% Processor Time'){$cpu=[math]::Round($s.CookedValue,1)}elseif($s.Path -match 'engtype_3D'){if($null -eq $gpu){$gpu=0};$gpu+=$s.CookedValue}};if($null -ne $gpu){$gpu=[math]::Round($gpu,1); if($gpu -gt 100){$gpu=100}}}
 if(-not $cpu){try{$cpu=[math]::Round((Get-CimInstance Win32_Processor|Measure-Object LoadPercentage -Average).Average,1)}catch{}}
 $gpuObj=$null;$nv='C:\\Windows\\System32\\nvidia-smi.exe'
-if(Test-Path $nv){try{$ln=(& $nv --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null|Select-Object -First 1);if($ln){$pt=$ln -split ',\\s*';if($pt.Count -ge 3){$gpuObj=[PSCustomObject]@{util=[int]$pt[0];mem_used_mb=[int]$pt[1];mem_total_mb=[int]$pt[2];source='nvidia-smi'}}}}catch{}}
+if(Test-Path $nv){try{$ln=(& $nv --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>nul|Select-Object -First 1);if($ln){$pt=$ln -split ',\\s*';if($pt.Count -ge 3){$gpuObj=[PSCustomObject]@{util=[int]$pt[0];mem_used_mb=[int]$pt[1];mem_total_mb=[int]$pt[2];source='nvidia-smi'}}}}catch{}}
 if(-not $gpuObj -and $null -ne $gpu){$gpuObj=[PSCustomObject]@{util=$gpu;mem_used_mb=$null;mem_total_mb=$null;source='perf-counter'}}
 try{$os=Get-CimInstance Win32_OperatingSystem;$ramTotal=[math]::Round($os.TotalVisibleMemorySize/1024,0);$ramFree=[math]::Round($os.FreePhysicalMemory/1024,0);$ramUsed=$ramTotal-$ramFree;$ramPercent=if($ramTotal -gt 0){[math]::Round(($ramUsed/$ramTotal)*100,1)}else{0}}catch{$ramTotal=0;$ramUsed=0;$ramPercent=0}
 $procs=@()
@@ -42,13 +43,15 @@ foreach($procId in $p2.Keys){
     }
     $procs+=[PSCustomObject]@{name=$cur.name;pid=$procId;ram_mb=$ram;cpu_s=$cs;cpu_pct=$cp}
 }
-# increase to 200 so we don't miss CPU hogs with low RAM
-$procs=$procs|Sort-Object -Property @{Expression='ram_mb';Descending=$true}|Select-Object -First 200
-[PSCustomObject]@{ok=$true;ts=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();cores=$cores;cpu=$cpu;gpu=$gpuObj;ram=[PSCustomObject]@{used_mb=$ramUsed;total_mb=$ramTotal;percent=$ramPercent};procs=$procs}|ConvertTo-Json -Compress -Depth 6
+$procs=@($procs|Sort-Object -Property @{Expression='ram_mb';Descending=$true}|Select-Object -First 200)
+Write-Output "__JSON_START__"
+[PSCustomObject]@{ok=$true;ts=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();cores=$cores;cpu=$cpu;gpu=$gpuObj;ram=[PSCustomObject]@{used_mb=$ramUsed;total_mb=$ramTotal;percent=$ramPercent};procs=$procs}|ConvertTo-Json -Compress -Depth 10
+Write-Output "__JSON_END__"
 `;
 
 const B64 = Buffer.from(SCRIPT, 'utf16le').toString('base64');
-const LINE = `powershell -NoProfile -NonInteractive -EncodedCommand ${B64} 2>$null`;
+// Use 2>nul instead of 2>$null (cmd.exe syntax) and suppress banner with -NoLogo
+const LINE = `powershell -NoLogo -NoProfile -NonInteractive -EncodedCommand ${B64} 2>nul`;
 const EXEC_TIMEOUT_MS = 20_000;
 const CACHE_MS = 2000;
 
@@ -98,14 +101,27 @@ async function doSysinfo(clientId, userId) {
 
 function parseOutput(raw) {
   if (!raw) return { ok: false, error: 'empty output' };
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start < 0 || end <= start) {
-    return { ok: false, error: 'no json in output', raw: raw.slice(0, 300) };
+
+  const startMark = '__JSON_START__';
+  const endMark = '__JSON_END__';
+
+  if (raw.includes(startMark) && raw.includes(endMark)) {
+     // extract exactly between the markers
+     raw = raw.slice(raw.indexOf(startMark) + startMark.length, raw.lastIndexOf(endMark)).trim();
+  } else {
+     // fallback if markers are missing (e.g. command truncated)
+     if (raw.includes('[stderr]')) raw = raw.split('[stderr]')[0];
+     const start = raw.indexOf('{');
+     const end = raw.lastIndexOf('}');
+     if (start < 0 || end <= start) {
+       return { ok: false, error: 'no json in output', raw: raw.slice(0, 300) };
+     }
+     raw = raw.slice(start, end + 1);
   }
+
   try {
-    return JSON.parse(raw.slice(start, end + 1));
+    return JSON.parse(raw);
   } catch (e) {
-    return { ok: false, error: `bad json: ${e.message}`, raw: raw.slice(start, Math.min(start + 300, end + 1)) };
+    return { ok: false, error: `bad json: ${e.message}`, raw: raw.slice(0, 300) };
   }
 }
