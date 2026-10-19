@@ -7,6 +7,10 @@ const hostIp   = params.get('ip') || '';
 $('target').textContent = `${hostName} @ ${hostIp}`;
 
 let polling = false;
+let state = {
+  sortBy: 'cpu',
+  data: null
+};
 
 function fmtMb(n) {
   if (n == null || n === 0) return '—';
@@ -25,6 +29,26 @@ function esc(s) {
   }[c]));
 }
 
+async function killProcess(pid, name) {
+  if (!confirm(`Are you sure you want to kill ${name} (PID: ${pid})?`)) return;
+  
+  $('status').textContent = `killing ${pid}…`;
+  try {
+    const r = await fetch(`/api/clients/${clientId}/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shell: 'cmd', line: `taskkill /F /PID ${pid}` }),
+    });
+    if (!r.ok) throw new Error('request failed');
+    
+    // wait a second for the OS to process the kill, then refresh
+    setTimeout(poll, 1000);
+  } catch (e) {
+    alert(`Failed to kill process: ${e.message}`);
+    $('status').textContent = 'kill failed';
+  }
+}
+
 async function poll() {
   if (polling) return;
   polling = true;
@@ -36,7 +60,8 @@ async function poll() {
       $('status').textContent = `error: ${d.error || r.status}`;
       return;
     }
-    render(d);
+    state.data = d;
+    render();
     $('status').textContent = `updated ${new Date(d.ts).toLocaleTimeString()}`;
   } catch (e) {
     $('status').textContent = `error: ${e.message}`;
@@ -45,7 +70,9 @@ async function poll() {
   }
 }
 
-function render(d) {
+function render() {
+  if (!state.data) return;
+  const d = state.data;
   const cpuPct = Number(d.cpu) || 0;
   const ramPct = Number(d.ram?.percent) || 0;
 
@@ -62,9 +89,7 @@ function render(d) {
   if (g && g.util != null) {
     $('gpu').textContent = `${Number(g.util).toFixed(1)}%`;
     $('gpu-bar').innerHTML = bar(g.util, '#fbbf24');
-    $('gpu-mem').textContent = (g.mem_total_mb
-      ? `${fmtMb(g.mem_used_mb)} / ${fmtMb(g.mem_total_mb)} vram`
-      : 'no vram data');
+    $('gpu-mem').textContent = (g.mem_total_mb ? `${fmtMb(g.mem_used_mb)} / ${fmtMb(g.mem_total_mb)} vram` : 'no vram data');
     $('gpu-src').textContent = g.source || '';
   } else {
     $('gpu').textContent = '—';
@@ -75,12 +100,21 @@ function render(d) {
 
   const body = $('proc-body');
   body.innerHTML = '';
-  const procs = Array.isArray(d.procs) ? d.procs : [];
+  
+  let procs = Array.isArray(d.procs) ? d.procs.slice() : [];
   if (!procs.length) {
-    body.innerHTML = '<tr><td colspan="5" class="empty-cell">no processes</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="empty-cell">no processes</td></tr>';
     return;
   }
-  for (const p of procs.slice(0, 50)) {
+
+  // Sort logic based on clicks
+  if (state.sortBy === 'cpu') {
+    procs.sort((a, b) => (Number(b.cpu_pct) || 0) - (Number(a.cpu_pct) || 0));
+  } else if (state.sortBy === 'ram') {
+    procs.sort((a, b) => (Number(b.ram_mb) || 0) - (Number(a.ram_mb) || 0));
+  }
+
+  for (const p of procs) {
     const tr = document.createElement('tr');
     const cpuPctStr = p.cpu_pct != null ? `${Number(p.cpu_pct).toFixed(1)}%` : '—';
     const cpuTotal  = p.cpu_s  != null ? `${Number(p.cpu_s).toFixed(1)}s` : '—';
@@ -89,10 +123,32 @@ function render(d) {
       <td class="pid">${p.pid}</td>
       <td class="pnum">${fmtMb(p.ram_mb)}</td>
       <td class="pnum">${cpuPctStr}</td>
-      <td class="pnum">${cpuTotal}</td>`;
+      <td class="pnum">${cpuTotal}</td>
+      <td class="paction"><button class="kill-btn" title="Kill Process">✕</button></td>`;
+      
+    const btn = tr.querySelector('.kill-btn');
+    btn.addEventListener('click', () => killProcess(p.pid, p.name));
+    
     body.appendChild(tr);
   }
 }
+
+// wire up gauge clicks
+document.querySelectorAll('.gauge').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.gauge').forEach(g => g.classList.remove('active'));
+    el.classList.add('active');
+    
+    let sortType = el.dataset.sort;
+    if (sortType === 'gpu') {
+      // fallback to cpu since GPU is system-wide only
+      sortType = 'cpu';
+    }
+    
+    state.sortBy = sortType;
+    render();
+  });
+});
 
 $('refresh').addEventListener('click', poll);
 $('close').addEventListener('click', () => window.close());

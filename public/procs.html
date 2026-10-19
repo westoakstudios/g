@@ -18,20 +18,20 @@
     <button id="close" class="danger">close</button>
   </div>
   <div class="procs-gauges">
-    <div class="gauge">
+    <div class="gauge active" data-sort="cpu" title="Click to sort by CPU%">
       <div class="gauge-k">cpu</div>
       <div class="gauge-v" id="cpu">—</div>
       <div id="cpu-bar"></div>
       <div class="gauge-sub" id="cores">—</div>
     </div>
-    <div class="gauge">
+    <div class="gauge" data-sort="gpu" title="System-wide only. Click to sort by CPU%.">
       <div class="gauge-k">gpu</div>
       <div class="gauge-v" id="gpu">—</div>
       <div id="gpu-bar"></div>
       <div class="gauge-sub" id="gpu-mem">—</div>
       <div class="gauge-src" id="gpu-src"></div>
     </div>
-    <div class="gauge">
+    <div class="gauge" data-sort="ram" title="Click to sort by Memory">
       <div class="gauge-k">ram</div>
       <div class="gauge-v" id="ram-pct">—</div>
       <div id="ram-bar"></div>
@@ -41,10 +41,10 @@
   <div class="procs-table-wrap">
     <table class="procs-table">
       <thead>
-        <tr><th>name</th><th>pid</th><th>memory</th><th>cpu%</th><th>cpu total</th></tr>
+        <tr><th>name</th><th>pid</th><th>memory</th><th>cpu%</th><th>cpu total</th><th>action</th></tr>
       </thead>
       <tbody id="proc-body">
-        <tr><td colspan="5" class="empty-cell">loading…</td></tr>
+        <tr><td colspan="6" class="empty-cell">loading…</td></tr>
       </tbody>
     </table>
   </div>

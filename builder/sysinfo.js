@@ -1,6 +1,5 @@
 // language: JavaScript, file: builder/sysinfo.js
 // samples cpu/gpu/ram + top processes on a client via PowerShell.
-// reuses /api/clients/:id/exec pipeline. inflight map prevents pileup.
 
 import db from '../db.js';
 
@@ -43,7 +42,8 @@ foreach($procId in $p2.Keys){
     }
     $procs+=[PSCustomObject]@{name=$cur.name;pid=$procId;ram_mb=$ram;cpu_s=$cs;cpu_pct=$cp}
 }
-$procs=$procs|Sort-Object -Property @{Expression='ram_mb';Descending=$true}|Select-Object -First 50
+# increase to 200 so we don't miss CPU hogs with low RAM
+$procs=$procs|Sort-Object -Property @{Expression='ram_mb';Descending=$true}|Select-Object -First 200
 [PSCustomObject]@{ok=$true;ts=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();cores=$cores;cpu=$cpu;gpu=$gpuObj;ram=[PSCustomObject]@{used_mb=$ramUsed;total_mb=$ramTotal;percent=$ramPercent};procs=$procs}|ConvertTo-Json -Compress -Depth 6
 `;
 
