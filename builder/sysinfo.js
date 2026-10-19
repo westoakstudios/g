@@ -22,14 +22,27 @@ $c=Get-Counter -Counter $paths -SampleInterval 1 -MaxSamples 2 -EA SilentlyConti
 $el=$sw.Elapsed.TotalSeconds
 $p2=@{};foreach($p in Get-Process){if($p.Id -gt 0){$p2[$p.Id]=@{cpu=$p.CPU;ram=$p.WorkingSet64;name=$p.ProcessName}}}
 $cpu=0;$gpu=$null
-if($c -and $c.Count -ge 2){$last=$c[-1];foreach($s in $last.CounterSamples){if($s.Path -match '% Processor Time'){$cpu=[math]::Round($s.CookedValue,1)}elseif($s.Path -match 'engtype_3D'){if($null -eq $gpu){$gpu=0};$gpu+=$s.CookedValue}};if($null -ne $gpu){$gpu=[math]::Round($gpu,1)}}
+if($c -and $c.Count -ge 2){$last=$c[-1];foreach($s in $last.CounterSamples){if($s.Path -match '% Processor Time'){$cpu=[math]::Round($s.CookedValue,1)}elseif($s.Path -match 'engtype_3D'){if($null -eq $gpu){$gpu=0};$gpu+=$s.CookedValue}};if($null -ne $gpu){$gpu=[math]::Round($gpu,1); if($gpu -gt 100){$gpu=100}}}
 if(-not $cpu){try{$cpu=[math]::Round((Get-CimInstance Win32_Processor|Measure-Object LoadPercentage -Average).Average,1)}catch{}}
 $gpuObj=$null;$nv='C:\\Windows\\System32\\nvidia-smi.exe'
 if(Test-Path $nv){try{$ln=(& $nv --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null|Select-Object -First 1);if($ln){$pt=$ln -split ',\\s*';if($pt.Count -ge 3){$gpuObj=[PSCustomObject]@{util=[int]$pt[0];mem_used_mb=[int]$pt[1];mem_total_mb=[int]$pt[2];source='nvidia-smi'}}}}catch{}}
 if(-not $gpuObj -and $null -ne $gpu){$gpuObj=[PSCustomObject]@{util=$gpu;mem_used_mb=$null;mem_total_mb=$null;source='perf-counter'}}
 try{$os=Get-CimInstance Win32_OperatingSystem;$ramTotal=[math]::Round($os.TotalVisibleMemorySize/1024,0);$ramFree=[math]::Round($os.FreePhysicalMemory/1024,0);$ramUsed=$ramTotal-$ramFree;$ramPercent=if($ramTotal -gt 0){[math]::Round(($ramUsed/$ramTotal)*100,1)}else{0}}catch{$ramTotal=0;$ramUsed=0;$ramPercent=0}
 $procs=@()
-foreach($pid in $p2.Keys){$cur=$p2[$pid];$ram=[math]::Round($cur.ram/1MB,1);$cs=if($cur.cpu){[math]::Round($cur.cpu,1)}else{0};$cp=$null;if($p1.ContainsKey($pid) -and $null -ne $cur.cpu -and $null -ne $p1[$pid]){$d=$cur.cpu-$p1[$pid];if($d -ge 0 -and $el -gt 0){$cp=[math]::Round(($d/$el)/$cores*100,1);if($cp -gt 100){$cp=100}}};$procs+=[PSCustomObject]@{name=$cur.name;pid=$pid;ram_mb=$ram;cpu_s=$cs;cpu_pct=$cp}}
+foreach($procId in $p2.Keys){
+    $cur=$p2[$procId]
+    $ram=[math]::Round($cur.ram/1MB,1)
+    $cs=if($cur.cpu){[math]::Round($cur.cpu,1)}else{0}
+    $cp=$null
+    if($p1.ContainsKey($procId) -and $null -ne $cur.cpu -and $null -ne $p1[$procId]){
+        $d=$cur.cpu-$p1[$procId]
+        if($d -ge 0 -and $el -gt 0){
+            $cp=[math]::Round(($d/$el)/$cores*100,1)
+            if($cp -gt 100){$cp=100}
+        }
+    }
+    $procs+=[PSCustomObject]@{name=$cur.name;pid=$procId;ram_mb=$ram;cpu_s=$cs;cpu_pct=$cp}
+}
 $procs=$procs|Sort-Object -Property @{Expression='ram_mb';Descending=$true}|Select-Object -First 50
 [PSCustomObject]@{ok=$true;ts=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();cores=$cores;cpu=$cpu;gpu=$gpuObj;ram=[PSCustomObject]@{used_mb=$ramUsed;total_mb=$ramTotal;percent=$ramPercent};procs=$procs}|ConvertTo-Json -Compress -Depth 6
 `;
@@ -85,7 +98,6 @@ async function doSysinfo(clientId, userId) {
 
 function parseOutput(raw) {
   if (!raw) return { ok: false, error: 'empty output' };
-  // strip BOM, stderr prelude, anything before the first '{' and after the last '}'
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
   if (start < 0 || end <= start) {
