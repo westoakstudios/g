@@ -18,6 +18,14 @@ function fmtMb(n) {
   return `${Math.round(n)} MB`;
 }
 
+function fmtUptime(secs) {
+  if (!secs) return '—';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 function bar(pct, color) {
   const p = Math.max(0, Math.min(100, Number(pct) || 0));
   return `<div class="gauge-bar"><div class="gauge-fill" style="width:${p}%; background:${color};"></div></div>`;
@@ -41,7 +49,6 @@ async function killProcess(pid, name) {
     });
     if (!r.ok) throw new Error('request failed');
     
-    // wait a second for the OS to process the kill, then refresh
     setTimeout(poll, 1000);
   } catch (e) {
     alert(`Failed to kill process: ${e.message}`);
@@ -107,7 +114,6 @@ function render() {
     return;
   }
 
-  // Sort logic based on clicks
   if (state.sortBy === 'cpu') {
     procs.sort((a, b) => (Number(b.cpu_pct) || 0) - (Number(a.cpu_pct) || 0));
   } else if (state.sortBy === 'ram') {
@@ -117,13 +123,13 @@ function render() {
   for (const p of procs) {
     const tr = document.createElement('tr');
     const cpuPctStr = p.cpu_pct != null ? `${Number(p.cpu_pct).toFixed(1)}%` : '—';
-    const cpuTotal  = p.cpu_s  != null ? `${Number(p.cpu_s).toFixed(1)}s` : '—';
+    const uptime    = p.cpu_s != null ? fmtUptime(Number(p.cpu_s)) : '—';
     tr.innerHTML = `
       <td class="pname">${esc(p.name)}</td>
       <td class="pid">${p.pid}</td>
       <td class="pnum">${fmtMb(p.ram_mb)}</td>
       <td class="pnum">${cpuPctStr}</td>
-      <td class="pnum">${cpuTotal}</td>
+      <td class="pnum">${uptime}</td>
       <td class="paction"><button class="kill-btn" title="Kill Process">✕</button></td>`;
       
     const btn = tr.querySelector('.kill-btn');
@@ -133,16 +139,13 @@ function render() {
   }
 }
 
-// wire up gauge clicks
 document.querySelectorAll('.gauge').forEach(el => {
   el.addEventListener('click', () => {
     document.querySelectorAll('.gauge').forEach(g => g.classList.remove('active'));
     el.classList.add('active');
     
     let sortType = el.dataset.sort;
-    if (sortType === 'gpu') {
-      sortType = 'cpu';
-    }
+    if (sortType === 'gpu') sortType = 'cpu';
     
     state.sortBy = sortType;
     render();
