@@ -681,3 +681,70 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
   background: var(--bg-2); border-top: 1px solid var(--line);
   font-size: 11px; color: var(--muted); font-family: var(--mono);
 }
+/* ---------- process manager (procs.html) ---------- */
+.procs-gauges {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 20px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+.gauge {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 16px 20px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.gauge-k {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); font-weight: 600; margin-bottom: 8px;
+}
+.gauge-v {
+  font-size: 28px; font-weight: 600; letter-spacing: -.02em;
+  color: var(--text); margin-bottom: 10px;
+}
+.gauge-sub { font-size: 11px; color: var(--muted); margin-top: 8px; font-family: var(--mono); }
+.gauge-src { font-size: 10px; color: var(--muted-2); margin-top: 4px; }
+.gauge-bar {
+  height: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.gauge-fill { height: 100%; transition: width .3s ease; border-radius: 3px; }
+
+.procs-table-wrap {
+  flex: 1; min-height: 0; overflow-y: auto;
+  background: var(--bg);
+}
+.procs-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.procs-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; padding: 10px 16px;
+  background: var(--bg-2); border-bottom: 1px solid var(--line);
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted-2); font-weight: 600;
+}
+.procs-table th:nth-child(n+2) { text-align: right; }
+.procs-table tbody tr {
+  border-bottom: 1px solid var(--line);
+  transition: background .1s;
+}
+.procs-table tbody tr:hover { background: var(--panel); }
+.procs-table td { padding: 8px 16px; color: var(--text); }
+.procs-table td.pname { font-weight: 500; }
+.procs-table td.pid,
+.procs-table td.pnum {
+  text-align: right; font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.procs-table td.pnum { color: var(--text-2); }
+.empty-cell {
+  text-align: center !important; padding: 48px 20px !important;
+  color: var(--muted) !important; font-family: inherit !important;
+  font-size: 13px !important;
+}

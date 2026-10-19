@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WeedHack — processes</title>
+<link rel="icon" type="image/png" href="/Weedhack.png?v=2">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="window">
+  <div class="topbar">
+    <span class="dot on"></span>
+    <span class="target" id="target">—</span>
+    <span class="spacer"></span>
+    <span id="status" class="fps">connecting…</span>
+    <button id="refresh" class="ghost">↻ refresh</button>
+    <button id="close" class="danger">close</button>
+  </div>
+  <div class="procs-gauges">
+    <div class="gauge">
+      <div class="gauge-k">cpu</div>
+      <div class="gauge-v" id="cpu">—</div>
+      <div id="cpu-bar"></div>
+      <div class="gauge-sub" id="cores">—</div>
+    </div>
+    <div class="gauge">
+      <div class="gauge-k">gpu</div>
+      <div class="gauge-v" id="gpu">—</div>
+      <div id="gpu-bar"></div>
+      <div class="gauge-sub" id="gpu-mem">—</div>
+      <div class="gauge-src" id="gpu-src"></div>
+    </div>
+    <div class="gauge">
+      <div class="gauge-k">ram</div>
+      <div class="gauge-v" id="ram-pct">—</div>
+      <div id="ram-bar"></div>
+      <div class="gauge-sub"><span id="ram-used">—</span> / <span id="ram-total">—</span></div>
+    </div>
+  </div>
+  <div class="procs-table-wrap">
+    <table class="procs-table">
+      <thead>
+        <tr><th>name</th><th>pid</th><th>memory</th><th>cpu%</th><th>cpu total</th></tr>
+      </thead>
+      <tbody id="proc-body">
+        <tr><td colspan="5" class="empty-cell">loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script src="/js/procs.js"></script>
+</body>
+</html>
