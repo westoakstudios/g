@@ -699,7 +699,7 @@ if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true }
 const BUILD_DIR = path.join(__dirname, 'build');
 if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
 
-const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin'];
+const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin', '.ps1'];
 
 const limitDownloadExe = rateLimit({
   windowMs: 60 * 60 * 1000,

