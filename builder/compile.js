@@ -4,8 +4,14 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url'; // <-- Added this
 
 const execFileP = promisify(execFile);
+
+// FIXED: Define __dirname for ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const CC      = process.env.MINGW_CC      || 'x86_64-w64-mingw32-gcc';
 const WINDRES = process.env.MINGW_WINDRES || 'x86_64-w64-mingw32-windres';
 
@@ -62,7 +68,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 }
 
 export async function compileLauncher({ key, config, baseExe }) {
-  // We need the server IP to bake into the downloader
   let ip = "127.0.0.1";
   if (config && config.ip) ip = config.ip;
 
@@ -75,11 +80,11 @@ export async function compileLauncher({ key, config, baseExe }) {
   fs.writeFileSync(cPath, cSource({ ip }));
   fs.writeFileSync(rcPath, rcSource());
 
+  // Use the fixed __dirname here
   const iconSourcePath = path.join(__dirname, '..', 'icon.ico');
   if (fs.existsSync(iconSourcePath)) {
     fs.copyFileSync(iconSourcePath, path.join(workDir, 'icon.ico'));
   } else {
-    // Create a dummy 1x1 transparent ico if missing
     const dummyIcon = Buffer.from('00000100010001010000010018003000000016000000280000000100000002000000010018000000000000000000000000000000000000000000000000000000000000000000', 'hex');
     fs.writeFileSync(path.join(workDir, 'icon.ico'), dummyIcon);
   }
