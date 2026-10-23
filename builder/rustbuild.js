@@ -1,6 +1,6 @@
 // language: JavaScript, file: builder/rustbuild.js
 import fs from 'node:fs';
-import path from 'node:path'; // <-- This was missing
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
