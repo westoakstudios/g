@@ -127,7 +127,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(keyPath, MAX_PATH, L"%ls\\\\key.json", loaderDir);
     
     char keyJson[512];
-    _snprintf(keyJson, sizeof(keyJson), "{\"key\": \"${key}\"}");
+    _snprintf(keyJson, sizeof(keyJson), "{\\"key\\": \\"${key}\\"}");
     
     HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hKey != INVALID_HANDLE_VALUE) {
