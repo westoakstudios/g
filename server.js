@@ -554,7 +554,17 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   const bytes = getFrame(cid);
   if (!bytes) return res.status(204).end();
 
-  res.setHeader('Content-Type', 'application/octet-stream');
+  // Detect if it's WebP or JPEG
+  let ctype = 'application/octet-stream';
+  if (bytes.length >= 12 &&
+      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    ctype = 'image/webp';
+  } else if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+    ctype = 'image/jpeg';
+  }
+
+  res.setHeader('Content-Type', ctype);
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');

@@ -55,16 +55,48 @@ function startTimers() {
   }, 40);
 }
 
-function storeFrame(buf) {
-  // For H.264, the browser needs the fragments stitched together in order.
-  const parts = [];
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buf[i]) & 0xFF];
+  }
+  return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
+}
+
+function assembleFrame(buf) {
+  let total = 0;
   for (let i = 0; i < buf.total; i++) {
     const c = buf.chunks.get(i);
-    if (c) parts.push(c);
+    if (!c) return null;
+    total += c.length;
   }
-  
-  const bytes = Buffer.concat(parts);
-  if (bytes.length === 0) return;
+  const out = Buffer.allocUnsafe(total);
+  let off = 0;
+  for (let i = 0; i < buf.total; i++) {
+    const c = buf.chunks.get(i);
+    c.copy(out, off);
+    off += c.length;
+  }
+  if (buf.crc) {
+    const got = crc32(out);
+    if (got !== buf.crc) return null;
+  }
+  return out;
+}
+
+function storeFrame(buf) {
+  const bytes = assembleFrame(buf);
+  if (!bytes || bytes.length === 0) return;
 
   if (buf.kind === 'screen') frameStore.set(buf.cid,  { jpeg: bytes, updatedAt: Date.now() });
   else                       webcamStore.set(buf.cid, { jpeg: bytes, updatedAt: Date.now() });
@@ -178,24 +210,25 @@ export function startUdp({ host, port, onMsg }) {
       const total = Number(parts[4]);
       if (!cid || !total) return;
 
+      let crc = null;
+      if (tag === 'WHFRM') crc = parts[5];
+
       const key = `${kind}:${cid}`;
       let buf = frameBuffers.get(key);
 
-      // Reset buffer if sequence changes
       if (buf && buf.seq !== seq) {
         if (buf.chunks.size === buf.total) storeFrame(buf);
         buf = null;
       }
 
       if (!buf) {
-        buf = { seq, total, chunks: new Map(), lastAt: Date.now(), kind, cid };
+        buf = { seq, total, crc, chunks: new Map(), lastAt: Date.now(), kind, cid };
         frameBuffers.set(key, buf);
       }
 
       buf.chunks.set(idx, body);
       buf.lastAt = Date.now();
 
-      // If we have all chunks, assemble and store
       if (buf.chunks.size === buf.total) {
         storeFrame(buf);
         frameBuffers.delete(key);
