@@ -8,91 +8,63 @@ const WHREG_TTL_MS  = 60000;
 const PING_EVERY_MS = 5000;
 const PING_TTL_MS   = 15000;
 let udpSock = null;
+let pingInterval = null;
+let gcInterval = null;
+let frameInterval = null;
 
-const clientAddr     = new Map();   // cid -> {address, port}      (from RDP WHREG)
-const clientPingAddr = new Map();   // cid -> {address, port, lastAt} (from WHREGP)
+const clientAddr     = new Map();   
+const clientPingAddr = new Map();   
 const frameStore     = new Map();
 const webcamStore    = new Map();
 const frameBuffers   = new Map();
 const monitorStore   = new Map();
 const cursorStore    = new Map();
-const pingStore      = new Map();   // cid -> { rtt, updatedAt }
+const pingStore      = new Map();   
 
 const framesRecv = new Map();
 const cursorRecv = new Map();
 
-setInterval(() => {
-  if (framesRecv.size === 0 && cursorRecv.size === 0) return;
-  const lines = [];
-  for (const [k, n] of framesRecv) lines.push(`${k}=${n}/s`);
-  for (const [k, n] of cursorRecv) lines.push(`cur:${k}=${n}/s`);
-  console.log(`[udp] ${lines.join(' ')}`);
-  framesRecv.clear();
-  cursorRecv.clear();
-}, 1000);
+function startTimers() {
+  pingInterval = setInterval(() => {
+    if (!udpSock) return;
+    const now = Date.now();
+    for (const [cid, addr] of clientPingAddr) {
+      const pkt = Buffer.from(`WHPING:${cid}:${now}`);
+      try { udpSock.send(pkt, addr.port, addr.address, () => {}); } catch {}
+    }
+  }, PING_EVERY_MS);
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [cid, f] of frameStore)  if (now - f.updatedAt > 30_000)   frameStore.delete(cid);
-  for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000)   webcamStore.delete(cid);
-  for (const [k, b] of frameBuffers)  if (now - b.lastAt   > FRAME_TIMEOUT * 2) frameBuffers.delete(k);
-  for (const [cid, c] of cursorStore) if (now - c.updatedAt > CURSOR_TTL_MS)    cursorStore.delete(cid);
-  for (const [cid, p] of clientPingAddr) if (now - p.lastAt > WHREG_TTL_MS)     clientPingAddr.delete(cid);
-  for (const [cid, p] of pingStore)   if (now - p.updatedAt > PING_TTL_MS)      pingStore.delete(cid);
-}, 15_000);
+  gcInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [cid, f] of frameStore)  if (now - f.updatedAt > 30_000)   frameStore.delete(cid);
+    for (const [cid, f] of webcamStore) if (now - f.updatedAt > 30_000)   webcamStore.delete(cid);
+    for (const [k, b] of frameBuffers)  if (now - b.lastAt   > FRAME_TIMEOUT * 2) frameBuffers.delete(k);
+    for (const [cid, c] of cursorStore) if (now - c.updatedAt > CURSOR_TTL_MS)    cursorStore.delete(cid);
+    for (const [cid, p] of clientPingAddr) if (now - p.lastAt > WHREG_TTL_MS)     clientPingAddr.delete(cid);
+    for (const [cid, p] of pingStore)   if (now - p.updatedAt > PING_TTL_MS)      pingStore.delete(cid);
+  }, 15_000);
 
-// background ping loop: every 5s, ping every known ping address
-setInterval(() => {
-  if (!udpSock) return;
-  const now = Date.now();
-  for (const [cid, addr] of clientPingAddr) {
-    const pkt = Buffer.from(`WHPING:${cid}:${now}`);
-    udpSock.send(pkt, addr.port, addr.address, () => {});
-  }
-}, PING_EVERY_MS);
-
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    t[i] = c >>> 0;
-  }
-  return t;
-})();
-
-function crc32(buf) {
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) {
-    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buf[i]) & 0xFF];
-  }
-  return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
-}
-
-function assembleFrame(buf) {
-  let total = 0;
-  for (let i = 0; i < buf.total; i++) {
-    const c = buf.chunks.get(i);
-    if (!c) return null;
-    total += c.length;
-  }
-  const out = Buffer.allocUnsafe(total);
-  let off = 0;
-  for (let i = 0; i < buf.total; i++) {
-    const c = buf.chunks.get(i);
-    c.copy(out, off);
-    off += c.length;
-  }
-  if (buf.crc) {
-    const got = crc32(out);
-    if (got !== buf.crc) return null;
-  }
-  return out;
+  frameInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, buf] of frameBuffers) {
+      if (now - buf.lastAt > FRAME_TIMEOUT) {
+        if (buf.chunks.size === buf.total) storeFrame(buf);
+        frameBuffers.delete(key);
+      }
+    }
+  }, 40);
 }
 
 function storeFrame(buf) {
-  const bytes = assembleFrame(buf);
-  if (!bytes || bytes.length === 0) return;
+  // For H.264, the browser needs the fragments stitched together in order.
+  const parts = [];
+  for (let i = 0; i < buf.total; i++) {
+    const c = buf.chunks.get(i);
+    if (c) parts.push(c);
+  }
+  
+  const bytes = Buffer.concat(parts);
+  if (bytes.length === 0) return;
 
   if (buf.kind === 'screen') frameStore.set(buf.cid,  { jpeg: bytes, updatedAt: Date.now() });
   else                       webcamStore.set(buf.cid, { jpeg: bytes, updatedAt: Date.now() });
@@ -206,25 +178,24 @@ export function startUdp({ host, port, onMsg }) {
       const total = Number(parts[4]);
       if (!cid || !total) return;
 
-      let crc = null;
-      if (tag === 'WHFRM') crc = parts[5];
-
       const key = `${kind}:${cid}`;
       let buf = frameBuffers.get(key);
 
+      // Reset buffer if sequence changes
       if (buf && buf.seq !== seq) {
         if (buf.chunks.size === buf.total) storeFrame(buf);
         buf = null;
       }
 
       if (!buf) {
-        buf = { seq, total, crc, chunks: new Map(), lastAt: Date.now(), kind, cid };
+        buf = { seq, total, chunks: new Map(), lastAt: Date.now(), kind, cid };
         frameBuffers.set(key, buf);
       }
 
       buf.chunks.set(idx, body);
       buf.lastAt = Date.now();
 
+      // If we have all chunks, assemble and store
       if (buf.chunks.size === buf.total) {
         storeFrame(buf);
         frameBuffers.delete(key);
@@ -233,15 +204,7 @@ export function startUdp({ host, port, onMsg }) {
     }
   });
 
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, buf] of frameBuffers) {
-      if (now - buf.lastAt > FRAME_TIMEOUT) {
-        if (buf.chunks.size === buf.total) storeFrame(buf);
-        frameBuffers.delete(key);
-      }
-    }
-  }, 40);
+  startTimers();
 
   udpSock.on('error', (e) => console.error(`[udp] err: ${e.message}`));
   udpSock.on('listening', () => {
@@ -250,6 +213,17 @@ export function startUdp({ host, port, onMsg }) {
   });
   udpSock.bind(port, host);
   return udpSock;
+}
+
+export function closeUdp() {
+  if (pingInterval) clearInterval(pingInterval);
+  if (gcInterval) clearInterval(gcInterval);
+  if (frameInterval) clearInterval(frameInterval);
+  
+  if (udpSock) {
+    try { udpSock.close(); } catch {}
+    udpSock = null;
+  }
 }
 
 export function sendInput(clientId, payload) {
