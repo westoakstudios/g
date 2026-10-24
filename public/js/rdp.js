@@ -34,40 +34,43 @@ const PRESETS = {
 };
 
 const stage = $('stage');
+const video = $('screen');
 
 const cursorDot = document.createElement('div');
 cursorDot.className = 'cursor-dot';
 cursorDot.style.display = 'none';
 
-const img = document.createElement('img');
-img.draggable = false;
+// --- MEDIA SOURCE SETUP ---
+let mediaSource = new MediaSource();
+let sourceBuffer = null;
+let queuedBuffers = [];
 
-img.addEventListener('load', () => {
-  if (img.naturalWidth === 0) return;
-  $('dot').classList.add('on');
-  if (!firstFrameSeen) { firstFrameSeen = true; removeSpinner(); }
-  layoutCursor();
-  framesThisSec++;
-  const now = Date.now();
-  if (now - lastFpsTick >= 1000) {
-    const nowEl = $('fps-now');
-    if (nowEl) nowEl.textContent = String(framesThisSec);
-    framesThisSec = 0;
-    lastFpsTick = now;
-  }
-  consecutiveFails = 0;
-  backoffMs = 0;
-});
+video.src = URL.createObjectURL(mediaSource);
 
-img.addEventListener('error', () => {
-  $('dot').classList.remove('on');
-  consecutiveFails++;
-  backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
-  if (consecutiveFails >= AUTO_RECONNECT_TRIGGER && autoReconnects < AUTO_RECONNECT_LIMIT) {
-    autoReconnects++;
-    consecutiveFails = 0;
-    doAutoReconnect();
-  }
+mediaSource.addEventListener('sourceopen', () => {
+    // We use baseline profile (42E01E) for maximum browser compatibility
+    sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E"');
+    sourceBuffer.mode = 'sequence'; 
+    
+    sourceBuffer.addEventListener('updateend', () => {
+        if (queuedBuffers.length > 0 && !sourceBuffer.updating) {
+            try {
+                sourceBuffer.appendBuffer(queuedBuffers.shift());
+            } catch(e) {}
+        }
+        // Keep the video caught up to the latest frame (low latency)
+        if (mediaSource.readyState === 'open' && video.buffered.length > 0) {
+            const end = video.buffered.end(video.buffered.length - 1);
+            if (video.currentTime < end - 0.5) {
+                video.currentTime = end;
+            }
+        }
+    });
+
+    video.addEventListener('loadeddata', () => {
+        $('dot').classList.add('on');
+        if (!firstFrameSeen) { firstFrameSeen = true; removeSpinner(); }
+    });
 });
 
 function showSpinner(text) {
@@ -89,7 +92,7 @@ function setSpinnerText(text) {
 
 function layoutCursor() {
   if (!lastCursor || !lastCursor.visible) { cursorDot.style.display = 'none'; return; }
-  const rect = img.getBoundingClientRect();
+  const rect = video.getBoundingClientRect();
   const stageRect = stage.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) { cursorDot.style.display = 'none'; return; }
   const x = (rect.left - stageRect.left) + lastCursor.x * rect.width;
@@ -165,9 +168,13 @@ async function start() {
   lastCursor = null;
   cursorDot.style.display = 'none';
 
-  if (img.parentNode) img.parentNode.removeChild(img);
-  if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
-
+  // Reset MediaSource if reconnecting
+  if (mediaSource.readyState === 'open' && sourceBuffer) {
+      try { mediaSource.removeSourceBuffer(sourceBuffer); } catch {}
+  }
+  mediaSource = new MediaSource();
+  video.src = URL.createObjectURL(mediaSource);
+  
   const r = await fetch(`/api/clients/${clientId}/rdp/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -176,7 +183,7 @@ async function start() {
   if (!r.ok) { setSpinnerText('rdp start failed'); return; }
 
   running = true;
-  stage.appendChild(img);
+  stage.appendChild(video);
   stage.appendChild(cursorDot);
   startCursorPolling();
   loop();
@@ -209,36 +216,63 @@ async function restart() {
   });
   if (r.ok) {
     running = true; firstFrameSeen = false; lastCursor = null;
-    if (img.parentNode) img.parentNode.removeChild(img);
-    if (cursorDot.parentNode) cursorDot.parentNode.removeChild(cursorDot);
-    stage.appendChild(img); stage.appendChild(cursorDot);
+    stage.appendChild(video); stage.appendChild(cursorDot);
     showSpinner('connecting…'); startCursorPolling(); loop();
   }
   btn.textContent = orig; btn.disabled = false; restarting = false;
 }
 
+// The fetch loop now feeds the MediaSource instead of an <img>
 async function loop() {
   while (running) {
     const t0 = performance.now();
-    const ok = await new Promise((resolve) => {
-      const tmp = new Image();
-      tmp.onload = () => {
-        if (tmp.naturalWidth === 0) { resolve(false); return; }
-        img.src = tmp.src; resolve(true);
-      };
-      tmp.onerror = () => resolve(false);
-      tmp.src = `/api/clients/${clientId}/screen?t=${Date.now()}`;
-    });
-    if (!running) break;
-    if (!ok) {
+    try {
+      const res = await fetch(`/api/clients/${clientId}/screen?t=${Date.now()}`);
+      
+      if (res.status === 204) {
+         // No frame yet, wait
+      } else if (res.ok) {
+         const buffer = await res.arrayBuffer();
+         framesThisSec++;
+         
+         if (sourceBuffer && !sourceBuffer.updating) {
+             try {
+                sourceBuffer.appendBuffer(buffer);
+             } catch(e) {
+                // If buffer overflows, clear it
+                if (sourceBuffer.updating) {
+                   sourceBuffer.abort();
+                }
+             }
+         } else {
+             // Queue it if the buffer is busy
+             queuedBuffers.push(buffer);
+             if (queuedBuffers.length > 30) queuedBuffers.shift(); // prevent memory leak
+         }
+         
+         consecutiveFails = 0;
+         backoffMs = 0;
+      } else {
+         throw new Error('fetch failed');
+      }
+    } catch (e) {
       consecutiveFails++;
       backoffMs = Math.min(2000, 100 * Math.pow(1.5, Math.min(consecutiveFails, 6)));
       await new Promise(r => setTimeout(r, backoffMs));
       if (consecutiveFails >= AUTO_RECONNECT_TRIGGER && autoReconnects < AUTO_RECONNECT_LIMIT) {
         autoReconnects++; consecutiveFails = 0; doAutoReconnect(); break;
       }
-      continue;
-    } else { consecutiveFails = 0; backoffMs = 0; }
+    }
+
+    const now = Date.now();
+    if (now - lastFpsTick >= 1000) {
+        const nowEl = $('fps-now');
+        if (nowEl) nowEl.textContent = String(framesThisSec);
+        framesThisSec = 0;
+        lastFpsTick = now;
+    }
+
+    if (!running) break;
     const elapsed = performance.now() - t0;
     const target = 1000 / Math.max(cfg.fps, 1);
     if (elapsed < target) await new Promise(r => setTimeout(r, target - elapsed));
@@ -322,12 +356,12 @@ function sendInput(payload) {
   }).catch(() => {});
 }
 function norm(e) {
-  const r = img.getBoundingClientRect();
+  const r = video.getBoundingClientRect();
   const x = (e.clientX - r.left) / r.width;
   const y = (e.clientY - r.top)  / r.height;
   return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
 }
-img.addEventListener('mousemove', (e) => {
+video.addEventListener('mousemove', (e) => {
   if (!cfg.mouse) return;
   const now = performance.now();
   if (now - lastMouseSent < 25) return;
@@ -335,10 +369,10 @@ img.addEventListener('mousemove', (e) => {
   const p = norm(e);
   sendInput({ type: 'mouse_move', x: p.x, y: p.y });
 });
-img.addEventListener('mousedown', (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_down', button: btnName(e.button) }); });
-img.addEventListener('mouseup',   (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_up',   button: btnName(e.button) }); });
-img.addEventListener('contextmenu', (e) => e.preventDefault());
-img.addEventListener('wheel', (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_wheel', dy: Math.sign(e.deltaY) }); }, { passive: false });
+video.addEventListener('mousedown', (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_down', button: btnName(e.button) }); });
+video.addEventListener('mouseup',   (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_up',   button: btnName(e.button) }); });
+video.addEventListener('contextmenu', (e) => e.preventDefault());
+video.addEventListener('wheel', (e) => { if (!cfg.mouse) return; e.preventDefault(); sendInput({ type: 'mouse_wheel', dy: Math.sign(e.deltaY) }); }, { passive: false });
 
 document.addEventListener('keydown', (e) => {
   if (!cfg.keyboard) return;

