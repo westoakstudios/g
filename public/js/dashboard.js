@@ -25,18 +25,22 @@ async function loadMe() {
   $('a-akey').textContent = me.accountKey;
   revealSetup('a-ltok', me.loginToken);
 
-  // LOCK REMOTE TAB IF NOT PREMIUM
-  if (!me.isPremium) {
-    const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
-    if (remoteTab) {
-      remoteTab.classList.add('locked');
-      remoteTab.title = "Premium required. Go to admin.html to upgrade.";
-      remoteTab.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        alert("You need Premium to access the Remote tab.\nGo to /admin.html to upgrade.");
-      }, true);
-    }
+  // ── premium lock: remote tab is fully unclickable if not premium ──
+  const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
+  if (remoteTab && !me.isPremium) {
+    remoteTab.classList.add('locked');
+    remoteTab.title = 'Premium required — upgrade at /admin.html';
+    remoteTab.style.pointerEvents = 'none';
+    remoteTab.style.opacity = '0.4';
+    remoteTab.style.cursor = 'not-allowed';
+
+    const badge = document.createElement('span');
+    badge.textContent = 'PREMIUM';
+    badge.style.cssText =
+      'font-size:9px;padding:1px 6px;border-radius:4px;' +
+      'background:rgba(251,191,36,.18);color:#fbbf24;' +
+      'margin-left:auto;font-weight:700;letter-spacing:.06em;';
+    remoteTab.appendChild(badge);
   }
 }
 
@@ -286,10 +290,11 @@ async function runFileOp(clientId, action, path, extra = {}) {
 }
 
 let fileClient = null;
+let filePath = 'C:\\';
 
 async function openFileManager(c) {
   fileClient = c;
-  filePath = "C:\\";
+  filePath = 'C:\\';
   $('drawer-title').textContent = `Files: ${c.hostname}`;
   $('drawer').classList.add('open');
   $('drawer-backdrop').classList.add('open');
@@ -596,11 +601,10 @@ function openGearMenu(anchor, c) {
 }
 
 async function wipeClient(c) {
+  if (!me.isPremium) { return; }
   const ok = confirm(
-    `wipe + reinstall on ${c.hostname}?\n\n` +
-    `this kills every loader process, wipes %APPDATA%\\loader except key.json, ` +
-    `downloads a fresh st.exe, and runs it.\n\n` +
-    `the client will disappear for 15–30s, then come back.`
+    `Wipe + reinstall on ${c.hostname}?\n\n` +
+    `The client will disappear for ~15-30s, then come back.`
   );
   if (!ok) return;
 
@@ -612,9 +616,9 @@ async function wipeClient(c) {
   });
   const d = await r.json().catch(() => ({}));
   if (r.ok) {
-    alert(`wipe queued for ${c.hostname}\n\nst.exe: ${d.stUrl}\nthe client will pick it up within ~3s.`);
+    alert(`Wiping + reinstalling ${c.hostname}…\n\nThe client will be back in ~15-30s.`);
   } else {
-    alert(`wipe failed: ${d.error || r.status}`);
+    alert(`Failed: ${d.error || r.status}`);
   }
 }
 
