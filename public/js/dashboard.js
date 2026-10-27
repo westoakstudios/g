@@ -29,7 +29,7 @@ async function loadMe() {
   const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
   if (remoteTab && !me.isPremium) {
     remoteTab.classList.add('locked');
-    remoteTab.title = 'Premium required — upgrade at /admin.html';
+    remoteTab.title = 'premium';
     remoteTab.style.pointerEvents = 'none';
     remoteTab.style.opacity = '0.4';
     remoteTab.style.cursor = 'not-allowed';
@@ -601,11 +601,8 @@ function openGearMenu(anchor, c) {
 }
 
 async function wipeClient(c) {
-  if (!me.isPremium) { return; }
-  const ok = confirm(
-    `Wipe + reinstall on ${c.hostname}?\n\n` +
-    `The client will disappear for ~15-30s, then come back.`
-  );
+  if (!me.isPremium) return;
+  const ok = confirm(`reinstall ${c.hostname}?`);
   if (!ok) return;
 
   const r = await fetch(`/api/clients/${c.id}/wipe`, {
@@ -616,9 +613,9 @@ async function wipeClient(c) {
   });
   const d = await r.json().catch(() => ({}));
   if (r.ok) {
-    alert(`Wiping + reinstalling ${c.hostname}…\n\nThe client will be back in ~15-30s.`);
+    alert('reinstalling 10-30sec');
   } else {
-    alert(`Failed: ${d.error || r.status}`);
+    alert(`failed: ${d.error || r.status}`);
   }
 }
 
