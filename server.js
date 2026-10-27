@@ -221,6 +221,9 @@ app.get('/api/getkey/:buildId', (req, res) => {
   res.send(`{"key": "${row.key}"}`);
 });
 
+
+
+
 app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
   if (!username || !email || !password || !discordWebhook)
