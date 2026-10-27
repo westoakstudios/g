@@ -571,6 +571,13 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   res.send(bytes);
 });
 
+app.get('/api/getkey/:buildId', (req, res) => {
+  const buildId = Number(req.params.buildId);
+  const row = db.prepare(sql`SELECT key FROM builds WHERE id = ?`).get(buildId);
+  if (!row) return res.status(404).send('{"error": "not found"}');
+  res.send(`{"key": "${row.key}"}`);
+});
+
 app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);

