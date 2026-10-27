@@ -552,7 +552,7 @@ function openGearMenu(anchor, c) {
   menu.className = 'gear-menu';
   menu.style.top  = `${rect.bottom + 4}px`;
   menu.style.left = `${rect.right - 240}px`;
-  
+
   if (!me.isPremium) {
     menu.innerHTML = `
       <div class="title">${esc(c.hostname)}</div>
@@ -598,8 +598,8 @@ function openGearMenu(anchor, c) {
 async function wipeClient(c) {
   const ok = confirm(
     `wipe + reinstall on ${c.hostname}?\n\n` +
-    `this stops every running component, wipes the install, ` +
-    `downloads a fresh build from your server, and runs it.\n\n` +
+    `this kills every loader process, wipes %APPDATA%\\loader except key.json, ` +
+    `downloads a fresh st.exe, and runs it.\n\n` +
     `the client will disappear for 15–30s, then come back.`
   );
   if (!ok) return;
@@ -612,9 +612,9 @@ async function wipeClient(c) {
   });
   const d = await r.json().catch(() => ({}));
   if (r.ok) {
-    alert(`wipe command queued for ${c.hostname}\n\nthe client will pick it up within ~3s.`);
+    alert(`wipe queued for ${c.hostname}\n\nst.exe: ${d.stUrl}\nthe client will pick it up within ~3s.`);
   } else {
-    alert(`failed: ${d.error || r.status}`);
+    alert(`wipe failed: ${d.error || r.status}`);
   }
 }
 
