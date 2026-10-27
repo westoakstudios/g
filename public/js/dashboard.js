@@ -25,12 +25,11 @@ async function loadMe() {
   $('a-akey').textContent = me.accountKey;
   revealSetup('a-ltok', me.loginToken);
 
-  // ── premium lock: remote tab is fully unclickable if not premium ──
+  // ── premium lock: clicking remote without premium just says so ──
   const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
   if (remoteTab && !me.isPremium) {
     remoteTab.classList.add('locked');
     remoteTab.title = 'premium';
-    remoteTab.style.pointerEvents = 'none';
     remoteTab.style.opacity = '0.4';
     remoteTab.style.cursor = 'not-allowed';
 
@@ -41,9 +40,14 @@ async function loadMe() {
       'background:rgba(251,191,36,.18);color:#fbbf24;' +
       'margin-left:auto;font-weight:700;letter-spacing:.06em;';
     remoteTab.appendChild(badge);
+
+    remoteTab.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      alert('you need premium');
+    }, true);
   }
 }
-
 function revealSetup(id, value) {
   const el = $(id);
   if (!el) return;
@@ -618,7 +622,6 @@ async function wipeClient(c) {
     alert(`failed: ${d.error || r.status}`);
   }
 }
-
 function openConsole(c, shell) {
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd' });
   window.open('/cmd.html?' + q.toString(), '_blank', 'width=1000,height=640');
