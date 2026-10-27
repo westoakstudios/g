@@ -26,7 +26,7 @@ async function loadMe() {
   revealSetup('a-ltok', me.loginToken);
 
   // LOCK REMOTE TAB IF NOT PREMIUM
-  if (me.premium !== 1) {
+  if (!me.isPremium) {
     const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
     if (remoteTab) {
       remoteTab.classList.add('locked');
@@ -553,7 +553,7 @@ function openGearMenu(anchor, c) {
   menu.style.top  = `${rect.bottom + 4}px`;
   menu.style.left = `${rect.right - 240}px`;
   
-  if (me.premium !== 1) {
+  if (!me.isPremium) {
     menu.innerHTML = `
       <div class="title">${esc(c.hostname)}</div>
       <div class="item" style="color:var(--red); cursor:default;">Premium required</div>

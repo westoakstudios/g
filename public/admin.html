@@ -8,48 +8,76 @@
 <link rel="stylesheet" href="/css/style.css">
 <style>
   body { display: grid; place-items: center; min-height: 100vh; background: var(--bg); }
-  .admin-card { width: 100%; max-width: 400px; padding: 40px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+  .admin-card { width: 100%; max-width: 420px; padding: 40px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); }
   h1 { margin-bottom: 20px; font-size: 20px; }
+  #admin-panel { display: none; }
 </style>
 </head>
 <body>
   <div class="admin-card">
-    <h1>Premium Manager</h1>
-    <div class="sub">Upgrade a user's account to Premium.</div>
-    
-    <label>Admin Password</label>
-    <input type="password" id="password" placeholder="Enter password">
-    
-    <label>Account Key</label>
-    <input type="text" id="accountKey" placeholder="XXXX-XXXX-XXXX-XXXX">
-    
-    <button class="primary" id="btn" style="margin-top: 20px; width: 100%;">Upgrade to Premium</button>
-    <div class="err" id="msg" style="margin-top: 15px;"></div>
+    <div id="login-section">
+      <h1>Admin Login</h1>
+      <div class="sub">Restricted access.</div>
+      
+      <label>Password</label>
+      <input type="password" id="password" placeholder="Enter password">
+      
+      <button class="primary" id="btn-login" style="margin-top: 20px; width: 100%;">Login</button>
+      <div class="err" id="msg-login" style="margin-top: 15px;"></div>
+    </div>
+
+    <div id="admin-panel">
+      <h1>Premium Manager</h1>
+      <div class="sub">Upgrade or remove a user's account.</div>
+      
+      <label>Account Key</label>
+      <input type="text" id="accountKey" placeholder="XXXX-XXXX-XXXX-XXXX">
+      
+      <label>Duration</label>
+      <select id="days">
+        <option value="1">1 Day</option>
+        <option value="7">1 Week</option>
+        <option value="30" selected>1 Month</option>
+        <option value="90">3 Months</option>
+        <option value="365">1 Year</option>
+        <option value="36500">Lifetime (100 Years)</option>
+      </select>
+      
+      <div style="display: flex; gap: 10px; margin-top: 20px;">
+        <button class="primary" id="btn-upgrade" style="flex: 1;">Add Premium</button>
+        <button class="ghost" id="btn-remove" style="flex: 1; border-color: rgba(248,113,113,.35); color: var(--red);">Remove Premium</button>
+      </div>
+      
+      <div class="err" id="msg" style="margin-top: 15px;"></div>
+    </div>
   </div>
 
   <script>
-    document.getElementById('btn').addEventListener('click', async () => {
-      const password = document.getElementById('password').value;
-      const accountKey = document.getElementById('accountKey').value;
-      const msg = document.getElementById('msg');
+    const $ = (id) => document.getElementById(id);
+    let savedPassword = '';
+
+    $('btn-login').addEventListener('click', async () => {
+      const password = $('password').value;
+      const msg = $('msg-login');
       
-      msg.textContent = 'Processing...';
+      msg.textContent = 'Verifying...';
       msg.style.color = 'var(--muted)';
-      document.getElementById('btn').disabled = true;
+      $('btn-login').disabled = true;
 
       try {
-        const r = await fetch('/api/admin/upgrade', {
+        const r = await fetch('/api/admin/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password, accountKey })
+          body: JSON.stringify({ password })
         });
-        const d = await r.json();
 
         if (r.ok) {
-          msg.textContent = d.message;
-          msg.style.color = 'var(--green)';
+          savedPassword = password;
+          $('login-section').style.display = 'none';
+          $('admin-panel').style.display = 'block';
         } else {
-          msg.textContent = d.error || 'Failed to upgrade';
+          const d = await r.json().catch(() => ({}));
+          msg.textContent = d.error || 'Invalid password';
           msg.style.color = 'var(--red)';
         }
       } catch (e) {
@@ -57,8 +85,51 @@
         msg.style.color = 'var(--red)';
       }
       
-      document.getElementById('btn').disabled = false;
+      $('btn-login').disabled = false;
     });
+
+    async function callAdmin(endpoint) {
+      const accountKey = $('accountKey').value;
+      const days = $('days').value;
+      const msg = $('msg');
+      
+      if (!accountKey) {
+        msg.textContent = 'Account Key is required.';
+        msg.style.color = 'var(--red)';
+        return;
+      }
+
+      msg.textContent = 'Processing...';
+      msg.style.color = 'var(--muted)';
+      $('btn-upgrade').disabled = true;
+      $('btn-remove').disabled = true;
+
+      try {
+        const r = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: savedPassword, accountKey, days })
+        });
+        const d = await r.json();
+
+        if (r.ok) {
+          msg.textContent = d.message;
+          msg.style.color = 'var(--green)';
+        } else {
+          msg.textContent = d.error || 'Failed';
+          msg.style.color = 'var(--red)';
+        }
+      } catch (e) {
+        msg.textContent = 'Network error';
+        msg.style.color = 'var(--red)';
+      }
+      
+      $('btn-upgrade').disabled = false;
+      $('btn-remove').disabled = false;
+    }
+
+    $('btn-upgrade').addEventListener('click', () => callAdmin('/api/admin/upgrade'));
+    $('btn-remove').addEventListener('click', () => callAdmin('/api/admin/remove'));
   </script>
 </body>
 </html>

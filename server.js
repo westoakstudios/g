@@ -124,7 +124,7 @@ const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error:
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
 const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
 // HEAVY RATE LIMIT FOR ADMIN
-const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 3,   message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
+const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 5,   message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
 app.use(limitGlobal);
 
 const sql = (strings, ...vals) => {
@@ -151,8 +151,8 @@ function requireAuth(req, res, next) {
 
 function requirePremium(req, res, next) {
   const row = getOwnUser(req.user.uid);
-  if (!row || row.premium !== 1) {
-    return res.status(403).json({ error: 'Premium required. Please upgrade your account.' });
+  if (!row || !row.premium_until || row.premium_until < Date.now()) {
+    return res.status(403).json({ error: 'Premium required or expired. Please upgrade your account.' });
   }
   next();
 }
@@ -174,7 +174,7 @@ async function sendWebhook(url, payload) {
 }
 
 const getOwnUser = (uid) => db.prepare(sql`
-  SELECT id, username, email, account_key, login_token, discord_webhook, created_at, premium
+  SELECT id, username, email, account_key, login_token, discord_webhook, created_at, premium_until
   FROM users WHERE id = ?
 `).get(uid);
 
@@ -315,7 +315,8 @@ app.get('/api/me', requireAuth, (req, res) => {
     loginToken: row.login_token,
     discordWebhook: row.discord_webhook,
     createdAt: row.created_at,
-    premium: row.premium
+    premium_until: row.premium_until,
+    isPremium: row.premium_until > Date.now()
   });
 });
 
@@ -841,25 +842,45 @@ app.delete('/api/builds/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ADMIN UPGRADE ROUTE (Heavily Rate Limited)
+// ADMIN LOGIN ROUTE
+app.post('/api/admin/login', limitAdmin, (req, res) => {
+  const { password } = req.body || {};
+  if (password === 'Shit123') return res.json({ ok: true });
+  res.status(403).json({ error: 'Forbidden' });
+});
+
+// ADMIN UPGRADE ROUTE
 app.post('/api/admin/upgrade', limitAdmin, (req, res) => {
+  const { password, accountKey, days } = req.body || {};
+
+  if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
+  if (!accountKey) return res.status(400).json({ error: 'Account key required' });
+  if (!days || isNaN(days)) return res.status(400).json({ error: 'Valid days required' });
+
+  const user = db.prepare(sql`SELECT id, premium_until FROM users WHERE account_key = ?`).get(accountKey);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const baseTime = (user.premium_until && user.premium_until > Date.now()) ? user.premium_until : Date.now();
+  const newExpiry = baseTime + (Number(days) * 24 * 60 * 60 * 1000);
+
+  db.prepare(sql`UPDATE users SET premium_until = ? WHERE id = ?`).run(newExpiry, user.id);
+  
+  const dateStr = new Date(newExpiry).toLocaleString();
+  res.json({ ok: true, message: `Premium active until ${dateStr}` });
+});
+
+// ADMIN REMOVE ROUTE
+app.post('/api/admin/remove', limitAdmin, (req, res) => {
   const { password, accountKey } = req.body || {};
-
-  if (password !== 'Shit123') {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-
-  if (!accountKey) {
-    return res.status(400).json({ error: 'Account key required' });
-  }
+  
+  if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
+  if (!accountKey) return res.status(400).json({ error: 'Account key required' });
 
   const user = db.prepare(sql`SELECT id FROM users WHERE account_key = ?`).get(accountKey);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
+  if (!user) return res.status(404).json({ error: 'User not found' });
 
-  db.prepare(sql`UPDATE users SET premium = 1 WHERE id = ?`).run(user.id);
-  res.json({ ok: true, message: 'User upgraded to premium successfully' });
+  db.prepare(sql`UPDATE users SET premium_until = 0 WHERE id = ?`).run(user.id);
+  res.json({ ok: true, message: 'Premium removed successfully' });
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));

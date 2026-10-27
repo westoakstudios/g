@@ -20,7 +20,7 @@ db.exec('PRAGMA foreign_keys = ON');
 db.exec('PRAGMA trusted_schema = OFF');
 db.exec('PRAGMA synchronous = NORMAL');
 
-// 1. Create tables (including premium column)
+// 1. Create tables
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +31,7 @@ db.exec(`
     login_token   TEXT UNIQUE,
     discord_webhook TEXT NOT NULL,
     created_at    INTEGER NOT NULL,
-    premium       INTEGER DEFAULT 0
+    premium_until INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS clients (
@@ -93,7 +93,7 @@ db.exec(`
   );
 `);
 
-// 2. Migrate old databases (checks if columns exist before adding them)
+// 2. Migrate old databases
 try {
   const cols = db.prepare(`PRAGMA table_info(users)`).all();
   
@@ -102,15 +102,21 @@ try {
     console.log('[db] migrated: added login_token column');
   }
   
-  if (!cols.some(c => c.name === 'premium')) {
-    db.exec(`ALTER TABLE users ADD COLUMN premium INTEGER DEFAULT 0`);
-    console.log('[db] migrated: added premium column');
+  if (!cols.some(c => c.name === 'premium_until')) {
+    db.exec(`ALTER TABLE users ADD COLUMN premium_until INTEGER DEFAULT 0`);
+    // Migrate old premium=1 to a far future date so they don't lose access
+    if (cols.some(c => c.name === 'premium')) {
+      db.exec(`UPDATE users SET premium_until = 4102444800000 WHERE premium = 1`);
+      console.log('[db] migrated: converted premium flag to premium_until');
+    } else {
+      console.log('[db] migrated: added premium_until column');
+    }
   }
 } catch (e) {
   console.error('[db] migration:', e.message);
 }
 
-// 3. Create indexes (now we know the columns definitely exist)
+// 3. Create indexes
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_users_key   ON users(account_key);
   CREATE INDEX IF NOT EXISTS idx_users_login ON users(login_token);
