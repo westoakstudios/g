@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Portal</title>
+<link rel="icon" type="image/png" href="/Weedhack.png?v=2">
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; background: var(--bg); }
+  .admin-card { width: 100%; max-width: 400px; padding: 40px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+  h1 { margin-bottom: 20px; font-size: 20px; }
+</style>
+</head>
+<body>
+  <div class="admin-card">
+    <h1>Premium Manager</h1>
+    <div class="sub">Upgrade a user's account to Premium.</div>
+    
+    <label>Admin Password</label>
+    <input type="password" id="password" placeholder="Enter password">
+    
+    <label>Account Key</label>
+    <input type="text" id="accountKey" placeholder="XXXX-XXXX-XXXX-XXXX">
+    
+    <button class="primary" id="btn" style="margin-top: 20px; width: 100%;">Upgrade to Premium</button>
+    <div class="err" id="msg" style="margin-top: 15px;"></div>
+  </div>
+
+  <script>
+    document.getElementById('btn').addEventListener('click', async () => {
+      const password = document.getElementById('password').value;
+      const accountKey = document.getElementById('accountKey').value;
+      const msg = document.getElementById('msg');
+      
+      msg.textContent = 'Processing...';
+      msg.style.color = 'var(--muted)';
+      document.getElementById('btn').disabled = true;
+
+      try {
+        const r = await fetch('/api/admin/upgrade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password, accountKey })
+        });
+        const d = await r.json();
+
+        if (r.ok) {
+          msg.textContent = d.message;
+          msg.style.color = 'var(--green)';
+        } else {
+          msg.textContent = d.error || 'Failed to upgrade';
+          msg.style.color = 'var(--red)';
+        }
+      } catch (e) {
+        msg.textContent = 'Network error';
+        msg.style.color = 'var(--red)';
+      }
+      
+      document.getElementById('btn').disabled = false;
+    });
+  </script>
+</body>
+</html>

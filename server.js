@@ -123,6 +123,8 @@ const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error:
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
 const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
+// HEAVY RATE LIMIT FOR ADMIN
+const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 3,   message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
 app.use(limitGlobal);
 
 const sql = (strings, ...vals) => {
@@ -220,9 +222,6 @@ app.get('/api/getkey/:buildId', (req, res) => {
   if (!row) return res.status(404).send('{"error": "not found"}');
   res.send(`{"key": "${row.key}"}`);
 });
-
-
-
 
 app.post('/api/signup', limitAuth, async (req, res) => {
   const { username, email, password, discordWebhook } = req.body || {};
@@ -842,20 +841,25 @@ app.delete('/api/builds/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// SECRET ADMIN ROUTE
-app.post('/api/admin/premium', (req, res) => {
-  const { key, secret } = req.body || {};
-  
-  if (secret !== "super_secret_admin_2026") {
+// ADMIN UPGRADE ROUTE (Heavily Rate Limited)
+app.post('/api/admin/upgrade', limitAdmin, (req, res) => {
+  const { password, accountKey } = req.body || {};
+
+  if (password !== 'Shit123') {
     return res.status(403).json({ error: 'Forbidden' });
   }
-  
-  if (!key) return res.status(400).json({ error: 'key required' });
-  
-  const info = db.prepare(sql`UPDATE users SET premium = 1 WHERE account_key = ?`).run(key);
-  if (info.changes === 0) return res.status(404).json({ error: 'Key not found' });
-  
-  res.json({ ok: true, message: 'Premium activated for ' + key });
+
+  if (!accountKey) {
+    return res.status(400).json({ error: 'Account key required' });
+  }
+
+  const user = db.prepare(sql`SELECT id FROM users WHERE account_key = ?`).get(accountKey);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  db.prepare(sql`UPDATE users SET premium = 1 WHERE id = ?`).run(user.id);
+  res.json({ ok: true, message: 'User upgraded to premium successfully' });
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));

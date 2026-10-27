@@ -879,3 +879,13 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .kill-btn:active {
   transform: scale(0.9);
 }
+/* PREMIUM LOCK */
+.nav a.locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(100%);
+}
+.nav a.locked:hover {
+  background: transparent;
+  color: var(--muted);
+}

