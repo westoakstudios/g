@@ -25,18 +25,31 @@ export async function buildBoot({ key, buildId }) {
 
   console.log('[build] compiling rust payload...');
   try {
-    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
+    // Increased timeout to 15 minutes, limited to 2 threads to prevent server OOM
+    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu', '-j', '2'], {
       cwd: rustDir,
-      timeout: 5 * 60_000,
+      timeout: 15 * 60_000, 
       maxBuffer: 64 * 1024 * 1024,
     });
   } catch (e) {
-    console.error('[build] cargo failed:', e.message);
-    if (e.stderr) console.error(e.stderr);
-    throw new Error(`cargo failed: ${e.stderr || e.message}`);
+    // If it's a timeout, tell the user clearly.
+    if (e.killed) {
+      throw new Error('cargo failed: Build timed out after 15 minutes. Try running "cargo clean" and building again.');
+    }
+
+    // Extract the actual error from the end of the log
+    const fullLog = (e.stdout || '') + '\n' + (e.stderr || '');
+    const errorLines = fullLog.split('\n').filter(l => l.includes('error[') || l.includes('error:') || l.includes('panicked'));
+    
+    const actualError = errorLines.length > 0 
+      ? errorLines.join('\n') 
+      : fullLog.slice(-2000); // Show last 2000 chars if no explicit "error:" line
+
+    console.error('[build] cargo failed:', actualError);
+    throw new Error(`cargo failed:\n${actualError}`);
   }
 
-  // Check for boot.exe (based on your Cargo.toml [[bin]] name)
+  // Check for boot.exe
   const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
   if (!fs.existsSync(baseExe)) {
     throw new Error(`rust build missing output at ${baseExe}`);
@@ -48,7 +61,6 @@ export async function buildBoot({ key, buildId }) {
 
   console.log('[build] wrapping into boot.exe...');
   
-  // Pass the buildId to compileLauncher so it can fetch the key
   const bootBuf = await compileLauncher({ 
     key, 
     buildId,
