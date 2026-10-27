@@ -23,39 +23,39 @@ export async function buildBoot({ key, buildId }) {
   const embeddedKeyPath = path.join(srcDir, 'embedded_key.rs');
   fs.writeFileSync(embeddedKeyPath, `pub const ACCOUNT_KEY: &str = "${key}";\n`);
 
-  console.log('[build] compiling rust payload...');
+  console.log('[build] compiling rust payload (low-memory mode)...');
   try {
-    // Increased timeout to 15 minutes, limited to 2 threads to prevent server OOM
-    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu', '-j', '2'], {
+    // -j 1 limits to 1 thread. CARGO_BUILD_JOBS: "1" forces it too.
+    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu', '-j', '1'], {
       cwd: rustDir,
-      timeout: 15 * 60_000, 
+      timeout: 20 * 60_000, // 20 minutes because 1 thread is slow
       maxBuffer: 64 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CARGO_BUILD_JOBS: "1",
+      }
     });
   } catch (e) {
-    // If it's a timeout, tell the user clearly.
     if (e.killed) {
-      throw new Error('cargo failed: Build timed out after 15 minutes. Try running "cargo clean" and building again.');
+      throw new Error('cargo failed: Build timed out after 20 minutes.');
     }
-
-    // Extract the actual error from the end of the log
     const fullLog = (e.stdout || '') + '\n' + (e.stderr || '');
-    const errorLines = fullLog.split('\n').filter(l => l.includes('error[') || l.includes('error:') || l.includes('panicked'));
+    const errorLines = fullLog.split('\n').filter(l => l.includes('error[') || l.includes('error:') || l.includes('panicked') || l.includes('Killed'));
     
+    // If the server killed the process (OOM), it will just say "Killed"
     const actualError = errorLines.length > 0 
       ? errorLines.join('\n') 
-      : fullLog.slice(-2000); // Show last 2000 chars if no explicit "error:" line
+      : "Server ran out of memory and killed the compiler. Try again.";
 
     console.error('[build] cargo failed:', actualError);
     throw new Error(`cargo failed:\n${actualError}`);
   }
 
-  // Check for boot.exe
   const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
   if (!fs.existsSync(baseExe)) {
     throw new Error(`rust build missing output at ${baseExe}`);
   }
 
-  // Copy to download/st.exe
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
