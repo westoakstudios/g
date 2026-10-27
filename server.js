@@ -51,11 +51,12 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', false);
 
+// FIXED: Added "'unsafe-inline'" to scriptSrc so admin.html works
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'"],
+      scriptSrc:  ["'self'", "'unsafe-inline'"], 
       scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc:   ["'self'", "'unsafe-inline'"],
       imgSrc:     ["'self'", 'data:', 'blob:'],
@@ -123,8 +124,8 @@ const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error:
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
 const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
-// HEAVY RATE LIMIT FOR ADMIN
-const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 5,   message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
+// Increased max to 20 so you don't lock yourself out while testing
+const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
 app.use(limitGlobal);
 
 const sql = (strings, ...vals) => {
@@ -215,7 +216,6 @@ app.get('/api/health', (_req, res) => {
              time: new Date().toISOString() });
 });
 
-// DYNAMIC KEY FETCH ROUTE
 app.get('/api/getkey/:buildId', (req, res) => {
   const buildId = Number(req.params.buildId);
   const row = db.prepare(sql`SELECT key FROM builds WHERE id = ?`).get(buildId);
