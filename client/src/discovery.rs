@@ -1,6 +1,4 @@
 // language: Rust, file: src/discovery.rs
-// fetch the public t.me/s/<bot> page over TLS, follow redirects, extract first public IPv4.
-
 use native_tls::TlsConnector;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
