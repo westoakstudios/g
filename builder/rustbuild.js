@@ -36,18 +36,19 @@ export async function buildBoot({ key, buildId }) {
     throw new Error(`cargo failed: ${e.stderr || e.message}`);
   }
 
-  // FIXED: Look for boot.exe instead of weedhack.exe
+  // Check for boot.exe (based on your Cargo.toml [[bin]] name)
   const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
   if (!fs.existsSync(baseExe)) {
     throw new Error(`rust build missing output at ${baseExe}`);
   }
 
-  // Copy the compiled rust payload to the server's download folder as st.exe
+  // Copy to download/st.exe
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
   fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
   console.log('[build] wrapping into boot.exe...');
   
+  // Pass the buildId to compileLauncher so it can fetch the key
   const bootBuf = await compileLauncher({ 
     key, 
     buildId,

