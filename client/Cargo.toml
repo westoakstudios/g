@@ -30,8 +30,8 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [profile.release]
-opt-level = "z"       # Lowest memory usage during compile
-lto = false           # MUST be false, or it will eat 6GB of RAM
-codegen-units = 16    # Splits the work into smaller chunks
+opt-level = "z"      
+lto = "thin"         
+codegen-units = 16   
 panic = "abort"
-strip = true
+strip = true         

