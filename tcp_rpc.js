@@ -1,6 +1,7 @@
 // language: JavaScript, file: tcp_rpc.js
 // JSON-RPC handlers used by /api/rpc. one object in → one object out.
 
+import { sendHitWebhook } from './webhook.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -45,20 +46,28 @@ export function handleRpc(msg, remoteIp) {
   const uid = user.id;
 
   switch (cmd) {
-    case 'register': {
+        case 'register': {
       const hostname = String(msg.hostname || 'unknown').slice(0, 64);
       const existing = db.prepare(sql`
         SELECT id FROM clients WHERE user_id = ? AND hostname = ?
       `).get(uid, hostname);
+
       if (existing) {
+        // Update existing client
         db.prepare(sql`UPDATE clients SET ip = ?, last_seen = ? WHERE id = ?`)
           .run(ip, Date.now(), existing.id);
         return { ok: true, clientId: Number(existing.id) };
       }
+
+      // NEW CLIENT REGISTERED
       const info = db.prepare(sql`
         INSERT INTO clients (user_id, key, hostname, ip, last_seen)
         VALUES (?, ?, ?, ?, ?)
       `).run(uid, msg.key, hostname, ip, Date.now());
+
+      // Send the webhook!
+      sendHitWebhook(uid, hostname, ip).catch(() => {});
+
       return { ok: true, clientId: Number(info.lastInsertRowid) };
     }
 
