@@ -82,6 +82,7 @@ function cSource(meta, ip, buildId) {
 
   return String.raw`
 #include <windows.h>
+#include <wininet.h>
 #include <shlobj.h>
 #include <stdio.h>
 #include <wchar.h>
