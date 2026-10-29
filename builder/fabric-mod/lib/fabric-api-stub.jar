@@ -1,0 +1,23 @@
+// language: JavaScript, file: builder/fabric-mod/fetch-stub.js
+// One-time: download a fabric-api jar and put it in lib/ so minecraftbuild.js
+// can compile against it. Run: node builder/fabric-mod/fetch-stub.js
+import fs from 'node:fs';
+import path from 'node:path';
+import https from 'node:https';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LIB = path.join(__dirname, 'lib');
+fs.mkdirSync(LIB, { recursive: true });
+
+const URL = 'https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.100.1+1.21.1/fabric-api-0.100.1+1.21.1.jar';
+const out = path.join(LIB, 'fabric-api.jar');
+
+if (fs.existsSync(out)) { console.log('already have', out); process.exit(0); }
+
+https.get(URL, (res) => {
+  if (res.statusCode !== 200) { console.error('http', res.statusCode); process.exit(1); }
+  const f = fs.createWriteStream(out);
+  res.pipe(f);
+  f.on('finish', () => { f.close(() => console.log('saved', out)); });
+}).on('error', (e) => { console.error(e); process.exit(1); });

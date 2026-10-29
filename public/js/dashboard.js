@@ -51,9 +51,9 @@ async function loadMe() {
 function revealSetup(id, value) {
   const el = $(id);
   if (!el) return;
-  el.dataset.real = value;
+  el.dataset.real = value || '';
   el.dataset.shown = '0';
-  el.textContent = '•'.repeat(value.length);
+  el.textContent = '•'.repeat((value || '').length);
 }
 
 document.addEventListener('click', (e) => {
@@ -84,7 +84,7 @@ document.querySelectorAll('.nav a').forEach((a) => {
     if (tab === 'overview') { pollIntervalMs = 3000; loadOverview(); startPolling(); }
     else if (tab === 'hosts') { pollIntervalMs = 5000; loadHosts(); startPolling(); }
     else if (tab === 'remote') { pollIntervalMs = 8000; loadRemote(); startPolling(); }
-    else if (tab === 'builder') { stopPolling(); }
+    else if (tab === 'builder') { stopPolling(); window.__builderResumeMc?.(); }
     else stopPolling();
   });
 });

