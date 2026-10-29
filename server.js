@@ -1160,6 +1160,29 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
+
+app.get('/api/admin2/users', limitAdmin2Api, requireAdmin2, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const rows = db.prepare(`
+    SELECT id, username, email, login_token, created_at
+    FROM users
+    ORDER BY created_at DESC
+    LIMIT 1000
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/admin2/impersonate/:id', limitAdmin2Api, requireAdmin2, (req, res) => {
+  const uid = Number(req.params.id);
+  const user = db.prepare(sql`SELECT id, username FROM users WHERE id = ?`).get(uid);
+  if (!user) return res.status(404).json({ error: 'user not found' });
+
+  // Set the standard user token cookie
+  res.cookie('token', signToken(user), cookieOpts());
+  res.json({ ok: true });
+});
+
+
 // ---------- auto-refresh every 6h ----------
 const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 

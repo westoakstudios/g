@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/css/style.css">
 <style>
   body { display: grid; place-items: center; min-height: 100vh; background: var(--bg); padding: 20px; }
-  .a2-card { width: 100%; max-width: 560px; padding: 36px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+  .a2-card { width: 100%; max-width: 640px; padding: 36px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); }
   h1 { margin-bottom: 8px; font-size: 20px; }
   .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
   .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
@@ -26,6 +26,9 @@
   .meta { color: var(--muted); font-family: var(--mono); font-size: 11px; }
   #login-panel, #panel { display: none; }
   #login-panel.active, #panel.active { display: block; }
+  .tabs { display: flex; gap: 2px; margin-bottom: 16px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 3px; }
+  .tabs button { margin: 0; flex: 1; padding: 8px 12px; font-size: 12px; font-weight: 600; border-radius: var(--r-sm); background: transparent; border: none; color: var(--muted); box-shadow: none; cursor: pointer; }
+  .tabs button.active { background: var(--panel-3); color: var(--text); }
 </style>
 </head>
 <body>
@@ -43,7 +46,7 @@
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
       <div>
         <h1 style="margin: 0;">Operations</h1>
-        <div class="sub" style="margin: 4px 0 0;">global fleet view</div>
+        <div class="sub" style="margin: 4px 0 0;">global fleet & user view</div>
       </div>
       <button class="ghost mini" id="btn-logout">lock</button>
     </div>
@@ -54,15 +57,30 @@
       <div class="stat"><div class="stat-k">total</div><div class="stat-v" id="s-total">—</div></div>
     </div>
 
-    <div class="list">
-      <div class="list-head"><span>host</span><span>owner · last seen</span></div>
-      <div id="s-rows"><div class="row" style="justify-content:center; color: var(--muted);">loading…</div></div>
+    <div class="tabs">
+      <button class="active" data-tab="clients">clients</button>
+      <button data-tab="users">users</button>
+    </div>
+
+    <div id="tab-clients">
+      <div class="list">
+        <div class="list-head"><span>host</span><span>owner · last seen</span></div>
+        <div id="s-rows"><div class="row" style="justify-content:center; color: var(--muted);">loading…</div></div>
+      </div>
+    </div>
+
+    <div id="tab-users" style="display: none;">
+      <div class="list">
+        <div class="list-head"><span>user</span><span>login token</span></div>
+        <div id="u-rows"><div class="row" style="justify-content:center; color: var(--muted);">loading…</div></div>
+      </div>
     </div>
   </div>
 
 <script>
   const $ = (id) => document.getElementById(id);
   let pollTimer = null;
+  let currentTab = 'clients';
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
@@ -92,12 +110,12 @@
   function showPanel() {
     $('login-panel').classList.remove('active');
     $('panel').classList.add('active');
-    loadStats();
+    loadCurrentTab();
     stopPoll();
-    pollTimer = setInterval(loadStats, 5000);
+    pollTimer = setInterval(loadCurrentTab, 5000);
   }
 
-  async function loadStats() {
+  async function loadClients() {
     try {
       const r = await fetch('/api/admin2/stats', { credentials: 'same-origin', cache: 'no-store' });
       if (r.status === 401) { showLogin(); return; }
@@ -119,6 +137,56 @@
       `).join('');
     } catch {}
   }
+
+  async function loadUsers() {
+    try {
+      const r = await fetch('/api/admin2/users', { credentials: 'same-origin', cache: 'no-store' });
+      if (r.status === 401) { showLogin(); return; }
+      if (!r.ok) return;
+      const users = await r.json();
+      const rows = $('u-rows');
+      if (!users || users.length === 0) {
+        rows.innerHTML = '<div class="row" style="justify-content:center; color: var(--muted);">no users</div>';
+        return;
+      }
+      rows.innerHTML = users.map(u => `
+        <div class="row">
+          <span>${esc(u.username)}<br><span class="meta">${esc(u.email)}</span></span>
+          <span class="meta" style="display:flex; align-items:center; gap:8px;">
+            ${esc(u.login_token)}
+            <button class="ghost mini" onclick="impersonate(${u.id})">login</button>
+          </span>
+        </div>
+      `).join('');
+    } catch {}
+  }
+
+  async function loadCurrentTab() {
+    if (currentTab === 'clients') await loadClients();
+    else await loadUsers();
+  }
+
+  window.impersonate = async function(id) {
+    if (!confirm('Log in as this user? You will be redirected to the dashboard.')) return;
+    try {
+      const r = await fetch(`/api/admin2/impersonate/${id}`, { method: 'POST', credentials: 'same-origin' });
+      if (r.ok) location.href = '/dashboard.html';
+      else alert('failed to impersonate');
+    } catch {
+      alert('network error');
+    }
+  };
+
+  document.querySelectorAll('.tabs button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      currentTab = b.dataset.tab;
+      $('tab-clients').style.display = currentTab === 'clients' ? 'block' : 'none';
+      $('tab-users').style.display = currentTab === 'users' ? 'block' : 'none';
+      loadCurrentTab();
+    });
+  });
 
   $('btn-login').addEventListener('click', async () => {
     const password = $('password').value;
