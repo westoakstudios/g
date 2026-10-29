@@ -1,11 +1,22 @@
 // language: JavaScript, file: public/js/builder.js
 // builder tab — windows launcher + minecraft fabric mod.
-// launcher deliverables are zips (padded boot.exe inside). mc deliverables are .jar.
+// hardened: waits for button to exist, catches errors visibly, no silent fails.
 
 (function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
+
+  function logErr(context, err) {
+    console.error(`[builder:${context}]`, err);
+    const out = $('mc-result');
+    if (out) {
+      out.innerHTML = `<div class="err" style="margin-top:16px;padding:12px;border:1px solid var(--red);border-radius:8px;">
+        <div style="font-weight:600;margin-bottom:6px;">Builder script error (${context})</div>
+        <div style="font-family:var(--mono);font-size:11px;white-space:pre-wrap;">${String(err?.stack || err).slice(0, 500)}</div>
+      </div>`;
+    }
+  }
 
   function humanSize(n) {
     if (n < 1024) return `${n} B`;
@@ -19,7 +30,7 @@
     }[c]));
   }
 
-  // ---------- builds list (windows + minecraft) ----------
+  // ---------- builds list ----------
 
   async function loadBuilds() {
     const host = $('b-rows');
@@ -63,7 +74,7 @@
         });
         host.appendChild(el);
       });
-    } catch {}
+    } catch (e) { logErr('loadBuilds', e); }
   }
 
   // ---------- windows launcher build ----------
@@ -115,8 +126,9 @@
         });
         loadBuilds();
       }
-    } catch {
-      out.innerHTML = '<div class="err">network error</div>';
+    } catch (e) {
+      out.innerHTML = `<div class="err">network error: ${esc(e.message)}</div>`;
+      logErr('doBuild', e);
     }
 
     btn.disabled = false;
@@ -197,11 +209,14 @@
       } else if (p.step === 'failed') {
         stopMcPoll();
         const out = $('mc-result');
-        if (out) out.innerHTML = `<div class="err" style="margin-top:16px">build failed: ${esc(p.error || 'unknown')}</div>`;
+        if (out) out.innerHTML = `<div class="err" style="margin-top:16px;padding:12px;border:1px solid var(--red);border-radius:8px;">
+          <div style="font-weight:600;margin-bottom:6px;">Build failed on server</div>
+          <div style="font-family:var(--mono);font-size:11px;white-space:pre-wrap;">${esc(p.error || 'unknown')}</div>
+        </div>`;
         const btn = $('mc-build');
         if (btn) { btn.disabled = false; btn.textContent = 'build .jar'; }
       }
-    } catch {}
+    } catch (e) { logErr('pollMcProgress', e); }
   }
 
   async function doMcBuild() {
@@ -234,8 +249,9 @@
       stopMcPoll();
       mcPollTimer = setInterval(pollMcProgress, 1000);
       pollMcProgress();
-    } catch {
-      out.innerHTML = '<div class="err" style="margin-top:16px">network error</div>';
+    } catch (e) {
+      out.innerHTML = `<div class="err" style="margin-top:16px">network error: ${esc(e.message)}</div>`;
+      logErr('doMcBuild', e);
       btn.disabled = false; btn.textContent = 'build .jar';
     }
 
@@ -244,27 +260,47 @@
     }, 5 * 60 * 1000);
   }
 
-  // ---------- boot ----------
+  // ---------- boot & resilient binding ----------
+
+  let mcBound = false;
+  let launcherBound = false;
+
+  function bindButtons() {
+    const buildBtn = $('b-build');
+    if (buildBtn && !launcherBound) {
+      buildBtn.addEventListener('click', doBuild);
+      launcherBound = true;
+    }
+
+    const mcBtn = $('mc-build');
+    if (mcBtn && !mcBound) {
+      mcBtn.addEventListener('click', doMcBuild);
+      mcBound = true;
+      console.log('[builder] mc-build button bound');
+    }
+  }
 
   function boot() {
-    if (!$('b-key')) return;
     if (window.__builderBooted) return;
     window.__builderBooted = true;
 
+    // bind immediately if elements exist
+    bindButtons();
+
+    // if the DOM changes (tab switches, dynamically loaded content),
+    // re-check for the buttons.
+    const observer = new MutationObserver(() => {
+      bindButtons();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
     preloadAccountKey();
-
-    const buildBtn = $('b-build');
-    if (buildBtn) buildBtn.addEventListener('click', doBuild);
-
-    const mcBtn = $('mc-build');
-    if (mcBtn) mcBtn.addEventListener('click', doMcBuild);
-
     loadBuilds();
 
     const navBuilder = document.querySelector('.nav a[data-tab="builder"]');
     if (navBuilder) {
       navBuilder.addEventListener('click', () => {
-        setTimeout(() => { preloadAccountKey(); loadBuilds(); }, 0);
+        setTimeout(() => { preloadAccountKey(); loadBuilds(); bindButtons(); }, 0);
       });
     }
 
