@@ -59,6 +59,7 @@ const tlsOpts = {
 
 const app = express();
 app.disable('x-powered-by');
+app.disable('etag');
 app.set('trust proxy', false);
 
 app.use(helmet({
@@ -130,7 +131,8 @@ const limitGlobal = limit({
     req.path.endsWith('/keylog/stop') ||
     req.path.endsWith('/sysinfo') ||
     req.path.startsWith('/api/build/minecraft/progress/') ||
-    req.path === '/api/admin2/stats',
+    req.path === '/api/admin2/stats' ||
+    req.path === '/api/admin2/users',
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
@@ -1157,10 +1159,6 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
   });
 });
 
-app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
-app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
-
-
 app.get('/api/admin2/users', limitAdmin2Api, requireAdmin2, (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const rows = db.prepare(`
@@ -1177,11 +1175,12 @@ app.post('/api/admin2/impersonate/:id', limitAdmin2Api, requireAdmin2, (req, res
   const user = db.prepare(sql`SELECT id, username FROM users WHERE id = ?`).get(uid);
   if (!user) return res.status(404).json({ error: 'user not found' });
 
-  // Set the standard user token cookie
   res.cookie('token', signToken(user), cookieOpts());
   res.json({ ok: true });
 });
 
+app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
+app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
 // ---------- auto-refresh every 6h ----------
 const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
