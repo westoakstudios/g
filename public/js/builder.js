@@ -19,7 +19,7 @@
     }[c]));
   }
 
-  // ---------- windows launcher builds list ----------
+  // ---------- builds list (windows + minecraft) ----------
 
   async function loadBuilds() {
     const host = $('b-rows');
@@ -191,7 +191,6 @@
         document.body.appendChild(iframe);
         setTimeout(() => iframe.remove(), 30000);
 
-        // re-enable button + refresh build list
         const btn = $('mc-build');
         if (btn) { btn.disabled = false; btn.textContent = 'build .jar'; }
         loadBuilds();
@@ -240,7 +239,6 @@
       btn.disabled = false; btn.textContent = 'build .jar';
     }
 
-    // safety re-enable if the poll dies for whatever reason
     setTimeout(() => {
       if (btn.disabled) { btn.disabled = false; btn.textContent = 'build .jar'; }
     }, 5 * 60 * 1000);
@@ -270,7 +268,6 @@
       });
     }
 
-    // expose resume hook — dashboard.js calls this when the builder tab is clicked
     window.__builderResumeMc = () => {
       if (mcPollBuildId && !mcPollTimer) {
         mcPollTimer = setInterval(pollMcProgress, 1000);
