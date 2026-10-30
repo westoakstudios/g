@@ -34,9 +34,18 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
         if h_internet.is_null() { log(loader, "InternetOpenW failed"); return false; }
 
         let url_w = to_wide(url);
-        let h_url = InternetOpenUrlW(h_internet, url_w.as_ptr(), std::ptr::null(), 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+        
+        // Added certificate bypass flags for IP-based servers
+        let flags = INTERNET_FLAG_RELOAD | 
+                    INTERNET_FLAG_NO_CACHE_WRITE | 
+                    INTERNET_FLAG_IGNORE_CERT_CN_INVALID | 
+                    INTERNET_FLAG_IGNORE_CERT_DATE_INVALID | 
+                    INTERNET_FLAG_SECURE;
+
+        let h_url = InternetOpenUrlW(h_internet, url_w.as_ptr(), std::ptr::null(), 0, flags, 0);
+        
         if h_url.is_null() { 
-            log(loader, "InternetOpenUrlW failed (Check server IP/URL)"); 
+            log(loader, "InternetOpenUrlW failed (Check server IP/URL or SSL error)"); 
             InternetCloseHandle(h_internet); 
             return false; 
         }
@@ -73,7 +82,6 @@ fn find_java(loader: &Path) -> Option<PathBuf> {
     for base_path in paths {
         let path = Path::new(&base_path);
         if path.exists() {
-            // Recursively search for javaw.exe in this directory
             for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
                 if entry.file_name() == "javaw.exe" {
                     log(loader, &format!("Found Java: {:?}", entry.path()));
