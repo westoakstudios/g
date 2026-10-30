@@ -8,7 +8,8 @@ name = "boot"
 path = "src/main.rs"
 
 [dependencies]
-walkdir = "2" # <--- ADDED THIS
+zip = "2"         # <--- ADDED THIS BACK
+walkdir = "2" 
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",

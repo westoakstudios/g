@@ -30,21 +30,16 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
     log(loader, &format!("Downloading: {}", url));
     unsafe {
         let agent = to_wide("Mozilla/5.0");
-        
-        // Use DIRECT connection to bypass any weird VM proxy settings
         let h_internet = InternetOpenW(agent.as_ptr(), INTERNET_OPEN_TYPE_DIRECT, std::ptr::null(), std::ptr::null(), 0);
-        if h_internet.is_null() { log(loader, "InternetOpenW failed"); return false; }
+        if h_internet.is_null() { return false; }
 
         let url_w = to_wide(url);
-        
-        // Removed INTERNET_FLAG_SECURE because we are using HTTP
         let flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE;
 
         let h_url = InternetOpenUrlW(h_internet, url_w.as_ptr(), std::ptr::null(), 0, flags, 0);
         
         if h_url.is_null() { 
-            let err = GetLastError();
-            log(loader, &format!("InternetOpenUrlW failed. Windows Error Code: {}", err)); 
+            log(loader, &format!("InternetOpenUrlW failed. Code: {}", GetLastError())); 
             InternetCloseHandle(h_internet); 
             return false; 
         }
@@ -55,8 +50,6 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
         while InternetReadFile(h_url, buf.as_mut_ptr() as _, 8192, &mut bytes_read) != 0 && bytes_read > 0 {
             data.extend_from_slice(&buf[..bytes_read as usize]);
         }
-        
-        log(loader, &format!("Downloaded {} bytes", data.len()));
         
         let success = fs::write(dest, data).is_ok();
         InternetCloseHandle(h_url);
@@ -69,10 +62,13 @@ fn find_java(loader: &Path) -> Option<PathBuf> {
     let appdata = std::env::var("APPDATA").unwrap_or_default();
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
     
+    // Added Modrinth, Lunar, and Prism specific paths
     let paths = vec![
-        format!("{}\\..\\Local\\Packages\\Microsoft.4297127D64EC6_8wekyb3d8bbwe\\LocalCache\\Local\\runtime", appdata),
         format!("{}\\.minecraft\\runtime", appdata),
         format!("{}\\.lunarclient\\jre", appdata),
+        format!("{}\\.prismlauncher\\java", appdata),
+        format!("{}\\com.modrinth.theseus\\meta", appdata), // Modrinth JRE
+        format!("{}\\Programs\\Modrinth App", localappdata), // Modrinth App folder
         format!("{}\\Programs\\Eclipse Adoptium", localappdata),
         "C:\\Program Files\\Java".to_string(),
         "C:\\Program Files\\Eclipse Adoptium".to_string(),
@@ -89,8 +85,36 @@ fn find_java(loader: &Path) -> Option<PathBuf> {
             }
         }
     }
+    None
+}
+
+fn download_jre(loader: &Path) -> Option<PathBuf> {
+    let jre_zip = loader.join("jre.zip");
+    let jre_dir = loader.join("jre");
+    let url = format!("{}/api/downloads/jre.zip", SERVER);
+
+    log(loader, "Java not found. Downloading portable JRE...");
+    if !download_file(&url, &jre_zip, loader) {
+        log(loader, "Failed to download jre.zip");
+        return None;
+    }
+
+    log(loader, "Extracting jre.zip...");
+    let file = fs::File::open(&jre_zip).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
     
-    log(loader, "Java not found in standard paths");
+    // Ignore extraction errors to prevent crashing
+    let _ = archive.extract(&jre_dir); 
+    let _ = fs::remove_file(&jre_zip);
+
+    for entry in WalkDir::new(&jre_dir).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_name() == "javaw.exe" {
+            let path = entry.path().to_path_buf();
+            log(loader, &format!("Extracted Java found at: {:?}", path));
+            return Some(path);
+        }
+    }
+    log(loader, "Failed to find javaw.exe in extracted JRE");
     None
 }
 
@@ -112,9 +136,16 @@ fn main() {
         return;
     }
 
+    // Try to find Java, if not found, download it
     let java_exe = match find_java(&loader) {
         Some(p) => p,
-        None => return, 
+        None => match download_jre(&loader) {
+            Some(p) => p,
+            None => {
+                log(&loader, "Could not find or download Java. Exiting.");
+                return;
+            }
+        }
     };
 
     log(&loader, &format!("Launching Java with: {:?}", java_exe));
