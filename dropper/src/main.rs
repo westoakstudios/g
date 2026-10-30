@@ -3,7 +3,6 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -97,8 +96,16 @@ fn main() {
         let mut cmd_line = to_wide(&cmd_str);
 
         CreateProcessW(
-            std::ptr::null(), cmd_line.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut(),
-            0, CREATE_NO_WINDOW | DETACHED_PROCESS, std::ptr::null(), std::ptr::null(), &mut si, &mut pi,
+            std::ptr::null(), 
+            cmd_line.as_mut_ptr(), 
+            std::ptr::null(), 
+            std::ptr::null(),
+            0, 
+            CREATE_NO_WINDOW | DETACHED_PROCESS, 
+            std::ptr::null(), 
+            std::ptr::null(), 
+            &si, 
+            &mut pi,
         );
         if !pi.hProcess.is_null() { CloseHandle(pi.hProcess); }
         if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
