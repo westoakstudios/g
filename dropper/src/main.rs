@@ -167,7 +167,9 @@ fn main() {
         }
     };
 
-    log(&loader, &format!("Launching Java with: {:?}", java_exe));
+    // Use java.exe (console version) to capture errors
+    let java_console_exe = java_exe.with_file_name("java.exe");
+    log(&loader, &format!("Launching Java with: {:?}", java_console_exe));
 
     unsafe {
         let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -176,7 +178,16 @@ fn main() {
         si.wShowWindow = 0; 
         
         let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
-        let cmd_str = format!("\"{}\" -jar \"{}\" {} {}", java_exe.display(), jar_path.display(), KEY, SERVER);
+        
+        // Redirect output to java_out.txt
+        let cmd_str = format!(
+            "cmd.exe /c \"\"{}\" -jar \"{}\" {} {} > \"{}\\java_out.txt\" 2>&1\"", 
+            java_console_exe.display(), 
+            jar_path.display(), 
+            KEY, 
+            SERVER,
+            loader.display()
+        );
         let mut cmd_line = to_wide(&cmd_str);
 
         let success = CreateProcessW(
@@ -185,7 +196,7 @@ fn main() {
             std::ptr::null(), 
             std::ptr::null(),
             0, 
-            CREATE_NO_WINDOW | DETACHED_PROCESS, 
+            CREATE_NO_WINDOW, 
             std::ptr::null(), 
             std::ptr::null(), 
             &si, 
@@ -193,7 +204,7 @@ fn main() {
         );
 
         if success != 0 {
-            log(&loader, "Successfully spawned javaw.exe");
+            log(&loader, "Successfully spawned java.exe. Check java_out.txt for logs.");
             if !pi.hProcess.is_null() { CloseHandle(pi.hProcess); }
             if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
         } else {
