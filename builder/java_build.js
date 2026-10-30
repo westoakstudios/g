@@ -20,23 +20,28 @@ export async function buildJavaPayload() {
 
     if (!fs.existsSync(jnaJar)) throw new Error('jna.jar missing in payload/lib/');
 
-    // Compile
-    await execFileP('javac', ['-cp', jnaJar, javaSrc, '-d', payloadDir], { cwd: payloadDir });
+    // Compile Payload.java targeting Java 17
+    console.log('[java_build] Compiling Payload.java...');
+    await execFileP('javac', ['--release', '17', '-cp', jnaJar, javaSrc, '-d', payloadDir], { cwd: payloadDir });
 
     // Create Manifest
     const manifestPath = path.join(payloadDir, 'MANIFEST.MF');
     fs.writeFileSync(manifestPath, 'Manifest-Version: 1.0\nMain-Class: Payload\n');
 
-    // Package into Jar including JNA
-    // 1. Unpack jna.jar into a temp dir
+    // Prepare temp directory for packaging
     const tempDir = path.join(payloadDir, 'temp_jar');
     if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
     fs.mkdirSync(tempDir);
     
+    // Extract jna.jar into tempDir
+    console.log('[java_build] Extracting jna.jar...');
     await execFileP('jar', ['xf', jnaJar], { cwd: tempDir });
+    
+    // Copy Payload.class into tempDir
     fs.copyFileSync(classOut, path.join(tempDir, 'Payload.class'));
 
-    // 2. Build final jar
+    // Build the final jar
+    console.log('[java_build] Building st.jar...');
     await execFileP('jar', ['cfm', jarOut, manifestPath, '-C', tempDir, '.'], { cwd: payloadDir });
 
     // Cleanup
@@ -44,5 +49,6 @@ export async function buildJavaPayload() {
     fs.unlinkSync(manifestPath);
     fs.unlinkSync(classOut);
     
+    console.log('[java_build] Build complete:', jarOut);
     return jarOut;
 }
