@@ -7,7 +7,7 @@ use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use walkdir::WalkDir;
 
 use windows_sys::Win32::Foundation::*;
@@ -173,24 +173,27 @@ fn main() {
     let java_console_exe = java_exe.with_file_name("java.exe");
     log(&loader, &format!("Launching Java with: {:?}", java_console_exe));
 
-    // Create a batch file to avoid Windows quoting hell
-    let out_path = loader.join("java_out.txt");
-    let bat_path = loader.join("run.bat");
-    let bat_content = format!(
-        "@echo off\r\n\"{}\" -jar \"{}\" {} {} > \"{}\" 2>&1\r\n",
-        java_console_exe.display(), jar_path.display(), KEY, SERVER, out_path.display()
-    );
-    let _ = fs::write(&bat_path, bat_content);
-
-    let res = Command::new("cmd.exe")
-        .arg("/c")
-        .arg(&bat_path)
+    // Execute Java and capture stdout/stderr directly in Rust
+    log(&loader, "Running st.jar and capturing output...");
+    let output = Command::new(&java_console_exe)
+        .arg("-jar")
+        .arg(&jar_path)
+        .arg(KEY)
+        .arg(SERVER)
         .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+        .output();
 
-    if res.is_ok() {
-        log(&loader, "Spawned Java via batch file. Check java_out.txt.");
-    } else {
-        log(&loader, "Failed to spawn Java via batch file.");
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            log(&loader, "--- JAVA EXITED ---");
+            if !stdout.is_empty() { log(&loader, &format!("STDOUT:\n{}", stdout)); }
+            if !stderr.is_empty() { log(&loader, &format!("STDERR:\n{}", stderr)); }
+            log(&loader, &format!("Exit Code: {:?}", out.status.code()));
+        }
+        Err(e) => {
+            log(&loader, &format!("Failed to run java.exe: {}", e));
+        }
     }
 }
