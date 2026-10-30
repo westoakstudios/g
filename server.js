@@ -869,9 +869,11 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     return res.status(500).json({ error: 'compile failed: ' + msg });
   }
 
-  const outName = `build_${Date.now()}_u${req.user.uid}.zip`;
+    const outName = `build_${Date.now()}_u${req.user.uid}.exe`;
   const outPath = path.join(BUILD_DIR, outName);
   fs.writeFileSync(outPath, zipBuf, { mode: 0o644 });
+  // ...
+  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), zipBuf, { mode: 0o644 });
 
   const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ? AND base = 'boot'`).all(req.user.uid);
   for (const b of stale) {
