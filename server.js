@@ -1044,8 +1044,9 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
   const onlineRow  = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen >= ?`).get(cutoff);
   const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen <  ?`).get(cutoff);
 
+  // Removed c.created_at to prevent SQL error on old databases
   const rows = db.prepare(`
-    SELECT c.id, c.hostname, c.ip, c.last_seen, c.created_at, u.username
+    SELECT c.id, c.hostname, c.ip, c.last_seen, u.username
     FROM clients c
     JOIN users u ON u.id = c.user_id
     ORDER BY c.last_seen DESC
@@ -1063,11 +1064,10 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
       username: r.username,
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
-      createdAt: r.created_at,
+      createdAt: r.last_seen, // Fallback for the UI
     })),
   });
 });
-
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
