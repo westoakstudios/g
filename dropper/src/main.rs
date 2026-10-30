@@ -35,7 +35,7 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
 
         let url_w = to_wide(url);
         
-        // Added certificate bypass flags for IP-based servers
+        // Bypass SSL errors in case the server redirects to HTTPS
         let flags = INTERNET_FLAG_RELOAD | 
                     INTERNET_FLAG_NO_CACHE_WRITE | 
                     INTERNET_FLAG_IGNORE_CERT_CN_INVALID | 
