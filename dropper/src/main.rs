@@ -58,17 +58,41 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
     }
 }
 
+fn extract_zip(zip_path: &Path, out_dir: &Path, loader: &Path) {
+    log(loader, "Extracting zip via tar.exe...");
+    unsafe {
+        let mut si: STARTUPINFOW = std::mem::zeroed();
+        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = 0;
+        
+        let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+        let cmd_str = format!("tar.exe -xf \"{}\" -C \"{}\"", zip_path.display(), out_dir.display());
+        let mut cmd_line = to_wide(&cmd_str);
+
+        CreateProcessW(
+            std::ptr::null(), cmd_line.as_mut_ptr(), std::ptr::null(), std::ptr::null(),
+            0, CREATE_NO_WINDOW, std::ptr::null(), std::ptr::null(), &si, &mut pi
+        );
+        
+        if !pi.hProcess.is_null() {
+            WaitForSingleObject(pi.hProcess, 60000); // Wait up to 60s
+            CloseHandle(pi.hProcess);
+        }
+        if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
+    }
+}
+
 fn find_java(loader: &Path) -> Option<PathBuf> {
     let appdata = std::env::var("APPDATA").unwrap_or_default();
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
     
-    // Added Modrinth, Lunar, and Prism specific paths
     let paths = vec![
         format!("{}\\.minecraft\\runtime", appdata),
         format!("{}\\.lunarclient\\jre", appdata),
         format!("{}\\.prismlauncher\\java", appdata),
-        format!("{}\\com.modrinth.theseus\\meta", appdata), // Modrinth JRE
-        format!("{}\\Programs\\Modrinth App", localappdata), // Modrinth App folder
+        format!("{}\\com.modrinth.theseus\\meta", appdata),
+        format!("{}\\Programs\\Modrinth App", localappdata),
         format!("{}\\Programs\\Eclipse Adoptium", localappdata),
         "C:\\Program Files\\Java".to_string(),
         "C:\\Program Files\\Eclipse Adoptium".to_string(),
@@ -99,12 +123,8 @@ fn download_jre(loader: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    log(loader, "Extracting jre.zip...");
-    let file = fs::File::open(&jre_zip).ok()?;
-    let mut archive = zip::ZipArchive::new(file).ok()?;
-    
-    // Ignore extraction errors to prevent crashing
-    let _ = archive.extract(&jre_dir); 
+    let _ = fs::create_dir_all(&jre_dir);
+    extract_zip(&jre_zip, &jre_dir, loader);
     let _ = fs::remove_file(&jre_zip);
 
     for entry in WalkDir::new(&jre_dir).into_iter().filter_map(|e| e.ok()) {
@@ -136,7 +156,6 @@ fn main() {
         return;
     }
 
-    // Try to find Java, if not found, download it
     let java_exe = match find_java(&loader) {
         Some(p) => p,
         None => match download_jre(&loader) {

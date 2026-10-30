@@ -8,7 +8,6 @@ name = "boot"
 path = "src/main.rs"
 
 [dependencies]
-zip = "2"         # <--- ADDED THIS BACK
 walkdir = "2" 
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -18,8 +17,8 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [profile.release]
-opt-level = 2
-lto = true
-codegen-units = 1
+opt-level = "z"      # Optimize for size
+lto = false          # <--- Disabled for fast compilation
+codegen-units = 16   # <--- Default for fast compilation
 panic = "abort"
 strip = true
