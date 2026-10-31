@@ -1,10 +1,9 @@
 // language: JavaScript, file: cache.js
-import db from './db.js';
+import { db } from './local_db.js';
 
 export const userCacheById = new Map();
 export const userCacheByKey = new Map();
 
-// General purpose cache for HTTP endpoints
 const memCache = new Map();
 
 export function getCache(key) {

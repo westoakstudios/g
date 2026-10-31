@@ -3,7 +3,7 @@ import { sendHitWebhook } from './webhook.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import db, { UPLOAD_DIR } from './db.js';
+import { db, UPLOAD_DIR } from './local_db.js';
 import { getCachedUser, clearCache } from './cache.js';
 
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024);
@@ -55,7 +55,7 @@ export async function handleRpc(msg, remoteIp) {
       }
 
       const [info] = await db.query(`
-        INSERT INTO clients (user_id, \`key\`, hostname, ip, last_seen)
+        INSERT INTO clients (user_id, key, hostname, ip, last_seen)
         VALUES (?, ?, ?, ?, ?)
       `, [uid, msg.key, hostname, ip, Date.now()]);
 
