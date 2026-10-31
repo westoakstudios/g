@@ -151,7 +151,15 @@ const signToken  = (u) => jwt.sign({ uid: u.id, username: u.username }, CFG.jwtS
 const cookieOpts = () => ({ httpOnly: true, sameSite: 'lax', secure: CFG.cookieSecure, maxAge: 7 * 24 * 3600 * 1000 });
 
 async function requireAuth(req, res, next) {
-  const token = req.cookies?.token;
+  let token = req.cookies?.token;
+  
+  if (!token && req.headers.authorization) {
+    const parts = req.headers.authorization.split(' ');
+    if (parts.length === 2 && parts[0] === 'Bearer') {
+      token = parts[1];
+    }
+  }
+
   if (!token) return res.status(401).json({ error: 'unauthorized' });
   try { 
     req.user = jwt.verify(token, CFG.jwtSecret); 
@@ -299,7 +307,8 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/remote_ip', requireAuth, (req, res) => {
-  res.json({ ip: getRemoteIp() });
+  const remoteToken = jwt.sign({ uid: req.user.uid, username: req.user.username }, CFG.jwtSecret, { expiresIn: '1d' });
+  res.json({ ip: getRemoteIp(), token: remoteToken });
 });
 
 app.get('/api/getkey/:buildId', async (req, res) => {
@@ -1018,7 +1027,7 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, async (req, res) => 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
-// ─── Sync Job (FIXED) ────────────────────────────────────────────────────────
+// ─── Sync Job ────────────────────────────────────────────────────────────────
 async function syncUsers() {
   try {
     const [remoteUsers] = await remoteDb.query('SELECT * FROM users');
