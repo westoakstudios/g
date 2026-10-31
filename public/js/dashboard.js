@@ -5,7 +5,7 @@ let me = null;
 const HOST_PAGE_SIZE = 50;
 const REMOTE_PAGE_SIZE = 50;
 const state = {
-  hosts:  { offset: 0, q: '', status: 'all' },
+  hosts:  { offset: 0, q: '', status: 'all', expanded: new Set() }, // <-- ADDED expanded Set
   remote: { offset: 0, q: '' },
 };
 let pollTimer = null;
@@ -174,6 +174,9 @@ function buildRow(c) {
   const wrapper = document.createElement('div');
   wrapper.className = 'host-wrapper';
 
+  // CHECK IF THIS ROW IS SUPPOSED TO BE OPEN
+  const isExpanded = state.hosts.expanded.has(c.id);
+
   const row = document.createElement('div');
   row.className = 'row';
   row.style.cursor = 'pointer';
@@ -183,19 +186,27 @@ function buildRow(c) {
     <span class="ip">${esc(c.ip)}</span>
     ${countryCell(c.country)}
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
-    <span class="actions"><button class="ghost mini" data-open>view</button></span>`;
+    <span class="actions"><button class="ghost mini" data-open>${isExpanded ? 'hide' : 'view'}</button></span>`;
 
   const details = document.createElement('div');
-  details.className = 'host-details';
+  details.className = 'host-details' + (isExpanded ? ' open' : '');
+
+  // IF IT WAS OPEN, RE-FETCH THE DATA
+  if (isExpanded) {
+      details.innerHTML = '<div class="note" style="padding:20px;">loading captures…</div>';
+      loadInlineUploads(c.id, details);
+  }
 
   row.addEventListener('click', async (e) => {
     if (e.target.closest('button') && !e.target.closest('[data-open]')) return;
     
-    const isOpen = details.classList.contains('open');
-    if (isOpen) {
+    const currentlyOpen = state.hosts.expanded.has(c.id);
+    if (currentlyOpen) {
+      state.hosts.expanded.delete(c.id);
       details.classList.remove('open');
       row.querySelector('[data-open]').textContent = 'view';
     } else {
+      state.hosts.expanded.add(c.id);
       details.innerHTML = '<div class="note" style="padding:20px;">loading captures…</div>';
       details.classList.add('open');
       row.querySelector('[data-open]').textContent = 'hide';
