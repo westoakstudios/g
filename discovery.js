@@ -34,7 +34,14 @@ export async function fetchSolanaIp() {
             });
             if (!txRes.ok) continue;
             const text = await txRes.text();
-            const start = text.indexOf('1(');
+            
+            // Look for 2(IP)
+            let start = text.indexOf('2(');
+            if (start === -1) {
+                // Fallback to 1(IP) if 2(IP) doesn't exist
+                start = text.indexOf('1(');
+            }
+            
             if (start !== -1) {
                 const end = text.indexOf(')', start);
                 if (end !== -1) {

