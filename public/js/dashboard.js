@@ -5,7 +5,7 @@ let me = null;
 const HOST_PAGE_SIZE = 50;
 const REMOTE_PAGE_SIZE = 50;
 const state = {
-  hosts:  { offset: 0, q: '', status: 'all', expanded: new Set() }, // <-- ADDED expanded Set
+  hosts:  { offset: 0, q: '', status: 'all', expanded: new Set() },
   remote: { offset: 0, q: '' },
 };
 let pollTimer = null;
@@ -26,7 +26,7 @@ async function loadMe() {
   revealSetup('a-ltok', me.loginToken);
 
   const remoteTab = document.querySelector('.nav a[data-tab="remote"]');
-  if (remoteTab && !me.isPremium) {
+  if (remoteTab && !me.isPremium && !me.isAdmin) {
     remoteTab.classList.add('locked');
     remoteTab.title = 'premium';
     remoteTab.style.opacity = '0.4';
@@ -174,7 +174,6 @@ function buildRow(c) {
   const wrapper = document.createElement('div');
   wrapper.className = 'host-wrapper';
 
-  // CHECK IF THIS ROW IS SUPPOSED TO BE OPEN
   const isExpanded = state.hosts.expanded.has(c.id);
 
   const row = document.createElement('div');
@@ -191,7 +190,6 @@ function buildRow(c) {
   const details = document.createElement('div');
   details.className = 'host-details' + (isExpanded ? ' open' : '');
 
-  // IF IT WAS OPEN, RE-FETCH THE DATA
   if (isExpanded) {
       details.innerHTML = '<div class="note" style="padding:20px;">loading captures…</div>';
       loadInlineUploads(c.id, details);
@@ -405,7 +403,7 @@ function openGearMenu(anchor, c) {
   menu.style.top  = `${rect.bottom + 4}px`;
   menu.style.left = `${rect.right - 240}px`;
 
-  if (!me.isPremium) {
+  if (!me.isPremium && !me.isAdmin) {
     menu.innerHTML = `
       <div class="title">${esc(c.hostname)}</div>
       <div class="item" style="color:var(--red); cursor:default;">Premium required</div>
@@ -448,7 +446,7 @@ function openGearMenu(anchor, c) {
 }
 
 async function wipeClient(c) {
-  if (!me.isPremium) return;
+  if (!me.isPremium && !me.isAdmin) return;
   const ok = confirm(`reinstall ${c.hostname}?`);
   if (!ok) return;
 

