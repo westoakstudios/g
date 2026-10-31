@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import db, { UPLOAD_DIR } from './db.js';
-import { getCachedUser } from './cache.js';
+import { getCachedUser, clearCache } from './cache.js';
 
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024);
 const MAX_RESULT = 32 * 1024 * 1024;
@@ -42,6 +42,7 @@ export async function handleRpc(msg, remoteIp) {
 
   switch (cmd) {
     case 'register': {
+      clearCache(`clients:${uid}`);
       const hostname = String(msg.hostname || 'unknown').slice(0, 64);
       const [existingRows] = await db.query(`
         SELECT id FROM clients WHERE user_id = ? AND hostname = ?
@@ -64,6 +65,7 @@ export async function handleRpc(msg, remoteIp) {
     }
 
     case 'pull': {
+      clearCache(`clients:${uid}`);
       const clientId = Number(msg.clientId || 0);
       let client = null;
       if (clientId) {

