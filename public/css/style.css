@@ -981,3 +981,78 @@ button[disabled] { opacity: .4; cursor: not-allowed; }
 .cap-details-title { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 4px; }
 .cap-file-list { display: flex; flex-direction: column; gap: 4px; }
 .cap-file { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+/* ---------- INLINE HOST DETAILS ---------- */
+.host-wrapper {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--line);
+}
+.host-wrapper:last-child { border-bottom: none; }
+
+/* Remove the border from the row inside the wrapper so it doesn't double up */
+.host-wrapper .row { border-bottom: none; }
+
+.host-details {
+  display: none;
+  background: var(--bg-2);
+  padding: 20px;
+  border-top: 1px dashed var(--line);
+}
+.host-details.open { display: block; }
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.detail-tile {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 16px;
+}
+.detail-tile .k {
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.detail-tile .v {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Password Table */
+.pass-table-wrap {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.pass-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.pass-table th, .pass-table td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.pass-table th {
+  background: var(--bg-2);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  font-weight: 600;
+}
+.pass-table td { color: var(--text); }
+.pass-table tr:last-child td { border-bottom: none; }
+.pass-table tr:hover td { background: var(--panel-2); }

