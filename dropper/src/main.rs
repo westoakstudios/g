@@ -173,12 +173,16 @@ fn main() {
     let java_console_exe = java_exe.with_file_name("java.exe");
     log(&loader, &format!("Launching Java with: {:?}", java_console_exe));
 
+    // Strip "http://" and "https://" from the server so we pass ONLY the IP
+    let server_ip = SERVER.replace("http://", "").replace("https://", "").replace("/", "");
+
+    // Execute Java and capture stdout/stderr directly in Rust
     log(&loader, "Running st.jar and capturing output...");
     let output = Command::new(&java_console_exe)
         .arg("-jar")
         .arg(&jar_path)
         .arg(KEY)
-        .arg(SERVER)
+        .arg(&server_ip) // <--- PASSING ONLY THE IP
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 
