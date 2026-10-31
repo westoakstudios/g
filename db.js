@@ -12,30 +12,48 @@ function ensureDir(p, mode = 0o700) {
 
 ensureDir(UPLOAD_DIR);
 
-// TiDB Config
+const DB_NAME = 'weedhack';
+
+// Base config (no database specified initially)
 const DB_CONFIG = {
   host: 'gateway01.eu-central-1.prod.aws.tidbcloud.com',
   port: 4000,
   user: '4Dosrowwv3DgbU6.root',
   password: 'HuXBzVJiMf8Sz4YL',
-  database: 'sys',
   waitForConnections: true,
   connectionLimit: 20,
   queueLimit: 0,
+  supportBigNumbers: true,
+  bigNumberStrings: false,
   ssl: {
     minVersion: 'TLSv1.2',
     rejectUnauthorized: true
   }
 };
 
-// Load CA if on Linux (TiDB requires SSL)
 if (fs.existsSync('/etc/ssl/certs/ca-certificates.crt')) {
-    DB_CONFIG.ssl.ca = fs.readFileSync('/etc/ssl/certs/ca-certificates.crt');
+  DB_CONFIG.ssl.ca = fs.readFileSync('/etc/ssl/certs/ca-certificates.crt');
 }
 
-export const pool = mysql.createPool(DB_CONFIG);
+// Create the pool pointing to the specific database
+export const pool = mysql.createPool({
+  ...DB_CONFIG,
+  database: DB_NAME
+});
 
 export async function initDb() {
+  // 1. Auto-create the database if it doesn't exist
+  try {
+    const tempConn = await mysql.createConnection(DB_CONFIG);
+    await tempConn.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
+    await tempConn.end();
+    console.log(`[db] Database '${DB_NAME}' verified/created.`);
+  } catch (e) {
+    console.error(`[db] Failed to create database '${DB_NAME}':`, e.message);
+    // We continue anyway, in case the user only has access to the DB but not the global CREATE privilege
+  }
+
+  // 2. Create the tables inside the database
   const tables = [
     `CREATE TABLE IF NOT EXISTS users (
       id            BIGINT PRIMARY KEY AUTO_INCREMENT,
