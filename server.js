@@ -250,6 +250,8 @@ async function requireAuth(req, res, next) {
 
 async function requirePremium(req, res, next) {
   try {
+    if (req.user.isAdmin) return next(); // ADMIN BYPASS
+
     const row = await getOwnUser(req.user.uid);
     if (!row || !row.premium_until || Number(row.premium_until) < Date.now()) {
       return res.status(403).json({ error: 'Premium required or expired. Please upgrade your account.' });
@@ -1503,4 +1505,4 @@ function shutdown(sig) {
 process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('uncaughtException',  (e) => console.error('[uncaught]', e));
-process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
+app.on('unhandledRejection', (e) => console.error('[unhandled]', e));
