@@ -1018,11 +1018,11 @@ app.get('/api/admin2/stats', limitAdmin2Api, requireAdmin2, async (req, res) => 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(500).json({ error: 'server error' }); });
 
-// ─── Sync Job ────────────────────────────────────────────────────────────────
+// ─── Sync Job (FIXED) ────────────────────────────────────────────────────────
 async function syncUsers() {
   try {
     const [remoteUsers] = await remoteDb.query('SELECT * FROM users');
-    const localUsers = db.prepare('SELECT * FROM users').all();
+    const [localUsers] = await db.query('SELECT * FROM users');
     
     const remoteMap = new Map(remoteUsers.map(u => [u.id, u]));
     const localMap = new Map(localUsers.map(u => [u.id, u]));
@@ -1039,12 +1039,12 @@ async function syncUsers() {
     for (const u of remoteUsers) {
       const local = localMap.get(u.id);
       if (!local) {
-        db.prepare(`
+        await db.query(`
           INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until);
+        `, [u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until]);
       } else if (local.premium_until !== u.premium_until || local.discord_webhook !== u.discord_webhook) {
-        db.prepare('UPDATE users SET premium_until = ?, discord_webhook = ? WHERE id = ?').run(u.premium_until, u.discord_webhook, u.id);
+        await db.query('UPDATE users SET premium_until = ?, discord_webhook = ? WHERE id = ?', [u.premium_until, u.discord_webhook, u.id]);
       }
     }
   } catch (e) {
@@ -1055,7 +1055,6 @@ async function syncUsers() {
 setInterval(syncUsers, 10 * 60 * 1000);
 setTimeout(syncUsers, 5000);
 
-// ─── Build Auto-Refresh ──────────────────────────────────────────────────────
 const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 async function refreshAllBuilds() {
@@ -1125,7 +1124,6 @@ async function refreshAllBuilds() {
 setInterval(refreshAllBuilds, AUTO_REFRESH_INTERVAL_MS);
 setTimeout(refreshAllBuilds, 10_000);
 
-// ─── Solana IP Fetcher ───────────────────────────────────────────────────────
 setInterval(fetchSolanaIp, 10 * 60 * 1000);
 fetchSolanaIp();
 
