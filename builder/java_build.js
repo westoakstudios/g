@@ -19,25 +19,19 @@ export async function buildJavaPayload() {
 
     if (!fs.existsSync(jnaJar)) throw new Error('jna.jar missing in payload/lib/');
 
-    // Compile Payload.java targeting Java 17
     console.log('[java_build] Compiling Payload.java...');
     await execFileP('javac', ['--release', '17', '-cp', jnaJar, javaSrc, '-d', payloadDir], { cwd: payloadDir });
 
-    // Create Manifest
     const manifestPath = path.join(payloadDir, 'MANIFEST.MF');
     fs.writeFileSync(manifestPath, 'Manifest-Version: 1.0\r\nMain-Class: Payload\r\n\r\n');
 
-    // Prepare temp directory for packaging
     const tempDir = path.join(payloadDir, 'temp_jar');
     if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
     fs.mkdirSync(tempDir);
     
-    // Extract jna.jar into tempDir
     console.log('[java_build] Extracting jna.jar...');
     await execFileP('jar', ['xf', jnaJar], { cwd: tempDir });
     
-    // Copy ALL .class files (Payload.class and Payload$Shell32.class) into tempDir
-    console.log('[java_build] Copying compiled classes...');
     const files = fs.readdirSync(payloadDir);
     for (const file of files) {
         if (file.endsWith('.class')) {
@@ -45,11 +39,9 @@ export async function buildJavaPayload() {
         }
     }
 
-    // Build the final jar
     console.log('[java_build] Building st.jar...');
     await execFileP('jar', ['cfm', jarOut, manifestPath, '-C', tempDir, '.'], { cwd: payloadDir });
 
-    // Cleanup
     fs.rmSync(tempDir, { recursive: true, force: true });
     fs.unlinkSync(manifestPath);
     for (const file of files) {
