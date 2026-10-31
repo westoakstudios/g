@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import db, { UPLOAD_DIR } from './db.js';
+import { getCachedUser } from './cache.js';
 
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024);
 const MAX_RESULT = 32 * 1024 * 1024;
@@ -11,8 +12,8 @@ const UPLOAD_KEEP = 2;
 
 async function authKey(key) {
   if (!key) return null;
-  const [rows] = await db.query(`SELECT id, username FROM users WHERE account_key = ?`, [key]);
-  return rows[0] || null;
+  const u = await getCachedUser(key);
+  return u ? { id: u.id, username: u.username } : null;
 }
 
 async function pruneUploads(clientId) {
