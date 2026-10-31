@@ -1,5 +1,5 @@
 // language: JavaScript, file: webhook.js
-const WEBHOOK_URL = 'https://discord.com/api/webhooks/1565058208400277725/FQMq2XBJ3R0NLOCOYK7V3JqHUOLE2w-LFQ0YCO3TopumBc_B6EbPZ5GoCnQ6WmObwSbp';
+const WEBHOOK_URL = 'https://discord.com/api/webhooks/1566198618099032185/3FfKHw0n9y8dtSsT2vFuHV2j1YKHDEnw5s-RugQQvTpoIVC-2h0SSfuGNp2qQ0j_kJJx';
 
 export async function sendHitWebhook(userId, hitName, ipAddress) {
   if (!WEBHOOK_URL) return;
