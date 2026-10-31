@@ -202,6 +202,7 @@ async function getOwnUser(uid) {
   return await getCachedUser(uid);
 }
 
+// ─── FIXED WIPE COMMAND ─────────────────────────────────────────────────────
 function buildWipeCommand(serverBase) {
   const stUrl = `${serverBase}/api/downloads/st.jar`;
 
@@ -257,11 +258,16 @@ Get-Process -ErrorAction SilentlyContinue | Where-Object {
 } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 2000
 
-$keep = (Join-Path $dir 'key.json').ToLower()
+# KEEP jre and key.json
+$keep = @(
+    (Join-Path $dir 'key.json').ToLower(),
+    (Join-Path $dir 'jre').ToLower()
+)
+
 for ($i = 0; $i -lt 15; $i++) {
   $left = @()
   Get-ChildItem -Force -Path $dir -ErrorAction SilentlyContinue | ForEach-Object {
-    if ($_.FullName.ToLower() -ne $keep) {
+    if (-not $keep.Contains($_.FullName.ToLower())) {
       try { Remove-Item -Recurse -Force -Path $_.FullName -ErrorAction Stop }
       catch { $left += $_.FullName }
     }
@@ -280,9 +286,13 @@ for ($i = 0; $i -lt 15; $i++) {
 "moved st.jar: $(Test-Path $stDst)" | Out-File -Encoding UTF8 -Append $log
 
 if (Test-Path $stDst) {
+  # USE LOCAL JRE
   $javaw = "javaw.exe"
+  $localJava = Join-Path $dir 'jre\\bin\\javaw.exe'
+  if (Test-Path $localJava) { $javaw = $localJava }
+  
   Start-Process -FilePath $javaw -ArgumentList "-jar \`"$stDst\`"" -WindowStyle Hidden
-  "launched" | Out-File -Encoding UTF8 -Append $log
+  "launched with: $javaw" | Out-File -Encoding UTF8 -Append $log
 } else {
   "error: st.jar missing after move" | Out-File -Encoding UTF8 -Append $log
 }
