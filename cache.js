@@ -4,6 +4,26 @@ import db from './db.js';
 export const userCacheById = new Map();
 export const userCacheByKey = new Map();
 
+// General purpose cache for HTTP endpoints
+const memCache = new Map();
+
+export function getCache(key) {
+  const item = memCache.get(key);
+  if (item && item.expiry > Date.now()) return item.value;
+  if (item) memCache.delete(key);
+  return null;
+}
+
+export function setCache(key, value, ttlMs) {
+  memCache.set(key, { value, expiry: Date.now() + ttlMs });
+}
+
+export function clearCache(prefix) {
+  for (const key of memCache.keys()) {
+    if (key.startsWith(prefix)) memCache.delete(key);
+  }
+}
+
 export async function getCachedUser(uidOrKey) {
   if (typeof uidOrKey === 'number' || !isNaN(uidOrKey)) {
     const id = Number(uidOrKey);
