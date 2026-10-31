@@ -263,7 +263,7 @@ async function loadUploads(clientId, container) {
   });
 }
 
-// ---------- REMOTE OPENER ----------
+// ---------- REMOTE OPENER (FIXED) ----------
 async function getRemoteIp() {
   try {
     const r = await fetch('/api/remote_ip');
