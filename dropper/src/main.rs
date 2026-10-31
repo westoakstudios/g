@@ -173,7 +173,6 @@ fn main() {
     let java_console_exe = java_exe.with_file_name("java.exe");
     log(&loader, &format!("Launching Java with: {:?}", java_console_exe));
 
-    // Execute Java and capture stdout/stderr directly in Rust
     log(&loader, "Running st.jar and capturing output...");
     let output = Command::new(&java_console_exe)
         .arg("-jar")

