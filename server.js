@@ -280,7 +280,6 @@ async function getOwnUser(uid) {
   const u = await getCachedUser(uid);
   if (u && u.is_admin !== undefined) return u;
   
-  // Fallback if cache is stale
   const [rows] = await remoteDb.query(`SELECT * FROM users WHERE id = ?`, [uid]);
   return rows[0];
 }
